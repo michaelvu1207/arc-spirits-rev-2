@@ -4,10 +4,17 @@
 	import type { GameLocationRewardRow, GameLocationRow, OriginRow } from '$lib/types/gameData';
 	import { getErrorMessage } from '$lib/utils';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
+	import { publicAssetUrl, sanitizeFilename } from '$lib/utils/storage';
+	import JSZip from 'jszip';
 	import { PageLayout, Modal, type Tab } from '$lib/components/layout';
-	import { ConfirmDialog, DataGrid, FilterBar } from '$lib/components/shared';
-	import { LocationRewardRowsEditor } from '$lib/components/game-locations';
+	import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
+	import { LocationIconPlacementConfigurator, LocationRewardRowsEditor } from '$lib/components/game-locations';
 	import { Button, FormField, Input, Select } from '$lib/components/ui';
+	import {
+		generateLocationWithIcons,
+		loadLocationIconPlacementConfig,
+		type LocationRewardRowIcons
+	} from '$lib/generators/locations/locationIconPlacer';
 
 	const tabs: Tab[] = [{ id: 'locations', label: 'Locations', icon: '📍' }];
 	let activeTab = $state('locations');
@@ -32,14 +39,30 @@
 	let formData = $state({
 		name: '',
 		origin_id: null as string | null,
-		reward_rows: [] as GameLocationRewardRow[]
+		reward_rows: [] as GameLocationRewardRow[],
+		background_image_path: null as string | null
 	});
 
 	let showDeleteConfirm = $state(false);
 	let deleting = $state(false);
 	let deleteTarget = $state<Location | null>(null);
 
+	let iconPlacerOpen = $state(false);
+	let generatingWithIcons = $state(false);
+	let generatingProgress = $state({ processed: 0, total: 0, current: '' });
+
 	const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
+	const sampleLocations = $derived.by(() =>
+		locations
+			.filter((l) => !!l.background_image_path)
+			.map((l) => ({
+				id: l.id,
+				name: l.name,
+				backgroundUrl: publicAssetUrl(l.background_image_path, { updatedAt: l.updated_at ?? undefined })
+			}))
+	);
+
+	const gameAssetsStorage = supabase.storage.from('game_assets');
 
 	const filteredLocations = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
@@ -120,7 +143,7 @@
 	}
 
 	function resetForm() {
-		formData = { name: '', origin_id: null, reward_rows: [] };
+		formData = { name: '', origin_id: null, reward_rows: [], background_image_path: null };
 		formError = null;
 		nameError = null;
 	}
@@ -136,7 +159,8 @@
 		formData = {
 			name: location.name,
 			origin_id: location.origin_id,
-			reward_rows: structuredClone(location.reward_rows ?? [])
+			reward_rows: structuredClone(location.reward_rows ?? []),
+			background_image_path: location.background_image_path
 		};
 		formError = null;
 		nameError = null;
@@ -156,7 +180,8 @@
 		const payload = {
 			name,
 			origin_id: formData.origin_id,
-			reward_rows: normalizeRewardRows(formData.reward_rows)
+			reward_rows: normalizeRewardRows(formData.reward_rows),
+			background_image_path: formData.background_image_path
 		};
 
 		saving = true;
@@ -178,6 +203,103 @@
 			formError = getErrorMessage(err);
 		} finally {
 			saving = false;
+		}
+	}
+
+	function normalizeIconUrls(iconIds: string[]): string[] {
+		return iconIds.map((id) => getIconPoolUrl(id)).filter((u): u is string => !!u);
+	}
+
+	function locationToRewardRowIcons(location: Location): LocationRewardRowIcons[] {
+		return (location.reward_rows ?? []).map((row) => {
+			if (row.type === 'trade') {
+				return {
+					type: 'trade',
+					costIconUrls: normalizeIconUrls(row.cost_icon_ids ?? []),
+					gainIconUrls: normalizeIconUrls(row.gain_icon_ids ?? [])
+				};
+			}
+			return {
+				type: 'gain',
+				gainIconUrls: normalizeIconUrls(row.gain_icon_ids ?? [])
+			};
+		});
+	}
+
+	async function generateAllLocationImagesWithIcons() {
+		const locationsWithBackground = locations.filter((l) => !!l.background_image_path);
+		if (locationsWithBackground.length === 0) {
+			alert('No locations with background images found.');
+			return;
+		}
+
+		generatingWithIcons = true;
+		generatingProgress = { processed: 0, total: locationsWithBackground.length, current: '' };
+
+		const config = loadLocationIconPlacementConfig();
+		const zip = new JSZip();
+		const errors: string[] = [];
+
+		for (const location of locationsWithBackground) {
+			generatingProgress.current = location.name;
+
+			try {
+				const backgroundUrl = publicAssetUrl(location.background_image_path, {
+					updatedAt: location.updated_at ?? undefined
+				});
+				if (!backgroundUrl) throw new Error('No background image URL available.');
+
+				const rewardRows = locationToRewardRowIcons(location);
+				const resultBlob = await generateLocationWithIcons({ backgroundUrl, rewardRows, config });
+
+				const storagePath = `game_locations/${location.id}/location_with_icons.png`;
+				const { error: uploadError } = await gameAssetsStorage.upload(storagePath, resultBlob, {
+					contentType: 'image/png',
+					upsert: true
+				});
+				if (uploadError) throw uploadError;
+
+				const { error: updateError } = await supabase
+					.from('game_locations')
+					.update({ image_with_icons_path: storagePath, updated_at: new Date().toISOString() })
+					.eq('id', location.id);
+				if (updateError) throw updateError;
+
+				const safeSlug = sanitizeFilename(location.name) || 'location';
+				const fileName = `${location.id}_${safeSlug}_with_icons.png`;
+				zip.file(fileName, await resultBlob.arrayBuffer());
+			} catch (err) {
+				errors.push(`${location.name}: ${getErrorMessage(err)}`);
+			}
+
+			generatingProgress.processed += 1;
+		}
+
+		await loadLocations();
+
+		try {
+			const blob = await zip.generateAsync({ type: 'blob' });
+			const url = URL.createObjectURL(blob);
+			const anchor = document.createElement('a');
+			anchor.href = url;
+			anchor.download = `locations_with_icons_${new Date().toISOString().slice(0, 10)}.zip`;
+			anchor.click();
+			URL.revokeObjectURL(url);
+
+			if (errors.length > 0) {
+				alert(
+					`Generated ${locationsWithBackground.length - errors.length} location image(s) with ${errors.length} error(s).\n` +
+						errors.slice(0, 5).join('\n')
+				);
+			} else {
+				alert(`Successfully generated ${locationsWithBackground.length} location image(s) with icons!`);
+			}
+		} catch (err) {
+			console.error(err);
+			alert('Failed to create ZIP file.');
+		} finally {
+			generatingWithIcons = false;
+			iconPlacerOpen = false;
 		}
 	}
 
@@ -212,10 +334,26 @@
 >
 	{#snippet headerActions()}
 		<Button variant="primary" onclick={openCreate}>+ Location</Button>
+		<Button
+			variant="secondary"
+			onclick={() => (iconPlacerOpen = true)}
+			disabled={sampleLocations.length === 0}
+		>
+			Icon Placer
+		</Button>
 	{/snippet}
 	{#snippet children()}
 		{#if error}
 			<div class="banner banner--error">{error}</div>
+		{/if}
+
+		{#if generatingWithIcons}
+			<div class="banner">
+				Generating {generatingProgress.processed}/{generatingProgress.total}
+				{#if generatingProgress.current}
+					· {generatingProgress.current}
+				{/if}
+			</div>
 		{/if}
 
 		<FilterBar
@@ -241,7 +379,20 @@
 		{:else}
 			<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
 				{#snippet item({ item })}
+					{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
+						updatedAt: item.updated_at ?? undefined
+					})}
 					<div class="location-card">
+						{#if previewUrl}
+							<div class="location-card__preview">
+								<img src={previewUrl} alt={`Preview for ${item.name}`} loading="lazy" />
+								{#if item.image_with_icons_path}
+									<span class="location-card__badge">With Icons</span>
+								{:else}
+									<span class="location-card__badge">Background</span>
+								{/if}
+							</div>
+						{/if}
 						<header class="location-card__header">
 							<div class="location-card__title">
 								<h3>{item.name}</h3>
@@ -355,6 +506,37 @@
 		box-shadow: 0 10px 20px rgba(2, 6, 23, 0.25);
 	}
 
+	.location-card__preview {
+		position: relative;
+		border-radius: 10px;
+		overflow: hidden;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(2, 6, 23, 0.35);
+		aspect-ratio: 16 / 9;
+	}
+
+	.location-card__preview img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+
+	.location-card__badge {
+		position: absolute;
+		top: 0.5rem;
+		left: 0.5rem;
+		padding: 0.25rem 0.5rem;
+		border-radius: 999px;
+		font-size: 0.7rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		background: rgba(2, 6, 23, 0.5);
+		color: #e2e8f0;
+	}
+
 	.location-card__header {
 		display: flex;
 		align-items: flex-start;
@@ -462,6 +644,65 @@
 		font-size: 0.85rem;
 		color: #64748b;
 	}
+
+	.image-uploads {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1rem;
+		padding: 0.75rem;
+		border-radius: 12px;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(15, 23, 42, 0.35);
+	}
+
+	.image-upload-section {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.upload-label {
+		font-size: 0.75rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: rgba(148, 163, 184, 0.85);
+	}
+
+	.generated-preview {
+		border-radius: 10px;
+		overflow: hidden;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(2, 6, 23, 0.35);
+	}
+
+	.generated-preview img {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+
+	.generated-placeholder {
+		display: grid;
+		place-items: center;
+		min-height: 200px;
+		border-radius: 10px;
+		border: 1px dashed rgba(148, 163, 184, 0.25);
+		color: #94a3b8;
+		background: rgba(2, 6, 23, 0.2);
+	}
+
+	.image-note {
+		margin: 0.25rem 0 0;
+		font-size: 0.8rem;
+		color: rgba(148, 163, 184, 0.75);
+	}
+
+	@media (max-width: 860px) {
+		.image-uploads {
+			grid-template-columns: 1fr;
+		}
+	}
 </style>
 
 <Modal bind:open={showForm} title={editingLocation ? 'Edit Location' : 'New Location'} size="lg">
@@ -492,6 +733,45 @@
 			{/snippet}
 		</FormField>
 
+		{#if editingLocation}
+			<div class="image-uploads">
+				<div class="image-upload-section">
+					<div class="upload-label">Background Image</div>
+					<ImageUploader
+						bind:value={formData.background_image_path}
+						folder={`game_locations/${editingLocation.id}/background`}
+						maxSizeMB={50}
+						cropTransparent={false}
+						onupload={(path) => {
+							formData.background_image_path = path;
+						}}
+						onerror={(err) => alert(`Upload failed: ${err}`)}
+					/>
+				</div>
+				<div class="image-upload-section">
+					<div class="upload-label">Generated (With Icons)</div>
+					{#if editingLocation.image_with_icons_path}
+						{@const generatedUrl = publicAssetUrl(editingLocation.image_with_icons_path, {
+							updatedAt: editingLocation.updated_at ?? undefined
+						})}
+						{#if generatedUrl}
+							<div class="generated-preview">
+								<img src={generatedUrl} alt="Generated location" />
+							</div>
+						{/if}
+						<p class="image-note">Generated by Icon Placer</p>
+					{:else}
+						<div class="generated-placeholder">
+							<span>Not yet generated</span>
+							<p class="image-note">Use Icon Placer to generate</p>
+						</div>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<p class="image-note">Save the location first to upload a background image.</p>
+		{/if}
+
 		<LocationRewardRowsEditor bind:rewardRows={formData.reward_rows} />
 	{/snippet}
 
@@ -509,4 +789,12 @@
 	confirmLabel={deleting ? 'Deleting…' : 'Delete'}
 	onconfirm={confirmDelete}
 	oncancel={() => (deleteTarget = null)}
+/>
+
+<LocationIconPlacementConfigurator
+	isOpen={iconPlacerOpen}
+	sampleLocations={sampleLocations}
+	onClose={() => (iconPlacerOpen = false)}
+	onSave={() => alert('Configuration saved!')}
+	onGenerateAll={generateAllLocationImagesWithIcons}
 />

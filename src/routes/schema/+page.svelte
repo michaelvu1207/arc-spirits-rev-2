@@ -85,7 +85,9 @@
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'name', type: 'text' },
 				{ name: 'origin_id', type: 'uuid', fk: 'origins' },
-				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' }
+				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
+				{ name: 'background_image_path', type: 'text' },
+				{ name: 'image_with_icons_path', type: 'text' }
 			]
 		},
 		{

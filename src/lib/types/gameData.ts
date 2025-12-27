@@ -332,6 +332,8 @@ export type GameLocationRow = {
 	name: string;
 	origin_id: string | null;
 	reward_rows: GameLocationRewardRow[];
+	background_image_path: string | null;
+	image_with_icons_path: string | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
