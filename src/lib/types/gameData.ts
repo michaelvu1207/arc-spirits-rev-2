@@ -318,6 +318,19 @@ export type EventRow = {
 	updated_at: string | null;
 };
 
+export type GameLocationRewardRow = {
+	icon_ids: string[];
+};
+
+export type GameLocationRow = {
+	id: string;
+	name: string;
+	origin_id: string | null;
+	reward_rows: GameLocationRewardRow[];
+	created_at: string | null;
+	updated_at: string | null;
+};
+
 export type SpecialEffectRow = {
 	id: string;
 	name: string;

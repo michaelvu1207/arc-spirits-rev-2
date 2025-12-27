@@ -7,19 +7,15 @@
 	import { generateMonsterCardPNG, generateEventCardPNG } from '$lib/generators/cards';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { PageLayout, type Tab } from '$lib/components/layout';
-	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
-	import { ConfirmDialog, SpecialEffectPicker, ImageUploader } from '$lib/components/shared';
-	import { MonsterCardPreview, RewardRowsEditor, MonsterCardGallery } from '$lib/components/monsters';
-	import {
-		AbyssMonstersView,
-		AbyssEventsView,
-		AbyssDeckView,
-		AbyssCombinedView,
-		type Monster,
-		type Event,
-		type ResolvedRewardRow
-	} from '$lib/components/abyss-deck';
-	import type { DeckCard, MonsterFormData as CombinedMonsterFormData, EventFormData as CombinedEventFormData } from '$lib/components/abyss-deck/AbyssCombinedView.svelte';
+	import { Button, FormField, Input, Textarea } from '$lib/components/ui';
+	import { MonsterCardGallery } from '$lib/components/monsters';
+	import type { Monster, Event, ResolvedRewardRow } from '$lib/components/abyss-deck';
+	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
+	import type {
+		DeckOrderItem,
+		MonsterFormData as AbyssMonsterFormData,
+		EventFormData as AbyssEventFormData
+	} from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 
 	// Card gallery types
 	type CardItem = {
@@ -31,42 +27,13 @@
 		data: Monster | Event;
 	};
 
-	type MonsterFormData = {
-		name: string;
-		damage: number;
-		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
-		icon: string | null;
-		image_path: string | null;
-		order_num: number;
-		reward_rows: any[];
-		special_conditions: string | null;
-		special_effect_ids: string[];
-		quantity: number;
-	};
-
-	type EventFormData = {
-		name: string;
-		title: string;
-		description: string | null;
-		image_path: string | null;
-		order_num: number;
-	};
-
 	// Tab state
 	const tabs: Tab[] = [
-		{ id: 'combined', label: 'Combined', icon: '🎴' },
-		{ id: 'monsters', label: 'Monsters', icon: '👹' },
-		{ id: 'events', label: 'Events', icon: '⚡' },
-		{ id: 'deck', label: 'Deck', icon: '🃏' },
+		{ id: 'deck', label: 'Deck Builder', icon: '🃏' },
 		{ id: 'special-effects', label: 'Special Effects', icon: '✨' },
 		{ id: 'gallery', label: 'Card Gallery', icon: '🖼️' }
 	];
-	let activeTab = $state('combined');
-
-	// Deck state
-	let savingDeckOrder = $state(false);
-	let deckOrderChanged = $state(false);
+	let activeTab = $state('deck');
 
 	// Data state
 	let monsters = $state<Monster[]>([]);
@@ -79,34 +46,6 @@
 	// Lookups
 	let specialEffects = $state<SpecialEffectRow[]>([]);
 	let monsterSpecialEffects = $state<Record<string, string[]>>({});
-
-	// Monster editing state
-	let showMonsterDrawer = $state(false);
-	let editingMonsterId = $state<string | null>(null);
-	let monsterFormData = $state<MonsterFormData>({
-		name: '',
-		damage: 0,
-		barrier: 0,
-		state: 'tainted',
-		icon: null,
-		image_path: null,
-		order_num: 0,
-		reward_rows: [],
-		special_conditions: null,
-		special_effect_ids: [],
-		quantity: 1
-	});
-
-	// Event editing state
-	let showEventDrawer = $state(false);
-	let editingEventId = $state<string | null>(null);
-	let eventFormData = $state<EventFormData>({
-		name: '',
-		title: '',
-		description: null,
-		image_path: null,
-		order_num: 0
-	});
 
 	// Gallery state
 	let searchQuery = $state('');
@@ -128,9 +67,7 @@
 		color: '#a855f7'
 	});
 
-	const isEditingMonster = $derived(editingMonsterId !== null);
 	const isEditingEffect = $derived(editingEffectId !== null);
-	const isEditingEvent = $derived(editingEventId !== null);
 	const selectedCount = $derived(selectedCardIds.size);
 	const generatedCount = $derived(allCards.filter(c => c.card_image_path).length);
 	const totalCount = $derived(allCards.length);
@@ -269,188 +206,149 @@
 		return data?.publicUrl || null;
 	}
 
-	// Monster CRUD
-	function openMonsterForm() {
-		editingMonsterId = null;
-		monsterFormData = {
-			name: '',
-			damage: 0,
-			barrier: 0,
-			state: 'tainted',
-			icon: null,
-			image_path: null,
-			order_num: monsters.length,
-			reward_rows: [],
-			special_conditions: null,
-			special_effect_ids: [],
-			quantity: 1
-		};
-		showMonsterDrawer = true;
-	}
+	async function saveDeckOrder(order: DeckOrderItem[]) {
+		const monsterUpdates = order
+			.map((item, order_num) => (item.type === 'monster' ? { id: item.id, order_num } : null))
+			.filter((x): x is { id: string; order_num: number } => x !== null);
 
-	function openMonsterEditForm(monster: Monster) {
-		editingMonsterId = monster.id;
-		monsterFormData = {
-			name: monster.name,
-			damage: monster.damage,
-			barrier: monster.barrier,
-			state: monster.state,
-			icon: monster.icon,
-			image_path: monster.image_path,
-			order_num: monster.order_num,
-			reward_rows: monster.reward_rows ?? [],
-			special_conditions: monster.special_conditions,
-			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-			quantity: monster.quantity ?? 1
-		};
-		showMonsterDrawer = true;
-	}
+		const eventUpdates = order
+			.map((item, order_num) => (item.type === 'event' ? { id: item.id, order_num } : null))
+			.filter((x): x is { id: string; order_num: number } => x !== null);
 
-	async function saveMonster() {
-		if (!monsterFormData.name.trim()) {
-			alert('Monster name is required.');
-			return;
+		if (monsterUpdates.length > 0) {
+			const { error: err } = await supabase.from('monsters').upsert(monsterUpdates, { onConflict: 'id' });
+			if (err) throw err;
 		}
 
-		try {
-			let monsterId: string;
-
-			if (isEditingMonster) {
-				const { error: err } = await supabase
-					.from('monsters')
-					.update({
-						name: monsterFormData.name,
-						damage: monsterFormData.damage,
-						barrier: monsterFormData.barrier,
-						state: monsterFormData.state,
-						icon: monsterFormData.icon,
-						image_path: monsterFormData.image_path,
-						order_num: monsterFormData.order_num,
-						reward_rows: monsterFormData.reward_rows,
-						special_conditions: monsterFormData.special_conditions,
-						quantity: monsterFormData.quantity,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', editingMonsterId);
-				if (err) throw err;
-				monsterId = editingMonsterId!;
-			} else {
-				const { data, error: err } = await supabase
-					.from('monsters')
-					.insert({
-						name: monsterFormData.name,
-						damage: monsterFormData.damage,
-						barrier: monsterFormData.barrier,
-						state: monsterFormData.state,
-						icon: monsterFormData.icon,
-						image_path: monsterFormData.image_path,
-						order_num: monsterFormData.order_num,
-						reward_rows: monsterFormData.reward_rows,
-						special_conditions: monsterFormData.special_conditions,
-						quantity: monsterFormData.quantity
-					})
-					.select('id')
-					.single();
-				if (err) throw err;
-				monsterId = data.id;
-			}
-
-			// Update special effects junction table
-			// First, delete existing special effects for this monster
-			const { error: deleteErr } = await supabase
-				.from('monster_special_effects')
-				.delete()
-				.eq('monster_id', monsterId);
-			if (deleteErr) throw deleteErr;
-
-			// Then, insert new special effects
-			if (monsterFormData.special_effect_ids.length > 0) {
-				const effectRecords = monsterFormData.special_effect_ids.map((effectId) => ({
-					monster_id: monsterId,
-					special_effect_id: effectId
-				}));
-				const { error: insertErr } = await supabase
-					.from('monster_special_effects')
-					.insert(effectRecords);
-				if (insertErr) throw insertErr;
-			}
-
-			// Reload data to reflect changes
-			await loadMonsterSpecialEffects();
-			await loadMonsters();
-			updateFilteredCards();
-			showMonsterDrawer = false;
-			editingMonsterId = null;
-		} catch (err) {
-			alert(`Failed to save monster: ${getErrorMessage(err)}`);
-		}
-	}
-
-	// Event CRUD
-	function openEventForm() {
-		editingEventId = null;
-		eventFormData = {
-			name: '',
-			title: '',
-			description: null,
-			image_path: null,
-			order_num: events.length
-		};
-		showEventDrawer = true;
-	}
-
-	function openEventEditForm(event: Event) {
-		editingEventId = event.id;
-		eventFormData = {
-			name: event.name,
-			title: event.title,
-			description: event.description,
-			image_path: event.image_path,
-			order_num: event.order_num
-		};
-		showEventDrawer = true;
-	}
-
-	async function saveEvent() {
-		if (!eventFormData.name.trim() || !eventFormData.title.trim()) {
-			alert('Event name and title are required.');
-			return;
+		if (eventUpdates.length > 0) {
+			const { error: err } = await supabase.from('events').upsert(eventUpdates, { onConflict: 'id' });
+			if (err) throw err;
 		}
 
-		try {
-			if (isEditingEvent) {
-				const { error: err } = await supabase
-					.from('events')
-					.update({
-						name: eventFormData.name,
-						title: eventFormData.title,
-						description: eventFormData.description,
-						image_path: eventFormData.image_path,
-						order_num: eventFormData.order_num,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', editingEventId);
-				if (err) throw err;
-			} else {
-				const { error: err } = await supabase
-					.from('events')
-					.insert({
-						name: eventFormData.name,
-						title: eventFormData.title,
-						description: eventFormData.description,
-						image_path: eventFormData.image_path,
-						order_num: eventFormData.order_num
-					});
-				if (err) throw err;
-			}
+		await Promise.all([loadMonsters(), loadEvents()]);
+		updateFilteredCards();
+	}
+
+	async function handleWorkspaceMonsterSave(formData: AbyssMonsterFormData, id: string | null): Promise<string> {
+		if (!formData.name.trim()) {
+			throw new Error('Monster name is required.');
+		}
+
+		let monsterId: string;
+
+		if (id) {
+			const { error: err } = await supabase
+				.from('monsters')
+				.update({
+					name: formData.name,
+					damage: formData.damage,
+					barrier: formData.barrier,
+					state: formData.state,
+					icon: formData.icon,
+					image_path: formData.image_path,
+					order_num: formData.order_num,
+					reward_rows: formData.reward_rows,
+					quantity: formData.quantity,
+					updated_at: new Date().toISOString()
+				})
+				.eq('id', id);
+			if (err) throw err;
+			monsterId = id;
+		} else {
+			const { data, error: err } = await supabase
+				.from('monsters')
+				.insert({
+					name: formData.name,
+					damage: formData.damage,
+					barrier: formData.barrier,
+					state: formData.state,
+					icon: formData.icon,
+					image_path: formData.image_path,
+					order_num: formData.order_num,
+					reward_rows: formData.reward_rows,
+					quantity: formData.quantity
+				})
+				.select('id')
+				.single();
+			if (err) throw err;
+			monsterId = data.id;
+		}
+
+		const { error: deleteErr } = await supabase
+			.from('monster_special_effects')
+			.delete()
+			.eq('monster_id', monsterId);
+		if (deleteErr) throw deleteErr;
+
+		if (formData.special_effect_ids.length > 0) {
+			const effectRecords = formData.special_effect_ids.map((effectId) => ({
+				monster_id: monsterId,
+				special_effect_id: effectId
+			}));
+			const { error: insertErr } = await supabase.from('monster_special_effects').insert(effectRecords);
+			if (insertErr) throw insertErr;
+		}
+
+		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
+		updateFilteredCards();
+
+		return monsterId;
+	}
+
+	async function handleWorkspaceEventSave(formData: AbyssEventFormData, id: string | null): Promise<string> {
+		if (!formData.name.trim() || !formData.title.trim()) {
+			throw new Error('Event name and title are required.');
+		}
+
+		if (id) {
+			const { error: err } = await supabase
+				.from('events')
+				.update({
+					name: formData.name,
+					title: formData.title,
+					description: formData.description,
+					image_path: formData.image_path,
+					order_num: formData.order_num,
+					updated_at: new Date().toISOString()
+				})
+				.eq('id', id);
+			if (err) throw err;
 
 			await loadEvents();
 			updateFilteredCards();
-			showEventDrawer = false;
-			editingEventId = null;
-		} catch (err) {
-			alert(`Failed to save event: ${getErrorMessage(err)}`);
+			return id;
 		}
+
+		const { data, error: err } = await supabase
+			.from('events')
+			.insert({
+				name: formData.name,
+				title: formData.title,
+				description: formData.description,
+				image_path: formData.image_path,
+				order_num: formData.order_num
+			})
+			.select('id')
+			.single();
+		if (err) throw err;
+
+		await loadEvents();
+		updateFilteredCards();
+		return data.id;
+	}
+
+	async function handleWorkspaceMonsterDelete(id: string) {
+		const { error: err } = await supabase.from('monsters').delete().eq('id', id);
+		if (err) throw err;
+		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
+		updateFilteredCards();
+	}
+
+	async function handleWorkspaceEventDelete(id: string) {
+		const { error: err } = await supabase.from('events').delete().eq('id', id);
+		if (err) throw err;
+		await loadEvents();
+		updateFilteredCards();
 	}
 
 	// Special Effect CRUD
@@ -668,183 +566,6 @@
 	function handleTabChange(tabId: string) {
 		activeTab = tabId;
 	}
-
-	function submitMonsterForm(e: SubmitEvent) {
-		e.preventDefault();
-		void saveMonster();
-	}
-
-	function submitEventForm(e: SubmitEvent) {
-		e.preventDefault();
-		void saveEvent();
-	}
-
-	// Deck order management
-	let pendingDeckCards = $state<DeckCard[]>([]);
-
-	function handleDeckOrderChange(cards: DeckCard[]) {
-		pendingDeckCards = cards;
-		deckOrderChanged = true;
-	}
-
-	async function saveDeckOrder() {
-		if (!deckOrderChanged || pendingDeckCards.length === 0) return;
-
-		savingDeckOrder = true;
-		try {
-			// Separate monsters and events
-			const monsterUpdates = pendingDeckCards
-				.filter((c) => c.type === 'monster')
-				.map((c) => ({ id: c.id, order_num: c.order }));
-
-			const eventUpdates = pendingDeckCards
-				.filter((c) => c.type === 'event')
-				.map((c) => ({ id: c.id, order_num: c.order }));
-
-			// Update monsters
-			for (const update of monsterUpdates) {
-				const { error: err } = await supabase
-					.from('monsters')
-					.update({ order_num: update.order_num })
-					.eq('id', update.id);
-				if (err) throw err;
-			}
-
-			// Update events
-			for (const update of eventUpdates) {
-				const { error: err } = await supabase
-					.from('events')
-					.update({ order_num: update.order_num })
-					.eq('id', update.id);
-				if (err) throw err;
-			}
-
-			// Reload data to reflect changes
-			await Promise.all([loadMonsters(), loadEvents()]);
-			updateFilteredCards();
-			deckOrderChanged = false;
-		} catch (err) {
-			alert(`Failed to save deck order: ${getErrorMessage(err)}`);
-		} finally {
-			savingDeckOrder = false;
-		}
-	}
-
-	// Combined view handlers
-	async function handleCombinedMonsterSave(formData: CombinedMonsterFormData, id: string | null) {
-		if (!formData.name.trim()) {
-			alert('Monster name is required.');
-			return;
-		}
-
-		try {
-			let monsterId: string;
-
-			if (id) {
-				const { error: err } = await supabase
-					.from('monsters')
-					.update({
-						name: formData.name,
-						damage: formData.damage,
-						barrier: formData.barrier,
-						state: formData.state,
-						icon: formData.icon,
-						image_path: formData.image_path,
-						order_num: formData.order_num,
-						reward_rows: formData.reward_rows,
-						special_conditions: formData.special_conditions,
-						quantity: formData.quantity,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', id);
-				if (err) throw err;
-				monsterId = id;
-			} else {
-				const { data, error: err } = await supabase
-					.from('monsters')
-					.insert({
-						name: formData.name,
-						damage: formData.damage,
-						barrier: formData.barrier,
-						state: formData.state,
-						icon: formData.icon,
-						image_path: formData.image_path,
-						order_num: formData.order_num,
-						reward_rows: formData.reward_rows,
-						special_conditions: formData.special_conditions,
-						quantity: formData.quantity
-					})
-					.select('id')
-					.single();
-				if (err) throw err;
-				monsterId = data.id;
-			}
-
-			// Update special effects junction table
-			const { error: deleteErr } = await supabase
-				.from('monster_special_effects')
-				.delete()
-				.eq('monster_id', monsterId);
-			if (deleteErr) throw deleteErr;
-
-			if (formData.special_effect_ids.length > 0) {
-				const effectRecords = formData.special_effect_ids.map((effectId) => ({
-					monster_id: monsterId,
-					special_effect_id: effectId
-				}));
-				const { error: insertErr } = await supabase
-					.from('monster_special_effects')
-					.insert(effectRecords);
-				if (insertErr) throw insertErr;
-			}
-
-			await loadMonsterSpecialEffects();
-			await loadMonsters();
-			updateFilteredCards();
-		} catch (err) {
-			alert(`Failed to save monster: ${getErrorMessage(err)}`);
-		}
-	}
-
-	async function handleCombinedEventSave(formData: CombinedEventFormData, id: string | null) {
-		if (!formData.name.trim() || !formData.title.trim()) {
-			alert('Event name and title are required.');
-			return;
-		}
-
-		try {
-			if (id) {
-				const { error: err } = await supabase
-					.from('events')
-					.update({
-						name: formData.name,
-						title: formData.title,
-						description: formData.description,
-						image_path: formData.image_path,
-						order_num: formData.order_num,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', id);
-				if (err) throw err;
-			} else {
-				const { error: err } = await supabase
-					.from('events')
-					.insert({
-						name: formData.name,
-						title: formData.title,
-						description: formData.description,
-						image_path: formData.image_path,
-						order_num: formData.order_num
-					});
-				if (err) throw err;
-			}
-
-			await loadEvents();
-			updateFilteredCards();
-		} catch (err) {
-			alert(`Failed to save event: ${getErrorMessage(err)}`);
-		}
-	}
 </script>
 
 <PageLayout
@@ -855,23 +576,7 @@
 	onTabChange={handleTabChange}
 >
 	{#snippet headerActions()}
-		{#if activeTab === 'combined'}
-			{#if deckOrderChanged}
-				<Button variant="primary" onclick={saveDeckOrder} disabled={savingDeckOrder}>
-					{savingDeckOrder ? 'Saving...' : 'Save Order'}
-				</Button>
-			{/if}
-		{:else if activeTab === 'monsters'}
-			<Button variant="primary" onclick={openMonsterForm}>+ Monster</Button>
-		{:else if activeTab === 'events'}
-			<Button variant="primary" onclick={openEventForm}>+ Event</Button>
-		{:else if activeTab === 'deck'}
-			{#if deckOrderChanged}
-				<Button variant="primary" onclick={saveDeckOrder} disabled={savingDeckOrder}>
-					{savingDeckOrder ? 'Saving...' : 'Save Order'}
-				</Button>
-			{/if}
-		{:else if activeTab === 'special-effects'}
+		{#if activeTab === 'special-effects'}
 			<Button variant="primary" onclick={openEffectForm}>+ Effect</Button>
 		{:else if activeTab === 'gallery'}
 			<Button variant="secondary" onclick={() => showGalleryModal = true}>View Gallery</Button>
@@ -879,20 +584,8 @@
 	{/snippet}
 
 	{#snippet tabActions()}
-		{#if activeTab === 'combined'}
+		{#if activeTab === 'deck'}
 			<span class="count">{monsters.length} monsters, {events.length} events</span>
-			{#if deckOrderChanged}
-				<span class="count unsaved">unsaved changes</span>
-			{/if}
-		{:else if activeTab === 'monsters'}
-			<span class="count">{monsters.length} monsters</span>
-		{:else if activeTab === 'events'}
-			<span class="count">{events.length} events</span>
-		{:else if activeTab === 'deck'}
-			<span class="count">{monsters.length + events.length} cards</span>
-			{#if deckOrderChanged}
-				<span class="count unsaved">unsaved changes</span>
-			{/if}
 		{:else if activeTab === 'special-effects'}
 			<span class="count">{specialEffects.length} effects</span>
 		{:else if activeTab === 'gallery'}
@@ -904,22 +597,18 @@
 		<div class="loading-state">Loading...</div>
 	{:else if error}
 		<div class="error-state">Error: {error}</div>
-	{:else if activeTab === 'combined'}
-		<AbyssCombinedView
+	{:else if activeTab === 'deck'}
+		<AbyssDeckWorkspace
 			{monsters}
 			{events}
 			{specialEffects}
 			{monsterSpecialEffects}
-			onMonsterSave={handleCombinedMonsterSave}
-			onEventSave={handleCombinedEventSave}
-			onOrderChange={handleDeckOrderChange}
+			onMonsterSave={handleWorkspaceMonsterSave}
+			onEventSave={handleWorkspaceEventSave}
+			onMonsterDelete={handleWorkspaceMonsterDelete}
+			onEventDelete={handleWorkspaceEventDelete}
+			onSaveDeckOrder={saveDeckOrder}
 		/>
-	{:else if activeTab === 'monsters'}
-		<AbyssMonstersView {monsters} onEdit={openMonsterEditForm} />
-	{:else if activeTab === 'events'}
-		<AbyssEventsView {events} onEdit={openEventEditForm} />
-	{:else if activeTab === 'deck'}
-		<AbyssDeckView {monsters} {events} onOrderChange={handleDeckOrderChange} />
 	{:else if activeTab === 'special-effects'}
 		<div class="effects-grid">
 			{#each specialEffects as effect (effect.id)}
@@ -1088,140 +777,19 @@
 	{/if}
 </PageLayout>
 
-<!-- Monster Drawer -->
-{#if showMonsterDrawer}
-	<div
-		class="drawer-backdrop"
-		role="button"
-		tabindex="0"
-		onclick={() => showMonsterDrawer = false}
-		onkeydown={(e) => e.key === 'Escape' && (showMonsterDrawer = false)}
-	>
-		<div
-			class="drawer"
-			role="dialog"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<div class="drawer-header">
-				<h2>{isEditingMonster ? 'Edit Monster' : 'Create Monster'}</h2>
-				<button class="close-btn" onclick={() => showMonsterDrawer = false}>&times;</button>
-			</div>
-			<div class="drawer-content">
-				<form id="monster-form" class="form-grid" onsubmit={submitMonsterForm}>
-					<FormField label="Name" required>
-						<Input type="text" bind:value={monsterFormData.name} required />
-					</FormField>
-					<FormField label="Damage">
-						<Input type="number" min={0} bind:value={monsterFormData.damage} />
-					</FormField>
-					<FormField label="Barrier">
-						<Input type="number" min={0} bind:value={monsterFormData.barrier} />
-					</FormField>
-					<FormField label="Quantity" hint="Copies in deck">
-						<Input type="number" min={1} bind:value={monsterFormData.quantity} />
-					</FormField>
-					<FormField label="State">
-						<Select
-							bind:value={monsterFormData.state}
-							options={[
-								{ value: 'tainted', label: 'Tainted' },
-								{ value: 'corrupt', label: 'Corrupt' },
-								{ value: 'fallen', label: 'Fallen' },
-								{ value: 'boss', label: 'Boss' }
-							]}
-						/>
-					</FormField>
-					<FormField label="Icon (emoji)">
-						<Input type="text" bind:value={monsterFormData.icon} placeholder="👹" />
-					</FormField>
-					<div class="full-width">
-						<FormField label="Special Conditions">
-							<Textarea rows={2} bind:value={monsterFormData.special_conditions} />
-						</FormField>
-					</div>
-					<div class="full-width">
-						<FormField label="Special Effects">
-							<SpecialEffectPicker
-								bind:selected={monsterFormData.special_effect_ids}
-								maxSelection={4}
-							/>
-						</FormField>
-					</div>
-					<div class="full-width">
-						<RewardRowsEditor bind:rewardRows={monsterFormData.reward_rows} />
-					</div>
-				</form>
-			</div>
-			<div class="drawer-footer">
-				<Button variant="primary" type="submit" form="monster-form">
-					{isEditingMonster ? 'Update' : 'Create'}
-				</Button>
-				<Button onclick={() => showMonsterDrawer = false}>Cancel</Button>
-			</div>
-		</div>
-	</div>
-{/if}
-
-<!-- Event Drawer -->
-{#if showEventDrawer}
-	<div
-		class="drawer-backdrop"
-		role="button"
-		tabindex="0"
-		onclick={() => showEventDrawer = false}
-		onkeydown={(e) => e.key === 'Escape' && (showEventDrawer = false)}
-	>
-		<div
-			class="drawer"
-			role="dialog"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<div class="drawer-header">
-				<h2>{isEditingEvent ? 'Edit Event' : 'Create Event'}</h2>
-				<button class="close-btn" onclick={() => showEventDrawer = false}>&times;</button>
-			</div>
-			<div class="drawer-content">
-				<form id="event-form" class="form-grid" onsubmit={submitEventForm}>
-					<div class="full-width">
-						<FormField label="Name (Internal)" required>
-							<Input type="text" bind:value={eventFormData.name} required placeholder="Internal reference" />
-						</FormField>
-					</div>
-					<div class="full-width">
-						<FormField label="Title (Displayed)" required>
-							<Input type="text" bind:value={eventFormData.title} required placeholder="Card title" />
-						</FormField>
-					</div>
-					<div class="full-width">
-						<FormField label="Description">
-							<Textarea rows={4} bind:value={eventFormData.description} placeholder="Event description..." />
-						</FormField>
-					</div>
-				</form>
-			</div>
-			<div class="drawer-footer">
-				<Button variant="primary" type="submit" form="event-form">
-					{isEditingEvent ? 'Update' : 'Create'}
-				</Button>
-				<Button onclick={() => showEventDrawer = false}>Cancel</Button>
-			</div>
-		</div>
-	</div>
-{/if}
-
 <!-- Special Effect Drawer -->
 {#if showEffectDrawer}
 	<div
 		class="drawer-backdrop"
 		role="button"
 		tabindex="0"
-		onclick={() => showEffectDrawer = false}
+		onclick={(e) => e.currentTarget === e.target && (showEffectDrawer = false)}
 		onkeydown={(e) => e.key === 'Escape' && (showEffectDrawer = false)}
 	>
 		<div
 			class="drawer"
 			role="dialog"
-			onclick={(e) => e.stopPropagation()}
+			tabindex="-1"
 		>
 			<div class="drawer-header">
 				<h2>{isEditingEffect ? 'Edit Special Effect' : 'Create Special Effect'}</h2>
@@ -1263,11 +831,6 @@
 	.count {
 		font-size: 0.7rem;
 		color: #64748b;
-	}
-
-	.count.unsaved {
-		color: #fbbf24;
-		font-weight: 600;
 	}
 
 	.loading-state,

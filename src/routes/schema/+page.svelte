@@ -77,6 +77,18 @@
 			]
 		},
 		{
+			id: 'game_locations',
+			name: 'game_locations',
+			color: '#14b8a6',
+			category: 'Core',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'name', type: 'text' },
+				{ name: 'origin_id', type: 'uuid', fk: 'origins' },
+				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' }
+			]
+		},
+		{
 			id: 'artifacts',
 			name: 'artifacts',
 			color: '#ec4899',
@@ -328,6 +340,7 @@
 	const relationships = [
 		// Direct FK relationships
 		{ source: 'guardians', target: 'origins', type: 'fk', label: 'origin_id' },
+		{ source: 'game_locations', target: 'origins', type: 'fk', label: 'origin_id' },
 		{ source: 'runes', target: 'origins', type: 'fk', label: 'origin_id' },
 		{ source: 'runes', target: 'classes', type: 'fk', label: 'class_id' },
 		{ source: 'artifacts', target: 'guardians', type: 'fk', label: 'guardian_id' },
@@ -346,6 +359,7 @@
 		{ source: 'artifacts', target: 'artifact_tags', type: 'array', label: 'tag_ids' },
 		{ source: 'monsters', target: 'icon_pool', type: 'array', label: 'reward_icons' },
 		{ source: 'monsters', target: 'icon_pool', type: 'json', label: 'reward_rows' },
+		{ source: 'game_locations', target: 'icon_pool', type: 'json', label: 'reward_rows' },
 		{ source: 'editions', target: 'origins', type: 'array', label: 'origin_ids' },
 		{ source: 'special_categories', target: 'classes', type: 'array', label: 'slot_*_class_ids' },
 		{ source: 'origins', target: 'hex_spirits', type: 'json', label: 'calling_card' },
