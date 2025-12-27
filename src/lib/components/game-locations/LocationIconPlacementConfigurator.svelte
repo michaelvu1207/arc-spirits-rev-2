@@ -222,7 +222,7 @@
 		const source = config.rows[sourceIndex];
 		if (!source) return;
 		const nextRows = [...config.rows];
-		nextRows[currentRowIndex] = structuredClone(source);
+		nextRows[currentRowIndex] = JSON.parse(JSON.stringify(source)) as LocationRowPlacement;
 		config = { ...config, rows: nextRows };
 		selectedSlotIndex = null;
 		drawCanvas();
@@ -942,4 +942,3 @@
 		}
 	}
 </style>
-

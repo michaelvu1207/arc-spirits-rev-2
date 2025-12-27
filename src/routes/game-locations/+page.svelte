@@ -159,7 +159,7 @@
 		formData = {
 			name: location.name,
 			origin_id: location.origin_id,
-			reward_rows: structuredClone(location.reward_rows ?? []),
+			reward_rows: normalizeRewardRows(location.reward_rows),
 			background_image_path: location.background_image_path
 		};
 		formError = null;
