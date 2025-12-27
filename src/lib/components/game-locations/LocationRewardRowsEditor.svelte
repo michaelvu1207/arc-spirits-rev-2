@@ -3,26 +3,35 @@
 	import type { GameLocationRewardRow } from '$lib/types/gameData';
 	import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { IconPicker } from '$lib/components/shared';
-	import { Button } from '$lib/components/ui';
+	import { Button, Select } from '$lib/components/ui';
 
 	interface Props {
 		rewardRows?: GameLocationRewardRow[];
 		onchange?: (rows: GameLocationRewardRow[]) => void;
-		maxIconsPerRow?: number;
+		maxIconsPerList?: number;
 	}
 
-	let { rewardRows = $bindable<GameLocationRewardRow[]>([]), onchange, maxIconsPerRow = 5 }: Props = $props();
+	let {
+		rewardRows = $bindable<GameLocationRewardRow[]>([]),
+		onchange,
+		maxIconsPerList = 5
+	}: Props = $props();
 
 	let iconPoolLoaded = $state(false);
-	let pickingRowIndex = $state<number | null>(null);
+	let picking = $state<{ rowIndex: number; list: 'gain' | 'cost' } | null>(null);
 
 	onMount(async () => {
 		await loadIconPool();
 		iconPoolLoaded = true;
 	});
 
-	function addRow() {
-		rewardRows = [...rewardRows, { icon_ids: [] }];
+	function addGainRow() {
+		rewardRows = [...rewardRows, { type: 'gain', gain_icon_ids: [] }];
+		onchange?.(rewardRows);
+	}
+
+	function addTradeRow() {
+		rewardRows = [...rewardRows, { type: 'trade', cost_icon_ids: [], gain_icon_ids: [] }];
 		onchange?.(rewardRows);
 	}
 
@@ -34,7 +43,7 @@
 	function removeRow(index: number) {
 		rewardRows = rewardRows.filter((_, i) => i !== index);
 		onchange?.(rewardRows);
-		if (pickingRowIndex === index) pickingRowIndex = null;
+		if (picking?.rowIndex === index) picking = null;
 	}
 
 	function moveRow(index: number, direction: 'up' | 'down') {
@@ -46,24 +55,58 @@
 		rewardRows = newRows;
 		onchange?.(rewardRows);
 
-		if (pickingRowIndex === index) pickingRowIndex = newIndex;
-		else if (pickingRowIndex === newIndex) pickingRowIndex = index;
+		if (picking?.rowIndex === index) picking = { ...picking, rowIndex: newIndex };
+		else if (picking?.rowIndex === newIndex) picking = { ...picking, rowIndex: index };
 	}
 
-	function setRowIcons(index: number, iconIds: string[]) {
-		updateRow(index, { ...rewardRows[index], icon_ids: iconIds });
-	}
-
-	function removeIcon(index: number, iconId: string) {
+	function setGainIcons(index: number, iconIds: string[]) {
 		const row = rewardRows[index];
-		setRowIcons(index, row.icon_ids.filter((id) => id !== iconId));
+		updateRow(index, { ...row, gain_icon_ids: iconIds } as GameLocationRewardRow);
+	}
+
+	function setCostIcons(index: number, iconIds: string[]) {
+		const row = rewardRows[index];
+		if (row.type !== 'trade') return;
+		updateRow(index, { ...row, cost_icon_ids: iconIds });
+	}
+
+	function removeGainIconAt(index: number, iconIndex: number) {
+		const row = rewardRows[index];
+		const next = row.gain_icon_ids.filter((_, i) => i !== iconIndex);
+		setGainIcons(index, next);
+	}
+
+	function removeCostIconAt(index: number, iconIndex: number) {
+		const row = rewardRows[index];
+		if (row.type !== 'trade') return;
+		const next = row.cost_icon_ids.filter((_, i) => i !== iconIndex);
+		setCostIcons(index, next);
+	}
+
+	function setRowType(index: number, type: 'gain' | 'trade') {
+		const row = rewardRows[index];
+		if (row.type === type) return;
+
+		if (type === 'gain') {
+			updateRow(index, { type: 'gain', gain_icon_ids: row.gain_icon_ids ?? [] });
+			return;
+		}
+
+		updateRow(index, {
+			type: 'trade',
+			cost_icon_ids: [],
+			gain_icon_ids: row.gain_icon_ids ?? []
+		});
 	}
 </script>
 
 <div class="location-reward-rows">
 	<div class="location-reward-rows__header">
 		<h4>Rewards</h4>
-		<Button variant="secondary" onclick={addRow}>+ Add Reward Row</Button>
+		<div class="location-reward-rows__header-actions">
+			<Button variant="secondary" onclick={addGainRow}>+ Gain Row</Button>
+			<Button variant="secondary" onclick={addTradeRow}>+ Trade Row</Button>
+		</div>
 	</div>
 
 	{#if !iconPoolLoaded}
@@ -77,7 +120,17 @@
 			{#each rewardRows as row, index (index)}
 				<div class="location-reward-rows__item">
 					<div class="location-reward-rows__controls">
-						<span class="location-reward-rows__label">Reward row {index + 1}</span>
+						<div class="location-reward-rows__label-group">
+							<span class="location-reward-rows__label">Reward row {index + 1}</span>
+							<Select
+								value={row.type}
+								options={[
+									{ value: 'gain', label: 'Gain' },
+									{ value: 'trade', label: 'Trade' }
+								]}
+								onchange={(e) => setRowType(index, (e.target as HTMLSelectElement).value as 'gain' | 'trade')}
+							/>
+						</div>
 						<div class="location-reward-rows__buttons">
 							<button
 								type="button"
@@ -103,57 +156,148 @@
 						</div>
 					</div>
 
-					<div class="location-reward-rows__icons">
-						{#if row.icon_ids.length === 0}
-							<button
-								type="button"
-								class="location-reward-rows__add-icon"
-								onclick={() => (pickingRowIndex = index)}
-							>
-								+ Add Icons
-							</button>
-						{:else}
-							<div class="location-reward-rows__icon-list">
-								{#each row.icon_ids as iconId, iconIndex (iconIndex)}
-									{@const url = getIconPoolUrl(iconId)}
-									<div class="location-reward-rows__icon">
-										{#if url}
-											<img src={url} alt="Reward icon" />
-										{:else}
-											<span class="location-reward-rows__icon-placeholder">?</span>
-										{/if}
+					{#if row.type === 'gain'}
+						<div class="location-reward-rows__icons">
+							<div class="location-reward-rows__section-title">Gain</div>
+							{#if row.gain_icon_ids.length === 0}
+								<button
+									type="button"
+									class="location-reward-rows__add-icon"
+									onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+								>
+									+ Add Icons
+								</button>
+							{:else}
+								<div class="location-reward-rows__icon-list">
+									{#each row.gain_icon_ids as iconId, iconIndex (iconIndex)}
+										{@const url = getIconPoolUrl(iconId)}
+										<div class="location-reward-rows__icon">
+											{#if url}
+												<img src={url} alt="Gain icon" />
+											{:else}
+												<span class="location-reward-rows__icon-placeholder">?</span>
+											{/if}
+											<button
+												type="button"
+												class="location-reward-rows__icon-remove"
+												onclick={() => removeGainIconAt(index, iconIndex)}
+											>
+												✕
+											</button>
+										</div>
+									{/each}
+									{#if row.gain_icon_ids.length < maxIconsPerList}
 										<button
 											type="button"
-											class="location-reward-rows__icon-remove"
-											onclick={() => removeIcon(index, iconId)}
+											class="location-reward-rows__add-more"
+											onclick={() => (picking = { rowIndex: index, list: 'gain' })}
 										>
-											✕
+											+
 										</button>
-									</div>
-								{/each}
-								{#if row.icon_ids.length < maxIconsPerRow}
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{:else}
+						<div class="location-reward-rows__trade">
+							<div class="location-reward-rows__trade-col">
+								<div class="location-reward-rows__section-title">Spend</div>
+								{#if row.cost_icon_ids.length === 0}
 									<button
 										type="button"
-										class="location-reward-rows__add-more"
-										onclick={() => (pickingRowIndex = index)}
+										class="location-reward-rows__add-icon"
+										onclick={() => (picking = { rowIndex: index, list: 'cost' })}
 									>
-										+
+										+ Add Cost Icons
 									</button>
+								{:else}
+									<div class="location-reward-rows__icon-list">
+										{#each row.cost_icon_ids as iconId, iconIndex (iconIndex)}
+											{@const url = getIconPoolUrl(iconId)}
+											<div class="location-reward-rows__icon">
+												{#if url}
+													<img src={url} alt="Cost icon" />
+												{:else}
+													<span class="location-reward-rows__icon-placeholder">?</span>
+												{/if}
+												<button
+													type="button"
+													class="location-reward-rows__icon-remove"
+													onclick={() => removeCostIconAt(index, iconIndex)}
+												>
+													✕
+												</button>
+											</div>
+										{/each}
+										{#if row.cost_icon_ids.length < maxIconsPerList}
+											<button
+												type="button"
+												class="location-reward-rows__add-more"
+												onclick={() => (picking = { rowIndex: index, list: 'cost' })}
+											>
+												+
+											</button>
+										{/if}
+									</div>
 								{/if}
 							</div>
-						{/if}
-					</div>
 
-					{#if pickingRowIndex === index}
+							<div class="location-reward-rows__trade-arrow">→</div>
+
+							<div class="location-reward-rows__trade-col">
+								<div class="location-reward-rows__section-title">Gain</div>
+								{#if row.gain_icon_ids.length === 0}
+									<button
+										type="button"
+										class="location-reward-rows__add-icon"
+										onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+									>
+										+ Add Reward Icons
+									</button>
+								{:else}
+									<div class="location-reward-rows__icon-list">
+										{#each row.gain_icon_ids as iconId, iconIndex (iconIndex)}
+											{@const url = getIconPoolUrl(iconId)}
+											<div class="location-reward-rows__icon">
+												{#if url}
+													<img src={url} alt="Reward icon" />
+												{:else}
+													<span class="location-reward-rows__icon-placeholder">?</span>
+												{/if}
+												<button
+													type="button"
+													class="location-reward-rows__icon-remove"
+													onclick={() => removeGainIconAt(index, iconIndex)}
+												>
+													✕
+												</button>
+											</div>
+										{/each}
+										{#if row.gain_icon_ids.length < maxIconsPerList}
+											<button
+												type="button"
+												class="location-reward-rows__add-more"
+												onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+											>
+												+
+											</button>
+										{/if}
+									</div>
+								{/if}
+							</div>
+						</div>
+					{/if}
+
+					{#if picking?.rowIndex === index}
 						<div class="location-reward-rows__picker">
 							<IconPicker
-								selected={row.icon_ids}
-								onselect={(ids) => setRowIcons(index, ids)}
+								selected={picking.list === 'cost' && row.type === 'trade' ? row.cost_icon_ids : row.gain_icon_ids}
+								onselect={(ids) => (picking.list === 'cost' ? setCostIcons(index, ids) : setGainIcons(index, ids))}
 								multiple={true}
-								maxSelection={maxIconsPerRow}
-								allowDuplicates={false}
+								maxSelection={maxIconsPerList}
+								allowDuplicates={true}
 							/>
-							<Button variant="secondary" onclick={() => (pickingRowIndex = null)}>Done</Button>
+							<Button variant="secondary" onclick={() => (picking = null)}>Done</Button>
 						</div>
 					{/if}
 				</div>
@@ -181,6 +325,13 @@
 		font-size: 0.9rem;
 		font-weight: 600;
 		color: #e2e8f0;
+	}
+
+	.location-reward-rows__header-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
 	}
 
 	.location-reward-rows__loading {
@@ -224,6 +375,16 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem;
+	}
+
+	.location-reward-rows__label-group {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.location-reward-rows__label-group :global(select) {
+		font-size: 0.8rem;
 	}
 
 	.location-reward-rows__label {
@@ -271,8 +432,19 @@
 		min-width: auto;
 	}
 
+	.location-reward-rows__section-title {
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: #94a3b8;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
 	.location-reward-rows__icons {
 		min-height: 48px;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
 	}
 
 	.location-reward-rows__add-icon {
@@ -364,6 +536,25 @@
 		color: #93c5fd;
 	}
 
+	.location-reward-rows__trade {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		gap: 0.75rem;
+		align-items: start;
+	}
+
+	.location-reward-rows__trade-col {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.location-reward-rows__trade-arrow {
+		color: #94a3b8;
+		font-weight: 700;
+		padding-top: 1.6rem;
+	}
+
 	.location-reward-rows__picker {
 		display: flex;
 		flex-direction: column;
@@ -371,5 +562,14 @@
 		padding-top: 0.75rem;
 		border-top: 1px solid rgba(148, 163, 184, 0.15);
 	}
-</style>
 
+	@media (max-width: 720px) {
+		.location-reward-rows__trade {
+			grid-template-columns: 1fr;
+		}
+
+		.location-reward-rows__trade-arrow {
+			display: none;
+		}
+	}
+</style>

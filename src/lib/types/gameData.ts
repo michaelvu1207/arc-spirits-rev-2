@@ -319,7 +319,12 @@ export type EventRow = {
 };
 
 export type GameLocationRewardRow = {
-	icon_ids: string[];
+	type: 'gain';
+	gain_icon_ids: string[];
+} | {
+	type: 'trade';
+	cost_icon_ids: string[];
+	gain_icon_ids: string[];
 };
 
 export type GameLocationRow = {

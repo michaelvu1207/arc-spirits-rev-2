@@ -74,9 +74,39 @@
 	function normalizeRewardRows(rows: any): GameLocationRewardRow[] {
 		if (!Array.isArray(rows)) return [];
 		return rows
-			.map((row) => ({
-				icon_ids: Array.isArray(row?.icon_ids) ? row.icon_ids.filter((id: any) => typeof id === 'string') : []
-			}));
+			.map((row) => {
+				if (!row || typeof row !== 'object') {
+					return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
+				}
+
+				// Back-compat for earlier shape: { icon_ids: [...] }
+				if (Array.isArray((row as any).icon_ids)) {
+					return {
+						type: 'gain',
+						gain_icon_ids: (row as any).icon_ids.filter((id: any) => typeof id === 'string')
+					} satisfies GameLocationRewardRow;
+				}
+
+				const type = (row as any).type === 'trade' ? 'trade' : 'gain';
+
+				const gain_icon_ids = Array.isArray((row as any).gain_icon_ids)
+					? (row as any).gain_icon_ids.filter((id: any) => typeof id === 'string')
+					: [];
+
+				if (type === 'trade') {
+					const cost_icon_ids = Array.isArray((row as any).cost_icon_ids)
+						? (row as any).cost_icon_ids.filter((id: any) => typeof id === 'string')
+						: [];
+
+					return {
+						type: 'trade',
+						cost_icon_ids,
+						gain_icon_ids
+					} satisfies GameLocationRewardRow;
+				}
+
+				return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
+			});
 	}
 
 	async function loadLocations() {
@@ -229,29 +259,62 @@
 							</div>
 						</header>
 
-						<div class="location-card__rewards">
-							{#if (item.reward_rows ?? []).length === 0}
-								<p class="location-card__empty-rewards">No reward rows</p>
-							{:else}
-								{#each item.reward_rows as row, idx (idx)}
-									<div class="reward-row">
-										<span class="reward-row__label">Row {idx + 1}</span>
-										<div class="reward-row__icons">
-											{#each row.icon_ids as iconId, iconIdx (iconIdx)}
-												{@const url = getIconPoolUrl(iconId)}
-												<div class="reward-row__icon">
-													{#if url}
-														<img src={url} alt="Reward icon" />
-													{:else}
-														<span class="reward-row__icon-placeholder">?</span>
-													{/if}
+							<div class="location-card__rewards">
+								{#if (item.reward_rows ?? []).length === 0}
+									<p class="location-card__empty-rewards">No reward rows</p>
+								{:else}
+									{#each item.reward_rows as row, idx (idx)}
+										<div class="reward-row" class:reward-row--trade={row.type === 'trade'}>
+											<span class="reward-row__label">
+												Row {idx + 1} · {row.type === 'trade' ? 'Trade' : 'Gain'}
+											</span>
+
+											{#if row.type === 'trade'}
+												<div class="reward-row__trade">
+													<div class="reward-row__icons">
+														{#each row.cost_icon_ids as iconId, iconIdx (iconIdx)}
+															{@const url = getIconPoolUrl(iconId)}
+															<div class="reward-row__icon">
+																{#if url}
+																	<img src={url} alt="Cost icon" />
+																{:else}
+																	<span class="reward-row__icon-placeholder">?</span>
+																{/if}
+															</div>
+														{/each}
+													</div>
+													<span class="reward-row__arrow">→</span>
+													<div class="reward-row__icons">
+														{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
+															{@const url = getIconPoolUrl(iconId)}
+															<div class="reward-row__icon">
+																{#if url}
+																	<img src={url} alt="Gain icon" />
+																{:else}
+																	<span class="reward-row__icon-placeholder">?</span>
+																{/if}
+															</div>
+														{/each}
+													</div>
 												</div>
-											{/each}
+											{:else}
+												<div class="reward-row__icons">
+													{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
+														{@const url = getIconPoolUrl(iconId)}
+														<div class="reward-row__icon">
+															{#if url}
+																<img src={url} alt="Reward icon" />
+															{:else}
+																<span class="reward-row__icon-placeholder">?</span>
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{/if}
 										</div>
-									</div>
-								{/each}
-							{/if}
-						</div>
+									{/each}
+								{/if}
+							</div>
 					</div>
 				{/snippet}
 			</DataGrid>
@@ -345,6 +408,10 @@
 		border: 1px solid rgba(148, 163, 184, 0.12);
 	}
 
+	.reward-row--trade {
+		align-items: flex-start;
+	}
+
 	.reward-row__label {
 		font-size: 0.75rem;
 		font-weight: 700;
@@ -359,6 +426,19 @@
 		gap: 0.35rem;
 		flex-wrap: wrap;
 		justify-content: flex-end;
+	}
+
+	.reward-row__trade {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		justify-content: flex-end;
+		flex: 1;
+	}
+
+	.reward-row__arrow {
+		color: #94a3b8;
+		font-weight: 800;
 	}
 
 	.reward-row__icon {
