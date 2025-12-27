@@ -20,6 +20,7 @@
 		state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
 		icon: string | null;
 		image_path: string | null;
+		invade_location_id: string | null;
 		order_num: number;
 		reward_rows: any[];
 		special_effect_ids: string[];
@@ -37,6 +38,7 @@
 	interface Props {
 		monsters: Monster[];
 		events: Event[];
+		locations: { id: string; name: string }[];
 		specialEffects: SpecialEffectRow[];
 		monsterSpecialEffects: Record<string, string[]>;
 		onMonsterSave: (formData: MonsterFormData, id: string | null) => Promise<string>;
@@ -49,6 +51,7 @@
 	let {
 		monsters,
 		events,
+		locations,
 		specialEffects,
 		monsterSpecialEffects,
 		onMonsterSave,
@@ -140,6 +143,7 @@
 		state: 'tainted',
 		icon: null,
 		image_path: null,
+		invade_location_id: null,
 		order_num: 0,
 		reward_rows: [],
 		special_effect_ids: [],
@@ -174,6 +178,7 @@
 			state: 'tainted',
 			icon: null,
 			image_path: null,
+			invade_location_id: null,
 			order_num: deckOrder.length,
 			reward_rows: [],
 			special_effect_ids: [],
@@ -207,6 +212,7 @@
 				state: monster.state,
 				icon: monster.icon,
 				image_path: monster.image_path,
+				invade_location_id: monster.invade_location_id ?? null,
 				order_num: monster.order_num,
 				reward_rows: monster.reward_rows ?? [],
 				special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
@@ -419,9 +425,11 @@
 				state: monsterFormData.state,
 				icon: monsterFormData.icon,
 				image_path: monsterFormData.image_path,
+				invade_location_id: monsterFormData.invade_location_id,
 				order_num: monsterFormData.order_num,
 				card_image_path: null,
 				reward_rows: monsterFormData.reward_rows as any,
+				special_conditions: null,
 				quantity: monsterFormData.quantity,
 				created_at: null,
 				updated_at: null,
@@ -451,6 +459,7 @@
 			state: monsterFormData.state,
 			icon: monsterFormData.icon,
 			image_path: monsterFormData.image_path,
+			invade_location_id: monsterFormData.invade_location_id,
 			reward_rows: monsterFormData.reward_rows as any,
 			quantity: monsterFormData.quantity,
 			resolved_reward_rows: resolvedRewardRows,
@@ -683,6 +692,20 @@
 
 				<FormField label="Icon (emoji)">
 					<Input type="text" bind:value={monsterFormData.icon} placeholder="👹" />
+				</FormField>
+
+				<FormField label="Invade Location (optional)">
+					<Select
+						value={monsterFormData.invade_location_id ?? ''}
+						options={[
+							{ value: '', label: 'None' },
+							...locations.map((loc) => ({ value: loc.id, label: loc.name }))
+						]}
+						onchange={(e) => {
+							const v = (e.target as HTMLSelectElement).value;
+							monsterFormData.invade_location_id = v === '' ? null : v;
+						}}
+					/>
 				</FormField>
 
 				<FormField label="Special Effects">

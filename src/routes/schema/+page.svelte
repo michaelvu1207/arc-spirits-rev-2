@@ -141,6 +141,7 @@
 				{ name: 'barrier', type: 'integer' },
 				{ name: 'damage', type: 'integer' },
 				{ name: 'state', type: 'text' },
+				{ name: 'invade_location_id', type: 'uuid', fk: 'game_locations' },
 				{ name: 'reward_icons', type: 'uuid[]', note: '→ icon_pool' },
 				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' }
 			]
@@ -348,6 +349,7 @@
 		{ source: 'artifacts', target: 'guardians', type: 'fk', label: 'guardian_id' },
 		{ source: 'artifacts', target: 'artifact_templates', type: 'fk', label: 'template_id' },
 		{ source: 'dice_sides', target: 'custom_dice', type: 'fk', label: 'dice_id' },
+		{ source: 'monsters', target: 'game_locations', type: 'fk', label: 'invade_location_id' },
 		{ source: 'monster_special_effects', target: 'monsters', type: 'fk', label: 'monster_id' },
 		{ source: 'monster_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
 		{ source: 'scenario_cards', target: 'abyss_scenarios', type: 'fk', label: 'scenario_id' },

@@ -250,6 +250,7 @@ export type MonsterRow = {
 	order_num: number;
 	card_image_path: string | null;
 	special_conditions: string | null;
+	invade_location_id: string | null;
 	/** Number of copies of this monster in the deck. Defaults to 1. */
 	quantity: number;
 	created_at: string | null;

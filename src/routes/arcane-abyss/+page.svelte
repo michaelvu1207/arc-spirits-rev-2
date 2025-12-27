@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { MonsterRow, EventRow, SpecialEffectRow, RewardRow } from '$lib/types/gameData';
+	import type { MonsterRow, EventRow, SpecialEffectRow, RewardRow, GameLocationRow } from '$lib/types/gameData';
 	import { publicAssetUrl, processAndUploadImage } from '$lib/utils/storage';
 	import { getErrorMessage } from '$lib/utils';
 	import { generateMonsterCardPNG, generateEventCardPNG } from '$lib/generators/cards';
@@ -46,6 +46,7 @@
 	// Lookups
 	let specialEffects = $state<SpecialEffectRow[]>([]);
 	let monsterSpecialEffects = $state<Record<string, string[]>>({});
+	let invadeLocations = $state<Pick<GameLocationRow, 'id' | 'name'>[]>([]);
 
 	// Gallery state
 	let searchQuery = $state('');
@@ -79,7 +80,7 @@
 		error = null;
 		try {
 			await loadAllIcons();
-			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects()]);
+			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadInvadeLocations()]);
 			await Promise.all([loadMonsters(), loadEvents()]);
 			updateFilteredCards();
 		} catch (err) {
@@ -109,6 +110,12 @@
 			acc[row.monster_id].push(row.special_effect_id);
 			return acc;
 		}, {} as Record<string, string[]>);
+	}
+
+	async function loadInvadeLocations() {
+		const { data, error: err } = await supabase.from('game_locations').select('id, name').order('name');
+		if (err) throw new Error(err.message);
+		invadeLocations = (data ?? []) as Pick<GameLocationRow, 'id' | 'name'>[];
 	}
 
 	async function loadMonsters() {
@@ -246,6 +253,7 @@
 					state: formData.state,
 					icon: formData.icon,
 					image_path: formData.image_path,
+					invade_location_id: formData.invade_location_id,
 					order_num: formData.order_num,
 					reward_rows: formData.reward_rows,
 					quantity: formData.quantity,
@@ -264,6 +272,7 @@
 					state: formData.state,
 					icon: formData.icon,
 					image_path: formData.image_path,
+					invade_location_id: formData.invade_location_id,
 					order_num: formData.order_num,
 					reward_rows: formData.reward_rows,
 					quantity: formData.quantity
@@ -601,6 +610,7 @@
 		<AbyssDeckWorkspace
 			{monsters}
 			{events}
+			locations={invadeLocations}
 			{specialEffects}
 			{monsterSpecialEffects}
 			onMonsterSave={handleWorkspaceMonsterSave}
