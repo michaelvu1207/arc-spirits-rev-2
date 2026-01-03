@@ -95,7 +95,7 @@
 	// =====================
 	// CLASS ANALYSIS STATE
 	// =====================
-	const TARGET_CLASSES = ['Swordsman', 'Archer', 'Sorcerer'];
+	const TARGET_CLASSES = ['Fighter'];
 	let classLoading = true;
 	let classError: string | null = null;
 	let classes: ClassRow[] = [];
@@ -143,7 +143,7 @@
 	let originSortDirection: 'asc' | 'desc' = 'asc';
 	let classSortColumn: 'name' | 'count' | 'avgCost' | 'offensivePower' | 'defensivePower' | null = null;
 	let classSortDirection: 'asc' | 'desc' = 'asc';
-	const OFFENSIVE_CLASSES = ['Swordsman', 'Archer', 'Sorcerer'];
+	const OFFENSIVE_CLASSES = ['Fighter'];
 	const DEFENSIVE_CLASSES = ['Defender', 'Backup'];
 
 	// =====================
@@ -179,7 +179,7 @@
 	let classConfigs: ClassConfig[] = $state([]);
 	let classResults: ClassResults[] = $state([]);
 	let monotonic = $state(true);
-	let selectedClassForTable = $state('swordsman');
+	let selectedClassForTable = $state('fighter');
 	let savingClass = $state<string | null>(null);
 	let saveMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -1175,25 +1175,39 @@
 	// =====================
 	// CURVE FITTING FUNCTIONS
 	// =====================
+	const DICE_FACE_COUNT = 6;
+
+	function parseDiceSideValue(value: unknown): number {
+		if (value === null || value === undefined) return 0;
+		const parsed = Number.parseFloat(typeof value === 'string' ? value : String(value));
+		return Number.isFinite(parsed) ? parsed : 0;
+	}
+
+	function diceRecordToDiceInfo(record: CustomDiceWithSides): DiceInfo {
+		const sides = new Array<number>(DICE_FACE_COUNT).fill(0);
+		(record.dice_sides ?? []).forEach((side) => {
+			const index = Math.trunc(Number(side.side_number)) - 1;
+			if (index < 0 || index >= DICE_FACE_COUNT) return;
+			sides[index] = parseDiceSideValue(side.reward_value);
+		});
+		const mean = sides.reduce((sum, value) => sum + value, 0) / DICE_FACE_COUNT;
+		return {
+			id: record.id,
+			name: record.name ?? 'Unknown',
+			mean,
+			sides
+		};
+	}
+
+	async function getDiceRecordsForAnalysis(): Promise<CustomDiceWithSides[]> {
+		if (diceRecords.length > 0) return diceRecords;
+		return await fetchDiceRecords();
+	}
+
 	async function loadCurveData() {
 		try {
-			const { data: diceData, error: diceError } = await supabase
-				.from('custom_dice')
-				.select('*, custom_dice_sides(value)')
-				.order('created_at', { ascending: true });
-
-			if (diceError) throw diceError;
-
-			curveDice = (diceData ?? []).map((d: any) => {
-				const sides = (d.custom_dice_sides ?? []).map((s: any) => s.value);
-				const mean = sides.length > 0 ? sides.reduce((a: number, b: number) => a + b, 0) / sides.length : 0;
-				return {
-					id: d.id,
-					name: d.name ?? 'Unknown',
-					mean,
-					sides
-				};
-			});
+			const diceData = await getDiceRecordsForAnalysis();
+			curveDice = diceData.map(diceRecordToDiceInfo);
 
 			const { data: classData, error: classError } = await supabase
 				.from('classes')
@@ -1214,8 +1228,8 @@
 	function initializeConfigs() {
 		classConfigs = [
 			{
-				key: 'swordsman',
-				name: 'Swordsman',
+				key: 'fighter',
+				name: 'Fighter',
 				color: '#3b82f6',
 				enabled: true,
 				curveParams: { ...CLASS_PRESETS.swordsman.curveParams },
@@ -1226,32 +1240,6 @@
 					.filter((d) => d.name === 'Basic Attack' || d.name === 'Exalted Attack')
 					.map((d) => d.id),
 				colorThresholds: { ...CLASS_PRESETS.swordsman.colorThresholds }
-			},
-			{
-				key: 'archer',
-				name: 'Archer',
-				color: '#22c55e',
-				enabled: true,
-				curveParams: { ...CLASS_PRESETS.archer.curveParams },
-				traitRange: [...CLASS_PRESETS.archer.traitRange] as [number, number],
-				maxDice: 4,
-				runeMultiplier: undefined,
-				allowedDiceIds: curveDice
-					.filter((d) => d.name === 'Basic Attack' || d.name === 'Critical Attack' || d.name === 'Exalted Attack')
-					.map((d) => d.id),
-				colorThresholds: { ...CLASS_PRESETS.archer.colorThresholds }
-			},
-			{
-				key: 'sorcerer',
-				name: 'Sorcerer',
-				color: '#a855f7',
-				enabled: true,
-				curveParams: { ...CLASS_PRESETS.sorcerer.curveParams },
-				traitRange: [...CLASS_PRESETS.sorcerer.traitRange] as [number, number],
-				maxDice: 2,
-				runeMultiplier: 3,
-				allowedDiceIds: curveDice.map((d) => d.id),
-				colorThresholds: { ...CLASS_PRESETS.sorcerer.colorThresholds }
 			}
 		];
 	}
@@ -1586,57 +1574,18 @@
 	// =====================
 	async function loadAltDiceData() {
 		try {
-			const { data: diceData, error: diceError } = await supabase
-				.from('custom_dice')
-				.select('*, custom_dice_sides(value)')
-				.order('created_at', { ascending: true });
-
-			if (diceError) throw diceError;
-
-			altDice = (diceData ?? []).map((d: any) => {
-				const sides = (d.custom_dice_sides ?? []).map((s: any) => s.value);
-				const mean = sides.length > 0 ? sides.reduce((a: number, b: number) => a + b, 0) / sides.length : 0;
-				return {
-					id: d.id,
-					name: d.name ?? 'Unknown',
-					mean,
-					sides
-				};
-			});
+			const diceData = await getDiceRecordsForAnalysis();
+			altDice = diceData.map(diceRecordToDiceInfo);
 
 			altClassTargets = [
 				{
-					key: 'swordsman',
-					name: 'Swordsman',
+					key: 'fighter',
+					name: 'Fighter',
 					color: '#3b82f6',
 					traitRange: [2, 9] as [number, number],
 					targets: Array.from({ length: 8 }, (_, i) => ({
 						trait: i + 2,
 						targetEV: 1.5 + i * 0.5,
-						diceCount: 1,
-						color: 'bronze' as const
-					}))
-				},
-				{
-					key: 'archer',
-					name: 'Archer',
-					color: '#22c55e',
-					traitRange: [2, 9] as [number, number],
-					targets: Array.from({ length: 8 }, (_, i) => ({
-						trait: i + 2,
-						targetEV: 1.0 + i * 0.6,
-						diceCount: 1,
-						color: 'bronze' as const
-					}))
-				},
-				{
-					key: 'sorcerer',
-					name: 'Sorcerer',
-					color: '#a855f7',
-					traitRange: [2, 9] as [number, number],
-					targets: Array.from({ length: 8 }, (_, i) => ({
-						trait: i + 2,
-						targetEV: 2.0 + i * 0.4,
 						diceCount: 1,
 						color: 'bronze' as const
 					}))
