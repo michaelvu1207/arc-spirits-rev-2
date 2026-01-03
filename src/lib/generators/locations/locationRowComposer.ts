@@ -1,4 +1,4 @@
-import { createCanvas, getContext, loadImage, canvasToBlob } from '$lib/generators/shared/canvas';
+import { createCanvas, getContext, loadImage, canvasToBlob, loadOpsilonFont } from '$lib/generators/shared/canvas';
 import type { IconSlot } from '$lib/generators/locations/locationIconPlacer';
 
 function drawIconWithOutline(
@@ -118,6 +118,8 @@ export async function generateLocationTextRowFromTemplate(options: {
 	backgroundUrl: string;
 	text: string;
 }): Promise<Blob> {
+	await loadOpsilonFont();
+
 	const bg = await loadImage(options.backgroundUrl);
 	const canvas = createCanvas(bg.width, bg.height);
 	const ctx = getContext(canvas);
@@ -135,7 +137,7 @@ export async function generateLocationTextRowFromTemplate(options: {
 	let lineHeight = 32;
 
 	for (let fontSize = 34; fontSize >= 16; fontSize--) {
-		ctx.font = `800 ${fontSize}px Opsilon, serif`;
+		ctx.font = `700 ${fontSize}px "Opsilon", serif`;
 		const candidateLines = wrapTextToWidth(ctx, options.text, maxW);
 		const candidateLineHeight = Math.round(fontSize * 1.12);
 		const totalH = candidateLines.length * candidateLineHeight;
@@ -150,7 +152,7 @@ export async function generateLocationTextRowFromTemplate(options: {
 	}
 
 	ctx.save();
-	ctx.font = `800 ${chosenFontSize}px Opsilon, serif`;
+	ctx.font = `700 ${chosenFontSize}px "Opsilon", serif`;
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'middle';
 	ctx.lineJoin = 'round';
