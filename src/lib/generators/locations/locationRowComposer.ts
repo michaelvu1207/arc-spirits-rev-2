@@ -132,11 +132,14 @@ export async function generateLocationTextRowFromTemplate(options: {
 	const maxH = Math.max(10, bg.height - paddingY * 2);
 	const centerX = bg.width / 2;
 
-	let chosenFontSize = 28;
+	const maxFontSize = 68;
+	const minFontSize = 16;
+	let chosenFontSize = 56;
 	let lines: string[] = [''];
-	let lineHeight = 32;
+	let lineHeight = Math.round(chosenFontSize * 1.12);
+	let foundFit = false;
 
-	for (let fontSize = 34; fontSize >= 16; fontSize--) {
+	for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize--) {
 		ctx.font = `700 ${fontSize}px "Opsilon", serif`;
 		const candidateLines = wrapTextToWidth(ctx, options.text, maxW);
 		const candidateLineHeight = Math.round(fontSize * 1.12);
@@ -147,8 +150,16 @@ export async function generateLocationTextRowFromTemplate(options: {
 			chosenFontSize = fontSize;
 			lines = candidateLines;
 			lineHeight = candidateLineHeight;
+			foundFit = true;
 			break;
 		}
+	}
+
+	if (!foundFit) {
+		chosenFontSize = minFontSize;
+		ctx.font = `700 ${chosenFontSize}px "Opsilon", serif`;
+		lines = wrapTextToWidth(ctx, options.text, maxW);
+		lineHeight = Math.round(chosenFontSize * 1.12);
 	}
 
 	ctx.save();
