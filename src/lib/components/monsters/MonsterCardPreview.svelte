@@ -118,11 +118,11 @@
 		<div class="floating-stat-bar">
 			<div class="stat-slot damage">
 				<span class="stat-value">{monster.damage ?? 0}</span>
-				<span class="stat-label">DMG</span>
+				<span class="stat-label">DAMAGE</span>
 			</div>
 			<div class="stat-slot barrier">
 				<span class="stat-value">{(monster as any).barrier ?? 0}</span>
-				<span class="stat-label">BAR</span>
+				<span class="stat-label">BARRIER</span>
 			</div>
 		</div>
 	</div>
@@ -357,54 +357,59 @@
 	/* Floating Stat Bar */
 	.floating-stat-bar {
 		position: absolute;
+		left: 50%;
 		bottom: 12px;
-		right: 12px;
+		transform: translateX(-50%);
 		display: flex;
-		gap: 6px;
-		padding: 6px 8px;
+		gap: 9px;
+		padding: 9px 12px;
 		background: linear-gradient(135deg, rgba(20, 8, 8, 0.92) 0%, rgba(15, 5, 5, 0.95) 100%);
 		border: 1px solid rgba(120, 40, 40, 0.6);
-		border-radius: 6px;
+		border-radius: 9px;
 		backdrop-filter: blur(6px);
 		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
 		z-index: 10;
 	}
 
 	.stat-slot {
-		width: 54px;
-		height: 54px;
+		width: 81px;
+		height: 81px;
 		background: rgba(0, 0, 0, 0.5);
-		border: 1px solid rgba(100, 30, 30, 0.7);
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		position: relative;
-		border-radius: 4px;
+		border-radius: 6px;
 	}
 
 	.stat-slot.damage {
 		background: linear-gradient(135deg, rgba(80, 20, 20, 0.6), rgba(20, 5, 5, 0.7));
-		border-color: rgba(140, 50, 50, 0.7);
 	}
 
 	.stat-slot.barrier {
 		background: linear-gradient(135deg, rgba(60, 25, 25, 0.5), rgba(20, 5, 5, 0.7));
-		border-color: rgba(100, 40, 40, 0.6);
 	}
 
 	.stat-label {
-		font-size: 0.5rem;
-		font-weight: 600;
-		color: rgba(180, 140, 140, 0.8);
+		margin-top: 6px;
+		padding: 2px 10px;
+		border-radius: 999px;
+		background: rgba(0, 0, 0, 0.55);
+		font-size: 0.75rem;
+		font-weight: 800;
+		color: rgba(248, 250, 252, 0.95);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
+		white-space: nowrap;
+		text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 	}
 
 	.stat-value {
-		font-size: 1.3rem;
+		font-size: 1.95rem;
 		font-weight: 800;
 		color: rgba(240, 220, 220, 0.95);
 		line-height: 1;
+		text-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
 	}
 </style>

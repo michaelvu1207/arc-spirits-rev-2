@@ -224,14 +224,14 @@ export async function generateMonsterCardPNG(
 	ctx.fillStyle = artGrad;
 	ctx.fillRect(artX, artY, artW, artH);
 
-	// Floating stat bar (bottom right)
-	const barPaddingX = 8;
-	const barPaddingY = 6;
-	const barGap = 6;
-	const statSlotSize = 54;
+	// Floating stat bar (centered on art panel, 50% larger)
+	const barPaddingX = 12;
+	const barPaddingY = 9;
+	const barGap = 9;
+	const statSlotSize = 81;
 	const barW = barPaddingX * 2 + statSlotSize * 2 + barGap;
 	const barH = barPaddingY * 2 + statSlotSize;
-	const barX = artX + artW - 12 - barW;
+	const barX = artX + (artW - barW) / 2;
 	const barY = artY + artH - 12 - barH;
 
 	ctx.save();
@@ -242,12 +242,12 @@ export async function generateMonsterCardPNG(
 	barBg.addColorStop(0, 'rgba(20, 8, 8, 0.92)');
 	barBg.addColorStop(1, 'rgba(15, 5, 5, 0.95)');
 	ctx.fillStyle = barBg;
-	roundRect(ctx, barX, barY, barW, barH, 6);
+	roundRect(ctx, barX, barY, barW, barH, 9);
 	ctx.fill();
 	ctx.shadowColor = 'transparent';
 	ctx.strokeStyle = 'rgba(120, 40, 40, 0.6)';
 	ctx.lineWidth = 1;
-	roundRect(ctx, barX, barY, barW, barH, 6);
+	roundRect(ctx, barX, barY, barW, barH, 9);
 	ctx.stroke();
 
 	function drawStatSlot(slotX: number, slotY: number, kind: 'damage' | 'barrier', value: number) {
@@ -255,28 +255,49 @@ export async function generateMonsterCardPNG(
 		if (kind === 'damage') {
 			slotGrad.addColorStop(0, 'rgba(80, 20, 20, 0.6)');
 			slotGrad.addColorStop(1, 'rgba(20, 5, 5, 0.7)');
-			ctx.strokeStyle = 'rgba(140, 50, 50, 0.7)';
 		} else {
 			slotGrad.addColorStop(0, 'rgba(60, 25, 25, 0.5)');
 			slotGrad.addColorStop(1, 'rgba(20, 5, 5, 0.7)');
-			ctx.strokeStyle = 'rgba(100, 40, 40, 0.6)';
 		}
 
 		ctx.fillStyle = slotGrad;
-		roundRect(ctx, slotX, slotY, statSlotSize, statSlotSize, 4);
+		roundRect(ctx, slotX, slotY, statSlotSize, statSlotSize, 6);
 		ctx.fill();
-		ctx.lineWidth = 1;
-		roundRect(ctx, slotX, slotY, statSlotSize, statSlotSize, 4);
-		ctx.stroke();
 
 		ctx.textAlign = 'center';
 		ctx.fillStyle = 'rgba(240, 220, 220, 0.95)';
-		ctx.font = '800 21px Opsilon, serif';
-		ctx.fillText(String(value), slotX + statSlotSize / 2, slotY + 30);
+		ctx.font = '800 32px Opsilon, serif';
+		ctx.fillText(String(value), slotX + statSlotSize / 2, slotY + 45);
 
-		ctx.fillStyle = 'rgba(180, 140, 140, 0.8)';
-		ctx.font = '600 8px Opsilon, serif';
-		ctx.fillText(kind === 'damage' ? 'DMG' : 'BAR', slotX + statSlotSize / 2, slotY + 46);
+		const labelText = kind === 'damage' ? 'DAMAGE' : 'BARRIER';
+		let labelFontSize = 12;
+		ctx.font = `800 ${labelFontSize}px Opsilon, serif`;
+		let labelW = ctx.measureText(labelText).width;
+		const maxLabelW = statSlotSize - 22;
+		while (labelW > maxLabelW && labelFontSize > 9) {
+			labelFontSize -= 1;
+			ctx.font = `800 ${labelFontSize}px Opsilon, serif`;
+			labelW = ctx.measureText(labelText).width;
+		}
+		const pillPadX = 10;
+		const pillH = 18;
+		const pillW = Math.min(statSlotSize - 10, labelW + pillPadX * 2);
+		const pillX = slotX + (statSlotSize - pillW) / 2;
+		const pillY = slotY + statSlotSize - 8 - pillH;
+
+		ctx.save();
+		ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+		roundRect(ctx, pillX, pillY, pillW, pillH, 9);
+		ctx.fill();
+
+		ctx.fillStyle = 'rgba(248, 250, 252, 0.95)';
+		ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+		ctx.shadowBlur = 2;
+		ctx.shadowOffsetY = 1;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(labelText, slotX + statSlotSize / 2, pillY + pillH / 2 + 0.5);
+		ctx.restore();
 
 		ctx.textAlign = 'left';
 	}
