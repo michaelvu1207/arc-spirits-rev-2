@@ -70,6 +70,115 @@ export async function generateLocationRowFromTemplate(options: {
 	return canvasToBlob(canvas);
 }
 
+function wrapTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+	const rawLines = String(text ?? '').split('\n');
+	const lines: string[] = [];
+
+	for (const raw of rawLines) {
+		const trimmed = raw.trim();
+		if (!trimmed) {
+			lines.push('');
+			continue;
+		}
+
+		const words = trimmed.split(/\s+/g).filter(Boolean);
+		let current = '';
+
+		for (const word of words) {
+			const test = current ? `${current} ${word}` : word;
+			if (ctx.measureText(test).width <= maxWidth) {
+				current = test;
+				continue;
+			}
+
+			if (current) lines.push(current);
+
+			// If a single word is too long, hard-wrap it.
+			let remaining = word;
+			while (remaining.length > 0 && ctx.measureText(remaining).width > maxWidth) {
+				let cut = remaining.length;
+				while (cut > 1 && ctx.measureText(remaining.slice(0, cut)).width > maxWidth) {
+					cut -= 1;
+				}
+				lines.push(remaining.slice(0, cut));
+				remaining = remaining.slice(cut);
+			}
+			current = remaining;
+		}
+
+		if (current) lines.push(current);
+	}
+
+	// Remove trailing blank lines from input.
+	while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+	return lines.length > 0 ? lines : [''];
+}
+
+export async function generateLocationTextRowFromTemplate(options: {
+	backgroundUrl: string;
+	text: string;
+}): Promise<Blob> {
+	const bg = await loadImage(options.backgroundUrl);
+	const canvas = createCanvas(bg.width, bg.height);
+	const ctx = getContext(canvas);
+
+	ctx.drawImage(bg, 0, 0);
+
+	const paddingX = Math.max(16, Math.round(bg.width * 0.06));
+	const paddingY = Math.max(12, Math.round(bg.height * 0.14));
+	const maxW = Math.max(10, bg.width - paddingX * 2);
+	const maxH = Math.max(10, bg.height - paddingY * 2);
+	const centerX = bg.width / 2;
+
+	let chosenFontSize = 28;
+	let lines: string[] = [''];
+	let lineHeight = 32;
+
+	for (let fontSize = 34; fontSize >= 16; fontSize--) {
+		ctx.font = `800 ${fontSize}px Opsilon, serif`;
+		const candidateLines = wrapTextToWidth(ctx, options.text, maxW);
+		const candidateLineHeight = Math.round(fontSize * 1.12);
+		const totalH = candidateLines.length * candidateLineHeight;
+
+		const widest = candidateLines.reduce((acc, line) => Math.max(acc, ctx.measureText(line).width), 0);
+		if (widest <= maxW + 0.5 && totalH <= maxH + 0.5) {
+			chosenFontSize = fontSize;
+			lines = candidateLines;
+			lineHeight = candidateLineHeight;
+			break;
+		}
+	}
+
+	ctx.save();
+	ctx.font = `800 ${chosenFontSize}px Opsilon, serif`;
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	ctx.lineJoin = 'round';
+
+	const totalHeight = lines.length * lineHeight;
+	const startY = paddingY + Math.max(0, (maxH - totalHeight) / 2) + lineHeight / 2;
+
+	ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+	ctx.shadowBlur = 6;
+	ctx.shadowOffsetY = 2;
+
+	ctx.strokeStyle = 'rgba(43, 26, 18, 0.95)';
+	ctx.lineWidth = Math.max(3, Math.round(chosenFontSize / 8));
+	ctx.fillStyle = 'rgba(248, 250, 252, 0.95)';
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const y = startY + i * lineHeight;
+		if (!line) continue;
+		ctx.strokeText(line, centerX, y);
+		ctx.fillText(line, centerX, y);
+	}
+
+	ctx.restore();
+
+	return canvasToBlob(canvas);
+}
+
 export async function generateLocationFromRowImages(options: {
 	backgroundUrl: string;
 	rows: { rowImageUrl: string; x: number; y: number; scale: number }[];

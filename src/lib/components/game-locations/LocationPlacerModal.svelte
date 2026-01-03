@@ -17,7 +17,11 @@
 		type LocationRowPlacement,
 		type IconSlot
 	} from '$lib/generators/locations/locationIconPlacer';
-	import { generateLocationFromRowImages, generateLocationRowFromTemplate } from '$lib/generators/locations/locationRowComposer';
+	import {
+		generateLocationFromRowImages,
+		generateLocationRowFromTemplate,
+		generateLocationTextRowFromTemplate
+	} from '$lib/generators/locations/locationRowComposer';
 
 	interface Props {
 		isOpen?: boolean;
@@ -74,11 +78,14 @@
 
 	const gainRowBackgroundUrl = $derived.by(() => publicAssetUrl(config.gain_row_background?.path ?? null));
 	const tradeRowBackgroundUrl = $derived.by(() => publicAssetUrl(config.trade_row_background?.path ?? null));
+	const textRowBackgroundUrl = $derived.by(() => publicAssetUrl(config.text_row_background?.path ?? null));
 	const currentRowBackgroundType = $derived.by<'gain' | 'trade'>(() => (currentSlotKind === 'gain' ? 'gain' : 'trade'));
 	const currentRowBackgroundUrl = $derived.by(() => rowBackgroundUrlFor(currentRowBackgroundType));
 
-	function rowBackgroundUrlFor(type: 'gain' | 'trade') {
-		return type === 'trade' ? tradeRowBackgroundUrl : gainRowBackgroundUrl;
+	function rowBackgroundUrlFor(type: 'gain' | 'trade' | 'text') {
+		if (type === 'trade') return tradeRowBackgroundUrl;
+		if (type === 'text') return textRowBackgroundUrl ?? gainRowBackgroundUrl;
+		return gainRowBackgroundUrl;
 	}
 
 	function resolveIconUrl(iconId: string) {
@@ -256,7 +263,7 @@
 	// =========================
 	// Row PNG generation
 	// =========================
-	async function ensureLocationRowRecord(locationId: string, rowIndex: number, type: 'gain' | 'trade') {
+	async function ensureLocationRowRecord(locationId: string, rowIndex: number, type: 'gain' | 'trade' | 'text') {
 		const existing = await supabase
 			.from('game_location_rows')
 			.select('*')
@@ -274,6 +281,9 @@
 	}
 
 	function clampRewardRow(row: GameLocationRewardRow): GameLocationRewardRow {
+		if (row.type === 'text') {
+			return { type: 'text', text: String(row.text ?? '').trim() };
+		}
 		if (row.type === 'trade') {
 			return {
 				type: 'trade',
@@ -292,6 +302,14 @@
 		const type = clamped.type;
 		const bgUrl = rowBackgroundUrlFor(type);
 		if (!bgUrl) throw new Error(`Missing ${type} row background.`);
+
+		if (type === 'text') {
+			const blob = await generateLocationTextRowFromTemplate({
+				backgroundUrl: bgUrl,
+				text: clamped.text
+			});
+			return { type, blob };
+		}
 
 		if (type === 'gain') {
 			const blob = await generateLocationRowFromTemplate({
@@ -404,8 +422,20 @@
 	let imageBatchProgress = $state<{ processed: number; total: number; current: string }>({ processed: 0, total: 0, current: '' });
 
 	async function renderRowsForAllLocations() {
-		if (!gainRowBackgroundUrl || !tradeRowBackgroundUrl) {
-			alert('Upload both Gain and Trade row backgrounds first.');
+		const needsGain = locations.some((loc) => (loc.reward_rows ?? []).some((rr) => rr.type === 'gain'));
+		const needsTrade = locations.some((loc) => (loc.reward_rows ?? []).some((rr) => rr.type === 'trade'));
+		const needsText = locations.some((loc) => (loc.reward_rows ?? []).some((rr) => rr.type === 'text'));
+
+		if (needsGain && !gainRowBackgroundUrl) {
+			alert('Upload the Gain row background first.');
+			return;
+		}
+		if (needsTrade && !tradeRowBackgroundUrl) {
+			alert('Upload the Trade row background first.');
+			return;
+		}
+		if (needsText && !textRowBackgroundUrl && !gainRowBackgroundUrl) {
+			alert('Upload the Text row background (or set Gain as the fallback background) first.');
 			return;
 		}
 		batchRunning = true;
@@ -545,7 +575,11 @@
 						errors.push(`${location.name}: missing reference for row ${i + 1}`);
 						continue;
 					}
-					const rowType = location.reward_rows?.[i]?.type === 'trade' ? 'trade' : 'gain';
+					const rowType = location.reward_rows?.[i]?.type === 'trade'
+						? 'trade'
+						: location.reward_rows?.[i]?.type === 'text'
+							? 'text'
+							: 'gain';
 					const record = await ensureLocationRowRecord(location.id, i, rowType);
 					const updated = await updateGameLocationRow(record.id, {
 						pos_x: ref.pos_x,
@@ -746,6 +780,15 @@
 							<ImageUploader
 								bind:value={config.trade_row_background.path}
 								folder="game_locations/reward_row_backgrounds/trade"
+								maxSizeMB={25}
+								cropTransparent={false}
+							/>
+						</div>
+						<div class="row-template__bg">
+							<div class="row-template__bg-title">Text</div>
+							<ImageUploader
+								bind:value={config.text_row_background.path}
+								folder="game_locations/reward_row_backgrounds/text"
 								maxSizeMB={25}
 								cropTransparent={false}
 							/>

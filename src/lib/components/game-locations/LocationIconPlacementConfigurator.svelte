@@ -594,7 +594,8 @@
 				_icon_size: parsed._icon_size,
 				rows,
 				gain_row_background: sanitizeRowBackground(parsed.gain_row_background, defaults.gain_row_background),
-				trade_row_background: sanitizeRowBackground(parsed.trade_row_background, defaults.trade_row_background)
+				trade_row_background: sanitizeRowBackground(parsed.trade_row_background, defaults.trade_row_background),
+				text_row_background: sanitizeRowBackground(parsed.text_row_background, defaults.text_row_background)
 			};
 			jsonError = '';
 			jsonEditorOpen = false;
@@ -707,6 +708,16 @@
 										<ImageUploader
 											bind:value={config.trade_row_background.path}
 											folder="game_locations/reward_row_backgrounds/trade"
+											maxSizeMB={25}
+											cropTransparent={false}
+											onerror={(err) => alert(`Upload failed: ${err}`)}
+										/>
+									</div>
+									<div class="row-backgrounds__item">
+										<div class="row-backgrounds__title">Text</div>
+										<ImageUploader
+											bind:value={config.text_row_background.path}
+											folder="game_locations/reward_row_backgrounds/text"
 											maxSizeMB={25}
 											cropTransparent={false}
 											onerror={(err) => alert(`Upload failed: ${err}`)}

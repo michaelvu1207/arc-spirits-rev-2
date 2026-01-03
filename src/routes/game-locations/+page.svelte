@@ -94,7 +94,15 @@
 				} satisfies GameLocationRewardRow;
 			}
 
-			const type = (row as any).type === 'trade' ? 'trade' : 'gain';
+			const rawType = (row as any).type;
+			if (rawType === 'text') {
+				return {
+					type: 'text',
+					text: typeof (row as any).text === 'string' ? (row as any).text : ''
+				} satisfies GameLocationRewardRow;
+			}
+
+			const type = rawType === 'trade' ? 'trade' : 'gain';
 
 			const gain_icon_ids = Array.isArray((row as any).gain_icon_ids)
 				? (row as any).gain_icon_ids.filter((id: any) => typeof id === 'string')
@@ -210,7 +218,10 @@
 		}
 	}
 
-	function hasRewardIcons(row: GameLocationRewardRow): boolean {
+	function hasRewardContent(row: GameLocationRewardRow): boolean {
+		if (row.type === 'text') {
+			return row.text.trim().length > 0;
+		}
 		if (row.type === 'trade') {
 			return (row.cost_icon_ids?.length ?? 0) > 0 || (row.gain_icon_ids?.length ?? 0) > 0;
 		}
@@ -287,7 +298,7 @@
 					{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
 						updatedAt: item.updated_at ?? undefined
 					})}
-					{@const displayRows = (item.reward_rows ?? []).filter(hasRewardIcons)}
+					{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
 					<div class="location-card">
 						{#if previewUrl}
 							<div class="location-card__preview">
@@ -321,9 +332,13 @@
 									<p class="location-card__empty-rewards">No rewards set</p>
 								{:else}
 									{#each displayRows as row, idx (idx)}
-										<div class="reward-row" class:reward-row--trade={row.type === 'trade'}>
+										<div
+											class="reward-row"
+											class:reward-row--trade={row.type === 'trade'}
+											class:reward-row--text={row.type === 'text'}
+										>
 											<span class="reward-row__label">
-												{row.type === 'trade' ? 'Trade' : 'Gain Reward'}
+												{row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain Reward'}
 											</span>
 
 											{#if row.type === 'trade'}
@@ -354,7 +369,7 @@
 														{/each}
 													</div>
 												</div>
-											{:else}
+											{:else if row.type === 'gain'}
 												<div class="reward-row__icons">
 													{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
 														{@const url = getIconPoolUrl(iconId)}
@@ -367,6 +382,8 @@
 														</div>
 													{/each}
 												</div>
+											{:else}
+												<div class="reward-row__text">{row.text}</div>
 											{/if}
 										</div>
 									{/each}
@@ -500,6 +517,10 @@
 		align-items: flex-start;
 	}
 
+	.reward-row--text {
+		align-items: flex-start;
+	}
+
 	.reward-row__label {
 		font-size: 0.75rem;
 		font-weight: 700;
@@ -514,6 +535,15 @@
 		gap: 0.35rem;
 		flex-wrap: wrap;
 		justify-content: flex-end;
+	}
+
+	.reward-row__text {
+		flex: 1;
+		text-align: right;
+		font-size: 0.85rem;
+		color: #e2e8f0;
+		line-height: 1.2;
+		white-space: pre-wrap;
 	}
 
 	.reward-row__trade {

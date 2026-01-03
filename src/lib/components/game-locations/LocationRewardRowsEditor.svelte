@@ -3,7 +3,7 @@
 	import type { GameLocationRewardRow } from '$lib/types/gameData';
 	import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { IconPicker } from '$lib/components/shared';
-	import { Button, Select } from '$lib/components/ui';
+	import { Button, Select, Textarea } from '$lib/components/ui';
 
 	interface Props {
 		rewardRows?: GameLocationRewardRow[];
@@ -26,6 +26,7 @@
 	});
 
 	function maxFor(row: GameLocationRewardRow, list: 'gain' | 'cost'): number {
+		if (row.type === 'text') return 0;
 		if (row.type === 'trade') {
 			return list === 'cost' ? 2 : 3;
 		}
@@ -39,6 +40,11 @@
 
 	function addTradeRow() {
 		rewardRows = [...rewardRows, { type: 'trade', cost_icon_ids: [], gain_icon_ids: [] }];
+		onchange?.(rewardRows);
+	}
+
+	function addTextRow() {
+		rewardRows = [...rewardRows, { type: 'text', text: '' }];
 		onchange?.(rewardRows);
 	}
 
@@ -68,6 +74,7 @@
 
 	function setGainIcons(index: number, iconIds: string[]) {
 		const row = rewardRows[index];
+		if (row.type === 'text') return;
 		updateRow(index, { ...row, gain_icon_ids: iconIds.slice(0, maxFor(row, 'gain')) } as GameLocationRewardRow);
 	}
 
@@ -77,8 +84,15 @@
 		updateRow(index, { ...row, cost_icon_ids: iconIds.slice(0, maxFor(row, 'cost')) });
 	}
 
+	function setText(index: number, text: string) {
+		const row = rewardRows[index];
+		if (row.type !== 'text') return;
+		updateRow(index, { ...row, text });
+	}
+
 	function removeGainIconAt(index: number, iconIndex: number) {
 		const row = rewardRows[index];
+		if (row.type === 'text') return;
 		const next = row.gain_icon_ids.filter((_, i) => i !== iconIndex);
 		setGainIcons(index, next);
 	}
@@ -90,20 +104,28 @@
 		setCostIcons(index, next);
 	}
 
-	function setRowType(index: number, type: 'gain' | 'trade') {
+	function setRowType(index: number, type: 'gain' | 'trade' | 'text') {
 		const row = rewardRows[index];
 		if (row.type === type) return;
 
 		if (type === 'gain') {
-			updateRow(index, { type: 'gain', gain_icon_ids: row.gain_icon_ids ?? [] });
+			updateRow(index, { type: 'gain', gain_icon_ids: row.type === 'trade' ? row.gain_icon_ids ?? [] : [] });
+			picking = null;
 			return;
 		}
 
-		updateRow(index, {
-			type: 'trade',
-			cost_icon_ids: [],
-			gain_icon_ids: row.gain_icon_ids ?? []
-		});
+		if (type === 'trade') {
+			updateRow(index, {
+				type: 'trade',
+				cost_icon_ids: [],
+				gain_icon_ids: row.type === 'gain' ? row.gain_icon_ids ?? [] : []
+			});
+			picking = null;
+			return;
+		}
+
+		updateRow(index, { type: 'text', text: '' });
+		picking = null;
 	}
 </script>
 
@@ -113,6 +135,7 @@
 		<div class="location-reward-rows__header-actions">
 			<Button variant="secondary" onclick={addGainRow}>+ Gain Row</Button>
 			<Button variant="secondary" onclick={addTradeRow}>+ Trade Row</Button>
+			<Button variant="secondary" onclick={addTextRow}>+ Text Row</Button>
 		</div>
 	</div>
 
@@ -133,9 +156,11 @@
 								value={row.type}
 								options={[
 									{ value: 'gain', label: 'Gain' },
-									{ value: 'trade', label: 'Trade' }
+									{ value: 'trade', label: 'Trade' },
+									{ value: 'text', label: 'Text' }
 								]}
-								onchange={(e) => setRowType(index, (e.target as HTMLSelectElement).value as 'gain' | 'trade')}
+								onchange={(e) =>
+									setRowType(index, (e.target as HTMLSelectElement).value as 'gain' | 'trade' | 'text')}
 							/>
 						</div>
 						<div class="location-reward-rows__buttons">
@@ -205,7 +230,7 @@
 								</div>
 							{/if}
 						</div>
-					{:else}
+					{:else if row.type === 'trade'}
 						<div class="location-reward-rows__trade">
 							<div class="location-reward-rows__trade-col">
 								<div class="location-reward-rows__section-title">Spend</div>
@@ -293,9 +318,19 @@
 								{/if}
 							</div>
 						</div>
+					{:else}
+						<div class="location-reward-rows__text">
+							<div class="location-reward-rows__section-title">Text</div>
+							<Textarea
+								rows={2}
+								value={row.text}
+								placeholder="Enter row text…"
+								oninput={(e) => setText(index, (e.currentTarget as HTMLTextAreaElement).value)}
+							/>
+						</div>
 					{/if}
 
-					{#if picking?.rowIndex === index}
+					{#if picking?.rowIndex === index && row.type !== 'text'}
 						{@const activePicking = picking as NonNullable<typeof picking>}
 						<div class="location-reward-rows__picker">
 							<IconPicker
@@ -450,6 +485,12 @@
 
 	.location-reward-rows__icons {
 		min-height: 48px;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.location-reward-rows__text {
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;

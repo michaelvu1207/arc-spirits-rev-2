@@ -82,6 +82,7 @@ export interface LocationIconPlacementConfig {
 	rows: LocationRowPlacement[];
 	gain_row_background: LocationRowBackgroundConfig;
 	trade_row_background: LocationRowBackgroundConfig;
+	text_row_background: LocationRowBackgroundConfig;
 }
 
 export type LocationRewardRowIcons = {
@@ -116,7 +117,8 @@ export function createDefaultLocationIconConfig(): LocationIconPlacementConfig {
 		_icon_size: iconSize,
 		rows,
 		gain_row_background: { ...defaultRowBackground },
-		trade_row_background: { ...defaultRowBackground }
+		trade_row_background: { ...defaultRowBackground },
+		text_row_background: { ...defaultRowBackground }
 	};
 }
 
@@ -199,7 +201,8 @@ export function normalizeLocationIconPlacementConfig(input: unknown): LocationIc
 		_icon_size: parsed._icon_size,
 		rows,
 		gain_row_background: sanitizeRowBackground(parsed.gain_row_background, defaults.gain_row_background),
-		trade_row_background: sanitizeRowBackground(parsed.trade_row_background, defaults.trade_row_background)
+		trade_row_background: sanitizeRowBackground(parsed.trade_row_background, defaults.trade_row_background),
+		text_row_background: sanitizeRowBackground((parsed as any).text_row_background, defaults.text_row_background)
 	};
 }
 

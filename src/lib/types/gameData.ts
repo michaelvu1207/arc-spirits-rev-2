@@ -382,6 +382,9 @@ export type GameLocationRewardRow = {
 	type: 'trade';
 	cost_icon_ids: string[];
 	gain_icon_ids: string[];
+} | {
+	type: 'text';
+	text: string;
 };
 
 export type GameLocationRow = {
@@ -427,13 +430,17 @@ export type GameLocationRowDesign =
 			type: 'trade';
 			cost: GameLocationRowIconPlacement | null;
 			gain: GameLocationRowIconPlacement[];
+	  }
+	| {
+			type: 'text';
+			text: string;
 	  };
 
 export type GameLocationRowCompositionRow = {
 	id: string;
 	location_id: string;
 	row_index: number;
-	type: 'gain' | 'trade';
+	type: 'gain' | 'trade' | 'text';
 	config: Json;
 	row_image_path: string | null;
 	pos_x: number;

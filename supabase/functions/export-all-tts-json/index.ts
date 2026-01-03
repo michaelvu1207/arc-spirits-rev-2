@@ -489,7 +489,8 @@ serve(async (req) => {
 
     type LocationRewardRow =
       | { type: "gain"; gain_icon_ids: string[] }
-      | { type: "trade"; cost_icon_ids: string[]; gain_icon_ids: string[] };
+      | { type: "trade"; cost_icon_ids: string[]; gain_icon_ids: string[] }
+      | { type: "text"; text: string };
 
     const normalizeIconIds = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
@@ -558,7 +559,12 @@ serve(async (req) => {
           };
         }
 
-        const type = (row as any).type === "trade" ? "trade" : "gain";
+        const rawType = (row as any).type;
+        if (rawType === "text") {
+          return { type: "text", text: typeof (row as any).text === "string" ? (row as any).text : "" };
+        }
+
+        const type = rawType === "trade" ? "trade" : "gain";
         const gain_icon_ids = normalizeIconIds((row as any).gain_icon_ids);
 
         if (type === "trade") {
@@ -936,7 +942,7 @@ serve(async (req) => {
       background_url: `${base}${encodeURI("tts_menu/background.png")}?quality=80`,
     };
 
-    // Map game locations with gain/trade reward rows resolved via icon_pool
+    // Map game locations with reward rows resolved via icon_pool
     const game_locations = gameLocationsRes.rows.map((l) => {
       const origin_name = l.origin_id ? originMap.get(l.origin_id) ?? null : null;
       const image_url = l.image_with_icons_path
@@ -953,6 +959,12 @@ serve(async (req) => {
             type: "trade" as const,
             cost_icons: (row.cost_icon_ids ?? []).map(resolveIcon),
             gain_icons: (row.gain_icon_ids ?? []).map(resolveIcon),
+          };
+        }
+        if (row.type === "text") {
+          return {
+            type: "text" as const,
+            text: row.text ?? "",
           };
         }
         return {
@@ -1169,7 +1181,7 @@ The monsters array contains both monster cards and event cards, distinguished by
 
 ## GameLocation
 
-Game locations include their resolved gain/trade rewards and the generated location image (with icons).
+Game locations include their resolved reward rows and the generated location image (with icons).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1179,12 +1191,13 @@ Game locations include their resolved gain/trade rewards and the generated locat
 | \`origin_name\` | string \\| null | Resolved origin name |
 | \`image_url\` | string \\| null | Generated location image URL (with icons) |
 | \`background_image_url\` | string \\| null | Background image URL (without icons) |
-| \`reward_rows\` | LocationRewardRow[] | Array of reward rows (each gain or trade) |
+| \`reward_rows\` | LocationRewardRow[] | Array of reward rows (gain, trade, or text) |
 
 ### LocationRewardRow
 
 - Gain row: \`{ type: "gain", icons: RewardIcon[] }\`
 - Trade row: \`{ type: "trade", cost_icons: RewardIcon[], gain_icons: RewardIcon[] }\`
+- Text row: \`{ type: "text", text: string }\`
 
 ---
 

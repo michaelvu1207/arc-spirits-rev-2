@@ -14,7 +14,7 @@ export async function fetchGameLocationRows(locationId: string): Promise<GameLoc
 export async function upsertGameLocationRow(params: {
 	location_id: string;
 	row_index: number;
-	type: 'gain' | 'trade';
+	type: 'gain' | 'trade' | 'text';
 	config: GameLocationRowDesign;
 	row_image_path?: string | null;
 	pos_x?: number;
@@ -54,4 +54,3 @@ export async function updateGameLocationRow(
 	if (error) throw new Error(error.message);
 	return data;
 }
-
