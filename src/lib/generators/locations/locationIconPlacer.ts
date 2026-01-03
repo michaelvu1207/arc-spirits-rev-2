@@ -329,50 +329,36 @@ export async function generateLocationWithIcons(
 				}
 			}
 		} else {
-			const isSingleTradePair = row.costIconUrls.length === 1 && row.gainIconUrls.length === 1;
+			const costCount = Math.min(row.costIconUrls.length, placement.trade_cost_slots.length);
+			const gainCount = Math.min(row.gainIconUrls.length, placement.trade_gain_slots.length);
+			const sortedCostSlots = [...placement.trade_cost_slots].sort((a, b) => a.x - b.x);
+			const sortedGainSlots = [...placement.trade_gain_slots].sort((a, b) => a.x - b.x);
+			const costSlots = costCount > 0
+				? sortedCostSlots.slice(Math.max(0, sortedCostSlots.length - costCount))
+				: [];
+			const gainSlots = gainCount > 0 ? sortedGainSlots.slice(0, gainCount) : [];
 
-			if (isSingleTradePair) {
-				const costSlot = placement.trade_cost_slots[placement.trade_cost_slots.length - 1];
-				const gainSlot = placement.trade_gain_slots[0];
-
-				if (costSlot) {
-					try {
-						const img = await loadImage(row.costIconUrls[0]);
-						drawIconWithOutline(ctx, img, costSlot.x, costSlot.y, iconSize, iconSize);
-					} catch (err) {
-						console.warn(`Failed to load cost icon (row ${rowIndex}, single)`, err);
-					}
+			for (let i = 0; i < costCount; i++) {
+				const url = row.costIconUrls[i];
+				const slot = costSlots[i];
+				if (!slot) continue;
+				try {
+					const img = await loadImage(url);
+					drawIconWithOutline(ctx, img, slot.x, slot.y, iconSize, iconSize);
+				} catch (err) {
+					console.warn(`Failed to load cost icon (row ${rowIndex}, i ${i})`, err);
 				}
+			}
 
-				if (gainSlot) {
-					try {
-						const img = await loadImage(row.gainIconUrls[0]);
-						drawIconWithOutline(ctx, img, gainSlot.x, gainSlot.y, iconSize, iconSize);
-					} catch (err) {
-						console.warn(`Failed to load trade gain icon (row ${rowIndex}, single)`, err);
-					}
-				}
-			} else {
-				for (let i = 0; i < Math.min(row.costIconUrls.length, placement.trade_cost_slots.length); i++) {
-					const url = row.costIconUrls[i];
-					const slot = placement.trade_cost_slots[i];
-					try {
-						const img = await loadImage(url);
-						drawIconWithOutline(ctx, img, slot.x, slot.y, iconSize, iconSize);
-					} catch (err) {
-						console.warn(`Failed to load cost icon (row ${rowIndex}, i ${i})`, err);
-					}
-				}
-
-				for (let i = 0; i < Math.min(row.gainIconUrls.length, placement.trade_gain_slots.length); i++) {
-					const url = row.gainIconUrls[i];
-					const slot = placement.trade_gain_slots[i];
-					try {
-						const img = await loadImage(url);
-						drawIconWithOutline(ctx, img, slot.x, slot.y, iconSize, iconSize);
-					} catch (err) {
-						console.warn(`Failed to load trade gain icon (row ${rowIndex}, i ${i})`, err);
-					}
+			for (let i = 0; i < gainCount; i++) {
+				const url = row.gainIconUrls[i];
+				const slot = gainSlots[i];
+				if (!slot) continue;
+				try {
+					const img = await loadImage(url);
+					drawIconWithOutline(ctx, img, slot.x, slot.y, iconSize, iconSize);
+				} catch (err) {
+					console.warn(`Failed to load trade gain icon (row ${rowIndex}, i ${i})`, err);
 				}
 			}
 		}

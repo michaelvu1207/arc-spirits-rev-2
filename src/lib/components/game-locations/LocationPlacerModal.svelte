@@ -323,9 +323,12 @@
 		}
 
 		// trade: render cost on cost slots and gain on gain slots, composited onto same background
-		const isSingleTradePair = (clamped.cost_icon_ids?.length ?? 0) === 1 && (clamped.gain_icon_ids?.length ?? 0) === 1;
-		const costSlots = isSingleTradePair ? template.trade_cost_slots.slice(-1) : template.trade_cost_slots;
-		const gainSlots = isSingleTradePair ? template.trade_gain_slots.slice(0, 1) : template.trade_gain_slots;
+		const costCount = clamped.cost_icon_ids?.length ?? 0;
+		const gainCount = clamped.gain_icon_ids?.length ?? 0;
+		const sortedCostSlots = [...template.trade_cost_slots].sort((a, b) => a.x - b.x);
+		const sortedGainSlots = [...template.trade_gain_slots].sort((a, b) => a.x - b.x);
+		const costSlots = costCount > 0 ? sortedCostSlots.slice(Math.max(0, sortedCostSlots.length - costCount)) : [];
+		const gainSlots = gainCount > 0 ? sortedGainSlots.slice(0, Math.min(sortedGainSlots.length, gainCount)) : [];
 
 		const base = await generateLocationRowFromTemplate({
 			backgroundUrl: bgUrl,
