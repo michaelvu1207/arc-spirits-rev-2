@@ -21,6 +21,7 @@
 	export let monster: Monster;
 	export let orderNum: number | undefined = undefined;
 	export let footerLabel: string = 'Monster';
+	export let renderMode: 'full' | 'fast' = 'full';
 
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
@@ -34,7 +35,7 @@
 	$: defeatRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
 </script>
 
-<div class="blood-card">
+<div class="blood-card" class:fast={renderMode === 'fast'}>
 	<!-- Vein Pattern Overlay -->
 	<div class="vein-overlay"></div>
 
@@ -144,6 +145,19 @@
 			0 0 60px rgba(127, 29, 29, 0.2),
 			inset 0 0 100px rgba(0, 0, 0, 0.5);
 		border: 2px solid #3d0363;
+	}
+
+	.blood-card.fast {
+		box-shadow: none;
+	}
+
+	.blood-card.fast .floating-stat-bar {
+		backdrop-filter: none;
+		box-shadow: none;
+	}
+
+	.blood-card.fast .monster-art {
+		filter: none;
 	}
 
 	.vein-overlay {

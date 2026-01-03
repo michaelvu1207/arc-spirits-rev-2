@@ -1000,9 +1000,10 @@
 																monster={monster}
 																footerLabel={monsterLabel}
 																variant={listPreviewVariant}
+																renderMode="fast"
 															/>
 														{:else}
-															<MonsterPreviewComponent monster={monster} footerLabel={monsterLabel} />
+															<MonsterPreviewComponent monster={monster} footerLabel={monsterLabel} renderMode="fast" />
 														{/if}
 													</div>
 												</div>
@@ -1505,6 +1506,8 @@
 		position: relative;
 		border-radius: 10px;
 		border: 2px solid transparent;
+		content-visibility: auto;
+		contain: layout paint;
 	}
 
 	.copy.selected {
