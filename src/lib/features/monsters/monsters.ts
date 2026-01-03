@@ -1,12 +1,15 @@
 import { supabase, type Rev2Client } from '$lib/api/supabaseClient';
 import type { MonsterRow, RewardRow, RewardRowType } from '$lib/types/gameData';
 
+export type MonsterClassification = 'monster' | 'abyss_guardian' | 'boss';
+
 export interface MonsterFormData {
 	id?: string;
 	name: string;
 	damage: number;
 	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
+	state: 'tainted' | 'corrupt' | 'fallen';
+	monster_classification: MonsterClassification;
 	icon: string | null;
 	image_path: string | null;
 	reward_rows: RewardRow[];
@@ -19,6 +22,7 @@ export interface MonsterFormData {
 const DEFAULT_DAMAGE = 0;
 const DEFAULT_BARRIER = 0;
 const DEFAULT_STATE: MonsterFormData['state'] = 'tainted';
+const DEFAULT_CLASSIFICATION: MonsterFormData['monster_classification'] = 'monster';
 
 export function emptyMonsterForm(): MonsterFormData {
 	return {
@@ -26,6 +30,7 @@ export function emptyMonsterForm(): MonsterFormData {
 		damage: DEFAULT_DAMAGE,
 		barrier: DEFAULT_BARRIER,
 		state: DEFAULT_STATE,
+		monster_classification: DEFAULT_CLASSIFICATION,
 		icon: null,
 		image_path: null,
 		reward_rows: [],
@@ -61,6 +66,7 @@ export function monsterRowToForm(row: MonsterRow): MonsterFormData {
 		damage: row.damage,
 		barrier: row.barrier,
 		state: row.state,
+		monster_classification: row.monster_classification ?? DEFAULT_CLASSIFICATION,
 		icon: row.icon,
 		image_path: row.image_path,
 		reward_rows: rewardRows,
@@ -94,6 +100,7 @@ export async function saveMonsterRecord(
 		damage: sanitized.damage,
 		barrier: sanitized.barrier,
 		state: sanitized.state,
+		monster_classification: sanitized.monster_classification,
 		icon: sanitized.icon,
 		image_path: sanitized.image_path,
 		order_num: sanitized.order_num,
@@ -148,6 +155,10 @@ function sanitizeMonsterForm(form: MonsterFormData): MonsterFormData {
 	const damage = Number.isFinite(form.damage) ? Math.max(0, Math.round(form.damage)) : DEFAULT_DAMAGE;
 	const barrier = Number.isFinite(form.barrier) ? Math.max(0, Math.round(form.barrier)) : DEFAULT_BARRIER;
 	const state: MonsterFormData['state'] = form.state ?? DEFAULT_STATE;
+	const classification: MonsterFormData['monster_classification'] =
+		form.monster_classification === 'abyss_guardian' || form.monster_classification === 'boss'
+			? form.monster_classification
+			: DEFAULT_CLASSIFICATION;
 	const icon = form.icon?.trim() || null;
 	const image_path = form.image_path?.trim() || null;
 	const order_num = Number.isFinite(form.order_num) ? Math.max(0, Math.round(form.order_num)) : 0;
@@ -163,6 +174,7 @@ function sanitizeMonsterForm(form: MonsterFormData): MonsterFormData {
 		damage,
 		barrier,
 		state,
+		monster_classification: classification,
 		icon,
 		image_path,
 		order_num,

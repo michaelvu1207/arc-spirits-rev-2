@@ -103,6 +103,16 @@
 		});
 	});
 
+	const travelersAsMonsters = $derived.by(() => {
+		return travelers.map((traveler) => ({
+			...traveler,
+			// AbyssDeckWorkspace / MonsterCardGallery expect MonsterRow shape.
+			monster_classification: 'monster' as const,
+			// Travelers may still have legacy boss state; normalize for the shared UI.
+			state: traveler.state === 'boss' ? 'fallen' : traveler.state
+		}));
+	});
+
 	// Quest gallery derived values
 	const selectedQuestCount = $derived(selectedQuestIds.size);
 	const generatedQuestCount = $derived(travelerQuests.filter(q => q.card_image_path).length);
@@ -890,7 +900,7 @@
 		</section>
 
 		<AbyssDeckWorkspace
-			monsters={travelers}
+			monsters={travelersAsMonsters}
 			events={[]}
 			locations={[]}
 			specialEffects={[]}
@@ -1175,7 +1185,7 @@
 	{/if}
 </PageLayout>
 
-<MonsterCardGallery bind:isOpen={showGalleryModal} monsters={travelers} events={[]} />
+<MonsterCardGallery bind:isOpen={showGalleryModal} monsters={travelersAsMonsters} events={[]} />
 
 <style>
 	.count {

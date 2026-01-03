@@ -26,11 +26,24 @@
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
 		corrupt: '#991b1b',
-		fallen: '#7f1d1d',
+		fallen: '#7f1d1d'
+	};
+
+	const classificationLabels: Record<string, string> = {
+		monster: 'Monster',
+		abyss_guardian: 'Abyss Guardian',
+		boss: 'Boss'
+	};
+
+	const classificationColors: Record<string, string> = {
+		abyss_guardian: '#0ea5e9',
 		boss: '#450a0a'
 	};
 
 	$: stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
+	$: classification = monster.monster_classification ?? 'monster';
+	$: classificationLabel = classificationLabels[classification] ?? 'Monster';
+	$: classificationColor = classificationColors[classification] ?? '#334155';
 	$: killRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean));
 	$: defeatRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
 </script>
@@ -99,9 +112,16 @@
 			<!-- Footer -->
 			<div class="card-footer">
 				<span class="footer-label">Arc Spirits // {footerLabel}</span>
-				<span class="state-badge" style="--state-color: {stateColor}">
-					{(monster.state ?? 'tainted').toUpperCase()}
-				</span>
+				<div class="footer-badges">
+					{#if classification !== 'monster'}
+						<span class="classification-badge" style="--badge-color: {classificationColor}">
+							{classificationLabel.toUpperCase()}
+						</span>
+					{/if}
+					<span class="state-badge" style="--state-color: {stateColor}">
+						{(monster.state ?? 'tainted').toUpperCase()}
+					</span>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -261,6 +281,22 @@
 		letter-spacing: 0.1em;
 		background: var(--state-color);
 		color: #fecaca;
+		border-radius: 3px;
+	}
+
+	.footer-badges {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.classification-badge {
+		padding: 4px 10px;
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		background: var(--badge-color);
+		color: #e2e8f0;
 		border-radius: 3px;
 	}
 

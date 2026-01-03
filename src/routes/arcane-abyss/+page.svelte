@@ -51,7 +51,8 @@
 	// Gallery state
 	let searchQuery = $state('');
 	let typeFilter = $state<'all' | 'monster' | 'event'>('all');
-	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'boss'>('all');
+	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen'>('all');
+	let classificationFilter = $state<'all' | 'monster' | 'abyss_guardian' | 'boss'>('all');
 	let statusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
 	let selectedCardIds = $state(new Set<string>());
 	let generatingCards = $state(new Set<string>());
@@ -266,6 +267,7 @@
 					damage: formData.damage,
 					barrier: formData.barrier,
 					state: formData.state,
+					monster_classification: formData.monster_classification,
 					icon: formData.icon,
 					image_path: formData.image_path,
 					invade_location_id: formData.invade_location_id,
@@ -285,6 +287,7 @@
 					damage: formData.damage,
 					barrier: formData.barrier,
 					state: formData.state,
+					monster_classification: formData.monster_classification,
 					icon: formData.icon,
 					image_path: formData.image_path,
 					invade_location_id: formData.invade_location_id,
@@ -468,6 +471,10 @@
 			if (stateFilter !== 'all' && card.type === 'monster') {
 				const monster = card.data as Monster;
 				if (monster.state !== stateFilter) return false;
+			}
+			if (classificationFilter !== 'all' && card.type === 'monster') {
+				const monster = card.data as Monster;
+				if ((monster.monster_classification ?? 'monster') !== classificationFilter) return false;
 			}
 			if (statusFilter === 'generated' && !card.card_image_path) return false;
 			if (statusFilter === 'not-generated' && card.card_image_path) return false;
@@ -685,6 +692,14 @@
 							<option value="tainted">Tainted</option>
 							<option value="corrupt">Corrupt</option>
 							<option value="fallen">Fallen</option>
+						</select>
+					{/if}
+
+					{#if typeFilter === 'monster' || typeFilter === 'all'}
+						<select bind:value={classificationFilter} class="filter-select">
+							<option value="all">All Classifications</option>
+							<option value="monster">Monster</option>
+							<option value="abyss_guardian">Abyss Guardian</option>
 							<option value="boss">Boss</option>
 						</select>
 					{/if}

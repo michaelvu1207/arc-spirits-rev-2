@@ -171,11 +171,23 @@ export async function generateMonsterCardPNG(
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
 		corrupt: '#991b1b',
-		fallen: '#7f1d1d',
+		fallen: '#7f1d1d'
+	};
+
+	const classificationLabels: Record<string, string> = {
+		monster: 'Monster',
+		abyss_guardian: 'Abyss Guardian',
+		boss: 'Boss'
+	};
+
+	const classificationColors: Record<string, string> = {
+		abyss_guardian: '#0ea5e9',
 		boss: '#450a0a'
 	};
 
 	const stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
+	const classification = monster.monster_classification ?? 'monster';
+	const classificationText = classificationLabels[classification]?.toUpperCase() ?? 'MONSTER';
 
 	ctx.save();
 	roundRect(ctx, 0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT, 4);
@@ -565,21 +577,41 @@ export async function generateMonsterCardPNG(
 	const stateText = (monster.state ?? 'tainted').toUpperCase();
 	ctx.font = '700 10px Opsilon, serif';
 	const badgePadX = 10;
-	const badgePadY = 4;
-	const badgeTextW = ctx.measureText(stateText).width;
-	const badgeW = badgeTextW + badgePadX * 2;
 	const badgeH = 18;
-	const badgeX = innerX + innerW - badgeW;
 	const badgeY = yPos + 10;
-	ctx.fillStyle = stateColor;
-	roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
-	ctx.fill();
-	ctx.fillStyle = '#fecaca';
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'middle';
-	ctx.fillText(stateText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
-	ctx.textAlign = 'left';
-	ctx.textBaseline = 'alphabetic';
+	const badgeGap = 6;
+	let badgeRightX = innerX + innerW;
+
+	if (classification !== 'monster') {
+		const textW = ctx.measureText(classificationText).width;
+		const badgeW = textW + badgePadX * 2;
+		const badgeX = badgeRightX - badgeW;
+		badgeRightX = badgeX - badgeGap;
+		ctx.fillStyle = classificationColors[classification] ?? '#334155';
+		roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+		ctx.fill();
+		ctx.fillStyle = '#e2e8f0';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(classificationText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'alphabetic';
+	}
+
+	{
+		const badgeTextW = ctx.measureText(stateText).width;
+		const badgeW = badgeTextW + badgePadX * 2;
+		const badgeX = badgeRightX - badgeW;
+		ctx.fillStyle = stateColor;
+		roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+		ctx.fill();
+		ctx.fillStyle = '#fecaca';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(stateText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'alphabetic';
+	}
 
 	ctx.restore();
 

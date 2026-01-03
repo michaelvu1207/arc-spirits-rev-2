@@ -23,7 +23,8 @@
 		description: string | null;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
+		state: 'tainted' | 'corrupt' | 'fallen';
+		monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 		icon: string | null;
 		image_path: string | null;
 		invade_location_id: string | null;
@@ -285,6 +286,7 @@
 		damage: 0,
 		barrier: 0,
 		state: 'tainted',
+		monster_classification: 'monster',
 		icon: null,
 		image_path: null,
 		invade_location_id: null,
@@ -324,6 +326,7 @@
 			damage: 0,
 			barrier: 0,
 			state: 'tainted',
+			monster_classification: 'monster',
 			icon: null,
 			image_path: null,
 			invade_location_id: null,
@@ -366,6 +369,7 @@
 				damage: monster.damage,
 				barrier: monster.barrier,
 				state: monster.state,
+				monster_classification: monster.monster_classification ?? 'monster',
 				icon: monster.icon,
 				image_path: monster.image_path,
 				invade_location_id: monster.invade_location_id ?? null,
@@ -424,6 +428,7 @@
 			damage: monster.damage,
 			barrier: monster.barrier,
 			state: monster.state,
+			monster_classification: monster.monster_classification ?? 'monster',
 			icon: monster.icon,
 			image_path: monster.image_path,
 			invade_location_id: monster.invade_location_id ?? null,
@@ -631,7 +636,8 @@
 			});
 	});
 
-	type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'boss';
+	type MonsterState = 'tainted' | 'corrupt' | 'fallen';
+	type MonsterStateGroup = MonsterState;
 	type DeckSection = {
 		key: string;
 		label: string;
@@ -639,9 +645,22 @@
 		groups: { item: DeckOrderItem; orderIndex: number }[];
 	};
 
-	const monsterStateOrder: MonsterState[] = ['tainted', 'corrupt', 'fallen', 'boss'];
+	const monsterStateGroupOrder: MonsterStateGroup[] = ['tainted', 'corrupt', 'fallen'];
 
-	function getMonsterStateLabel(state: MonsterState): string {
+	function getMonsterStateGroup(state: string | null | undefined): MonsterStateGroup | null {
+		switch (state) {
+			case 'tainted':
+			case 'corrupt':
+			case 'fallen':
+				return state;
+			case 'boss':
+				return 'fallen';
+			default:
+				return null;
+		}
+	}
+
+	function getMonsterStateLabel(state: MonsterStateGroup): string {
 		switch (state) {
 			case 'tainted':
 				return 'Tainted';
@@ -649,12 +668,10 @@
 				return 'Corrupt';
 			case 'fallen':
 				return 'Fallen';
-			case 'boss':
-				return 'Boss';
 		}
 	}
 
-	function getMonsterStateAccentColor(state: MonsterState): string {
+	function getMonsterStateAccentColor(state: MonsterStateGroup): string {
 		switch (state) {
 			case 'tainted':
 				return '#c084fc';
@@ -662,8 +679,6 @@
 				return '#6b21a8';
 			case 'fallen':
 				return '#065f46';
-			case 'boss':
-				return '#ef4444';
 		}
 	}
 
@@ -677,8 +692,10 @@
 		const sections: DeckSection[] = [];
 
 		if (typeFilter !== 'event') {
-			for (const state of monsterStateOrder) {
-				const stateGroups = monsters.filter((g) => monsterById.get(g.item.id)?.state === state);
+			for (const state of monsterStateGroupOrder) {
+				const stateGroups = monsters.filter(
+					(g) => getMonsterStateGroup(monsterById.get(g.item.id)?.state) === state
+				);
 				if (stateGroups.length === 0) continue;
 				sections.push({
 					key: `state:${state}`,
@@ -689,7 +706,7 @@
 			}
 
 			const other = monsters.filter(
-				(g) => !monsterStateOrder.includes((monsterById.get(g.item.id)?.state ?? '') as MonsterState)
+				(g) => getMonsterStateGroup(monsterById.get(g.item.id)?.state) === null
 			);
 			if (other.length > 0) {
 				sections.push({
@@ -751,6 +768,7 @@
 				damage: monsterFormData.damage,
 				barrier: monsterFormData.barrier,
 				state: monsterFormData.state,
+				monster_classification: monsterFormData.monster_classification,
 				icon: monsterFormData.icon,
 				image_path: monsterFormData.image_path,
 				invade_location_id: monsterFormData.invade_location_id,
@@ -793,6 +811,7 @@
 			damage: monsterFormData.damage,
 			barrier: monsterFormData.barrier,
 			state: monsterFormData.state,
+			monster_classification: monsterFormData.monster_classification,
 			icon: monsterFormData.icon,
 			image_path: monsterFormData.image_path,
 			invade_location_id: monsterFormData.invade_location_id,
@@ -1115,12 +1134,22 @@
 								options={[
 									{ value: 'tainted', label: 'Tainted' },
 									{ value: 'corrupt', label: 'Corrupt' },
-									{ value: 'fallen', label: 'Fallen' },
-									{ value: 'boss', label: 'Boss' }
+									{ value: 'fallen', label: 'Fallen' }
 								]}
 							/>
 						</FormField>
 					</div>
+
+					<FormField label="Classification">
+						<Select
+							bind:value={monsterFormData.monster_classification}
+							options={[
+								{ value: 'monster', label: 'Monster' },
+								{ value: 'abyss_guardian', label: 'Abyss Guardian' },
+								{ value: 'boss', label: 'Boss' }
+							]}
+						/>
+					</FormField>
 
 					<FormField label="Icon (emoji)">
 						<Input type="text" bind:value={monsterFormData.icon} placeholder={monsterIcon} />
