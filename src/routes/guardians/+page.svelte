@@ -319,6 +319,21 @@
 		}
 	}
 
+	async function deleteGuardians(ids: string[]) {
+		if (ids.length === 0) return;
+		if (!confirm(`Delete ${ids.length} guardian${ids.length === 1 ? '' : 's'}?`)) return;
+		try {
+			const { error: deleteError } = await supabase
+				.from('guardians')
+				.delete()
+				.in('id', ids);
+			if (deleteError) throw deleteError;
+			await loadGuardians();
+		} catch (err) {
+			alert(`Failed to delete guardians: ${getErrorMessage(err)}`);
+		}
+	}
+
 	const originName = (originId: string) =>
 		origins.find((o) => o.id === originId)?.name ?? 'Unknown Origin';
 
@@ -382,6 +397,7 @@
 			{artifactsByGuardian}
 			onEdit={(guardian) => modal.open(guardian)}
 			onDelete={deleteGuardian}
+			onDeleteMultiple={deleteGuardians}
 			onUploadImage={promptImageUpload}
 			onRemoveImage={removeImage}
 			{uploadingId}

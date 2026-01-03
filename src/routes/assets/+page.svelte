@@ -1,21 +1,23 @@
-<script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/api/supabaseClient';
-	import type { OriginRow, RuneRow, HexSpiritRow } from '$lib/types/gameData';
-	import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
-	import { generateDiceSide } from '$lib/generators/dice';
-	import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
-	import { Button } from '$lib/components/ui';
-	import { PageLayout, type Tab } from '$lib/components/layout';
+	<script lang="ts">
+		import { onMount } from 'svelte';
+		import { supabase } from '$lib/api/supabaseClient';
+		import type { OriginRow, RuneRow, HexSpiritRow, ClassRow } from '$lib/types/gameData';
+		import { publicAssetUrl } from '$lib/utils';
+		import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
+		import { generateDiceSide } from '$lib/generators/dice';
+		import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
+		import { Button } from '$lib/components/ui';
+		import { PageLayout, type Tab } from '$lib/components/layout';
 	import { AssetsListView, AssetsGridView, type AssetImage } from '$lib/components/assets';
 	import JSZip from 'jszip';
 
-	let origins: OriginRow[] = [];
-	let runes: RuneRow[] = [];
-	let hexSpirits: HexSpiritRow[] = [];
-	let dice: CustomDiceWithSides[] = [];
-	let loading = $state(true);
-	let error: string | null = $state(null);
+		let origins: OriginRow[] = [];
+		let classes: ClassRow[] = [];
+		let runes: RuneRow[] = [];
+		let hexSpirits: HexSpiritRow[] = [];
+		let dice: CustomDiceWithSides[] = [];
+		let loading = $state(true);
+		let error: string | null = $state(null);
 	let exporting = $state(false);
 
 	const gameAssetsStorage = supabase.storage.from('game_assets');
@@ -32,12 +34,12 @@
 		{ id: 'list', label: 'Data: List', icon: '📋' },
 		{ id: 'grid', label: 'Grid View', icon: '🖼️' }
 	];
-	let activeTab = $state('list');
+		let activeTab = $state('list');
 
-	onMount(async () => {
-		await Promise.all([loadOrigins(), loadRunes(), loadHexSpirits(), loadDice(), loadRuneBackground()]);
-		await loadAssets();
-	});
+		onMount(async () => {
+			await Promise.all([loadOrigins(), loadClasses(), loadRunes(), loadHexSpirits(), loadDice(), loadRuneBackground()]);
+			await loadAssets();
+		});
 
 	async function loadOrigins() {
 		const { data, error: fetchError } = await supabase
@@ -48,13 +50,25 @@
 			error = fetchError.message;
 			return;
 		}
-		origins = data ?? [];
-	}
+			origins = data ?? [];
+		}
 
-	async function loadRunes() {
-		const { data, error: fetchError } = await supabase
-			.from('runes')
-			.select('*')
+		async function loadClasses() {
+			const { data, error: fetchError } = await supabase
+				.from('classes')
+				.select('*')
+				.order('position', { ascending: true });
+			if (fetchError) {
+				error = fetchError.message;
+				return;
+			}
+			classes = data ?? [];
+		}
+
+		async function loadRunes() {
+			const { data, error: fetchError } = await supabase
+				.from('runes')
+				.select('*')
 			.order('name', { ascending: true });
 		if (fetchError) {
 			error = fetchError.message;
@@ -82,18 +96,23 @@
 			console.warn('Failed to load dice:', err);
 			dice = [];
 		}
-	}
-
-
-	function getOriginIconUrl(icon: string | null | undefined): string | null {
-		if (!icon) return null;
-		if (icon.includes('/')) {
-			const fullPath = icon.startsWith('origin_icons/') ? icon : `origin_icons/${icon}`;
-			const { data } = gameAssetsStorage.getPublicUrl(fullPath);
-			return data?.publicUrl ?? null;
 		}
-		return null;
-	}
+
+
+		function getOriginIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
+			if (!icon) return null;
+			// Only treat as a storage path if it looks like one (avoid legacy emoji stored in icon_png).
+			if (!icon.includes('/')) return null;
+			const fullPath = icon.startsWith('origin_icons/') ? icon : `origin_icons/${icon}`;
+			return publicAssetUrl(fullPath, { updatedAt: updatedAt ?? Date.now() });
+		}
+
+		function getClassIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
+			if (!icon) return null;
+			if (!icon.includes('/')) return null;
+			const fullPath = icon.startsWith('class_icons/') ? icon : `class_icons/${icon}`;
+			return publicAssetUrl(fullPath, { updatedAt: updatedAt ?? Date.now() });
+		}
 
 	function getHexSpiritImageUrl(path: string | null | undefined): string | null {
 		if (!path) return null;
@@ -133,36 +152,61 @@
 		diceFaceImages = [];
 		miscAssetImages = [];
 
-		// Load origin icons
-		for (const origin of origins) {
-			const iconUrl = getOriginIconUrl(origin.icon_png);
-			if (iconUrl) {
-				originImages.push({
-					name: origin.name,
-					url: iconUrl,
+			// Load origin icons
+			for (const origin of origins) {
+				const iconUrl = getOriginIconUrl(origin.icon_png, origin.updated_at);
+				if (iconUrl) {
+					originImages.push({
+						name: origin.name,
+						url: iconUrl,
 					type: 'origin',
 					filename: `origins/${sanitizeFileName(origin.name)}_icon.png`
 				});
 			}
 		}
 
-		// Generate rune icons
-		for (const rune of runes) {
-			const origin = origins.find((o) => o.id === rune.origin_id);
-			if (!origin) continue;
+			// Generate rune icons
+			for (const rune of runes) {
+				const storedIconUrl = publicAssetUrl(rune.icon_path, { updatedAt: rune.updated_at ?? Date.now() });
+				if (storedIconUrl) {
+					runeImages.push({
+						name: rune.name,
+						url: storedIconUrl,
+						type: 'rune',
+						filename: `runes/${sanitizeFileName(rune.name)}_icon.png`
+					});
+					continue;
+				}
 
-			const originIconUrl = getOriginIconUrl(origin.icon_png);
-			const originIconEmoji = originIconUrl ? null : (origin.icon_png || null);
+				const backgroundUrl =
+					publicAssetUrl(rune.icon_background_path, { updatedAt: rune.updated_at ?? Date.now() }) ??
+					runeBackgroundUrl;
 
-			try {
-				const runeIconUrl = await generateRuneIcon({
-					originIconUrl,
-					originIconEmoji,
-					backgroundUrl: runeBackgroundUrl,
-					size: 800
-				});
-				runeImages.push({
-					name: rune.name,
+				let originIconUrl: string | null = null;
+				let originIconEmoji: string | null = null;
+				if (rune.origin_id) {
+					const origin = origins.find((o) => o.id === rune.origin_id);
+					if (!origin) continue;
+					originIconUrl = getOriginIconUrl(origin.icon_png, origin.updated_at);
+					originIconEmoji = originIconUrl ? null : (origin.icon_emoji || origin.icon_png || null);
+				} else if (rune.class_id) {
+					const cls = classes.find((c) => c.id === rune.class_id);
+					if (!cls) continue;
+					originIconUrl = getClassIconUrl(cls.icon_png, cls.updated_at);
+					originIconEmoji = originIconUrl ? null : (cls.icon_emoji || null);
+				} else {
+					continue;
+				}
+
+				try {
+					const runeIconUrl = await generateRuneIcon({
+						originIconUrl,
+						originIconEmoji,
+						backgroundUrl,
+						size: 800
+					});
+					runeImages.push({
+						name: rune.name,
 					url: runeIconUrl,
 					type: 'rune',
 					filename: `runes/${sanitizeFileName(rune.name)}_icon.png`

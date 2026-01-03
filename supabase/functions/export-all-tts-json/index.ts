@@ -48,6 +48,21 @@ type MonsterRow = {
   quantity: number | null;
 };
 
+type TravelerRow = {
+  id: string;
+  name: string;
+  state: string | null;
+  order_num: number | null;
+  card_image_path: string | null;
+  traveler_subtext: string | null;
+  traveler_description: string | null;
+  trade_rows: unknown | null;
+  gain_rows: unknown | null;
+  trade_left_icon_ids: string[] | null;
+  trade_right_icon_ids: string[] | null;
+  quantity: number | null;
+};
+
 type EventRow = {
   id: string;
   name: string;
@@ -170,6 +185,26 @@ type SpecialCategoryRow = {
   slot_3_class_ids: string[] | null;
 };
 
+type GameLocationRow = {
+  id: string;
+  name: string;
+  origin_id: string | null;
+  reward_rows: unknown | null;
+  background_image_path: string | null;
+  image_with_icons_path: string | null;
+};
+
+type SpiritWorldMapConfigPathsRow = {
+  background_image_path: string | null;
+  generated_image_path: string | null;
+};
+
+type StorageObjectMetaRow = {
+  mimetype: string | null;
+  size: string | null;
+  updated_at: unknown;
+};
+
 const SCHEMA = "arc-spirits-rev2";
 const BUCKET = "game_assets";
 
@@ -181,6 +216,13 @@ const storageRenderBaseUrl = (req: Request) => {
   const host = new URL(req.url).host; // e.g., gvxfokbptelmvvlxbigh.functions.supabase.co
   const projectRef = host.split(".")[0];
   return `https://${projectRef}.supabase.co/storage/v1/render/image/public/${BUCKET}/`;
+};
+
+// Storage object base URL (direct file endpoint)
+const storageObjectBaseUrl = (req: Request) => {
+  const host = new URL(req.url).host; // e.g., gvxfokbptelmvvlxbigh.functions.supabase.co
+  const projectRef = host.split(".")[0];
+  return `https://${projectRef}.supabase.co/storage/v1/object/public/${BUCKET}/`;
 };
 
 const corsHeaders = {
@@ -227,7 +269,7 @@ serve(async (req) => {
     const editionOriginIds = edition.origin_ids ?? [];
     const costDuplicates = edition.cost_duplicates ?? {};
 
-    const [originsRes, classesRes, tagsRes, guardiansRes, monstersRes, eventsRes, spiritsRes, artifactsRes, runesRes, originsFullRes, callingOrbsRes, hexSpiritsBasicRes, customDiceRes, classesFullRes, diceSidesRes, tokensRes, specialCategoriesRes, allIconsRes, specialEffectsRes, monsterSpecialEffectsRes] = await Promise.all([
+    const [originsRes, classesRes, tagsRes, guardiansRes, monstersRes, travelersRes, eventsRes, gameLocationsRes, spiritsRes, artifactsRes, runesRes, originsFullRes, callingOrbsRes, hexSpiritsBasicRes, customDiceRes, classesFullRes, diceSidesRes, tokensRes, specialCategoriesRes, allIconsRes, specialEffectsRes, monsterSpecialEffectsRes] = await Promise.all([
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".origins`),
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".classes`),
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".artifact_tags`),
@@ -235,10 +277,16 @@ serve(async (req) => {
         `select id, name, origin_id, image_mat_path, chibi_image_path, icon_image_path from "${SCHEMA}".guardians`
       ),
       client.queryObject<MonsterRow>(
-        `select id, name, state, barrier, damage, order_num, card_image_path, reward_rows, special_conditions from "${SCHEMA}".monsters`
+        `select id, name, state, barrier, damage, order_num, card_image_path, reward_rows, special_conditions, quantity from "${SCHEMA}".monsters`
+      ),
+      client.queryObject<TravelerRow>(
+        `select id, name, state, order_num, card_image_path, traveler_subtext, traveler_description, trade_rows, gain_rows, trade_left_icon_ids, trade_right_icon_ids, quantity from "${SCHEMA}".travelers order by order_num`
       ),
       client.queryObject<EventRow>(
         `select id, name, title, description, order_num, card_image_path from "${SCHEMA}".events`
+      ),
+      client.queryObject<GameLocationRow>(
+        `select id, name, origin_id, reward_rows, background_image_path, image_with_icons_path from "${SCHEMA}".game_locations order by name`
       ),
       client.queryObject<SpiritRow>(`select id, name, cost, traits, game_print_image_path from "${SCHEMA}".hex_spirits`),
       client.queryObject<ArtifactRow>(`select id, name, recipe_box, guardian_id, tag_ids, card_image_path from "${SCHEMA}".artifacts`),
@@ -271,11 +319,134 @@ serve(async (req) => {
     const classMap = new Map(classesRes.rows.map((r) => [r.id, r.name]));
     const tagMap = new Map(tagsRes.rows.map((r) => [r.id, r.name]));
     const base = storageRenderBaseUrl(req);
+    const objectBase = storageObjectBaseUrl(req);
+    const resolveStorageImageUrl = (path: string | null): string | null =>
+      path ? `${base}${encodeURI(path)}?quality=80` : null;
+    const resolveStorageObjectUrl = (path: string | null, params?: Record<string, string>): string | null => {
+      if (!path) return null;
+      const url = new URL(`${objectBase}${encodeURI(path)}`);
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          url.searchParams.set(k, v);
+        }
+      }
+      return url.toString();
+    };
+
+    const toCacheBustParam = (value: unknown): string | null => {
+      if (!value) return null;
+      if (value instanceof Date) return String(value.getTime());
+      if (typeof value === "number" && Number.isFinite(value)) return String(Math.floor(value));
+      if (typeof value === "string") {
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? String(parsed) : null;
+      }
+      return null;
+    };
 
     // Build icon map for reward resolution (id -> { name, file_path })
     const iconMap = new Map(
       allIconsRes.rows.map((r) => [r.id, { name: r.name, file_path: r.file_path }])
     );
+
+    const resolveIcon = (iconId: string) => {
+      const iconData = iconMap.get(iconId);
+      return {
+        id: iconId,
+        name: iconData?.name ?? "Unknown",
+        image_url: resolveStorageImageUrl(iconData?.file_path ?? null),
+      };
+    };
+
+    // Spirit World board export
+    let spiritWorldBackgroundPath: string | null = null;
+    let spiritWorldGeneratedPath: string | null = null;
+
+    try {
+      const spiritWorldConfigRes = await client.queryObject<SpiritWorldMapConfigPathsRow>(
+        `select
+          config->>'background_image_path' as background_image_path,
+          config->>'generated_image_path' as generated_image_path
+        from "${SCHEMA}".spirit_world_map_configs
+        where name = 'default'`
+      );
+      spiritWorldBackgroundPath = spiritWorldConfigRes.rows[0]?.background_image_path ?? null;
+      spiritWorldGeneratedPath = spiritWorldConfigRes.rows[0]?.generated_image_path ?? null;
+    } catch (err) {
+      console.warn(
+        "Failed to load Spirit World map config; falling back to icon_pool SpiritWorld asset if present.",
+        err,
+      );
+    }
+
+    const spiritWorldIcon = allIconsRes.rows.find((i) =>
+      i.name === "SpiritWorld" ||
+      (Array.isArray(i.tags) && i.tags.includes("spirit_world"))
+    );
+
+    const spiritWorldBoardPath = spiritWorldGeneratedPath ?? spiritWorldIcon?.file_path ?? null;
+
+    let spiritWorldBoardFileType: string | null = null;
+    let spiritWorldBoardFileSize: string | null = null;
+    let spiritWorldBoardCacheBust: string | null = null;
+
+    if (spiritWorldBoardPath) {
+      try {
+        const metaRes = await client.queryObject<StorageObjectMetaRow>(
+          `select
+            metadata->>'mimetype' as mimetype,
+            metadata->>'size' as size,
+            updated_at
+          from storage.objects
+          where bucket_id = $1 and name = $2
+          limit 1`,
+          [BUCKET, spiritWorldBoardPath],
+        );
+        spiritWorldBoardFileType = metaRes.rows[0]?.mimetype ?? null;
+        spiritWorldBoardFileSize = metaRes.rows[0]?.size ?? null;
+        spiritWorldBoardCacheBust = toCacheBustParam(metaRes.rows[0]?.updated_at) ?? null;
+      } catch (err) {
+        console.warn("Failed to read Spirit World board storage metadata", err);
+      }
+    }
+
+    // Spirit World export PNG can be too large for the render/transform endpoint; use the direct object URL.
+    const spiritWorldBoardUrl = resolveStorageObjectUrl(
+      spiritWorldBoardPath,
+      spiritWorldBoardCacheBust ? { cb: spiritWorldBoardCacheBust } : undefined,
+    );
+
+    const boards = [
+      ...allIconsRes.rows
+        .filter((i) => Array.isArray(i.tags) && i.tags.includes("board"))
+        .map((i) => ({
+          id: i.id,
+          name: i.name,
+          file_type: i.metadata?.file_type ?? null,
+          file_size: i.metadata?.file_size != null ? String(i.metadata.file_size) : null,
+          image_url: resolveStorageObjectUrl(i.file_path),
+        }))
+        .filter((b) => b.image_url !== null && b.name !== "SpiritWorld"),
+      ...(spiritWorldBoardUrl
+        ? [
+            {
+              id: spiritWorldIcon?.id ?? "spirit-world",
+              name: "SpiritWorld",
+              file_type:
+                spiritWorldBoardFileType ??
+                (spiritWorldGeneratedPath
+                  ? "image/png"
+                  : spiritWorldIcon?.metadata?.file_type ?? null),
+              file_size:
+                spiritWorldBoardFileSize ??
+                (spiritWorldIcon?.metadata?.file_size != null
+                  ? String(spiritWorldIcon.metadata.file_size)
+                  : null),
+              image_url: spiritWorldBoardUrl,
+            },
+          ]
+        : []),
+    ].sort((a, b) => a.name.localeCompare(b.name));
 
     // Build monster -> effect IDs mapping (monster_id -> array of effect IDs)
     const monsterEffectsMap = new Map<string, string[]>();
@@ -305,16 +476,7 @@ serve(async (req) => {
     for (const m of monstersRes.rows) {
       const rows = m.reward_rows ?? [];
       const resolvedRows: ResolvedRewardRow[] = rows.map((row) => {
-        const icons = (row.icon_ids ?? []).map((iconId) => {
-          const iconData = iconMap.get(iconId);
-          return {
-            id: iconId,
-            name: iconData?.name ?? "Unknown",
-            image_url: iconData?.file_path
-              ? `${base}${encodeURI(iconData.file_path)}?quality=80`
-              : null,
-          };
-        });
+        const icons = (row.icon_ids ?? []).map(resolveIcon);
 
         return {
           type: row.type,
@@ -324,6 +486,92 @@ serve(async (req) => {
       });
       monsterRewardRowsMap.set(m.id, resolvedRows);
     }
+
+    type LocationRewardRow =
+      | { type: "gain"; gain_icon_ids: string[] }
+      | { type: "trade"; cost_icon_ids: string[]; gain_icon_ids: string[] };
+
+    const normalizeIconIds = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+
+    const normalizeIconGroups = (value: unknown, fallback?: string[]): string[][] => {
+      if (Array.isArray(value)) {
+        return value
+          .map((group) => normalizeIconIds(group))
+          .filter((group) => group.length > 0);
+      }
+      if (Array.isArray(fallback) && fallback.length > 0) {
+        return [normalizeIconIds(fallback)];
+      }
+      return [];
+    };
+
+    type TravelerTradeRowNormalized = { left_groups: string[][]; right_groups: string[][] };
+
+    const normalizeTravelerTradeRows = (
+      rows: unknown,
+      fallbackLeft: string[],
+      fallbackRight: string[]
+    ): TravelerTradeRowNormalized[] => {
+      if (!Array.isArray(rows)) {
+        const leftFallback = normalizeIconGroups(null, fallbackLeft);
+        const rightFallback = normalizeIconGroups(null, fallbackRight);
+        if (leftFallback.length === 0 && rightFallback.length === 0) return [];
+        return [{ left_groups: leftFallback, right_groups: rightFallback }];
+      }
+
+      return rows
+        .map((row): TravelerTradeRowNormalized | null => {
+          if (!row || typeof row !== "object") return null;
+          const left_groups = normalizeIconGroups((row as any).left_icon_groups, normalizeIconIds((row as any).left_icon_ids));
+          const right_groups = normalizeIconGroups((row as any).right_icon_groups, normalizeIconIds((row as any).right_icon_ids));
+          if (left_groups.length === 0 && right_groups.length === 0) return null;
+          return { left_groups, right_groups };
+        })
+        .filter((row): row is TravelerTradeRowNormalized => row !== null);
+    };
+
+    const normalizeTravelerGainRows = (rows: unknown): string[][][] => {
+      if (!Array.isArray(rows)) return [];
+      return rows
+        .map((row): string[][] | null => {
+          if (!row || typeof row !== "object") return null;
+          const groups = normalizeIconGroups((row as any).icon_groups, normalizeIconIds((row as any).icon_ids));
+          return groups.length > 0 ? groups : null;
+        })
+        .filter((row): row is string[][] => row !== null);
+    };
+
+    const normalizeLocationRewardRows = (rows: unknown): LocationRewardRow[] => {
+      if (!Array.isArray(rows)) return [];
+
+      return rows.map((row): LocationRewardRow => {
+        if (!row || typeof row !== "object") {
+          return { type: "gain", gain_icon_ids: [] };
+        }
+
+        // Legacy: { icon_ids: [...] }
+        if (Array.isArray((row as any).icon_ids)) {
+          return {
+            type: "gain",
+            gain_icon_ids: normalizeIconIds((row as any).icon_ids),
+          };
+        }
+
+        const type = (row as any).type === "trade" ? "trade" : "gain";
+        const gain_icon_ids = normalizeIconIds((row as any).gain_icon_ids);
+
+        if (type === "trade") {
+          return {
+            type: "trade",
+            cost_icon_ids: normalizeIconIds((row as any).cost_icon_ids),
+            gain_icon_ids,
+          };
+        }
+
+        return { type: "gain", gain_icon_ids };
+      });
+    };
 
     // Build map of class_id -> special category name
     const classToSpecialCategoryMap = new Map<string, string>();
@@ -554,6 +802,45 @@ serve(async (req) => {
       (a, b) => (a.order_num ?? 999) - (b.order_num ?? 999)
     );
 
+    // Map travelers with trade/gain rows resolved via icon_pool
+    const travelers = travelersRes.rows.flatMap((t) => {
+      const image_url = t.card_image_path
+        ? `${base}${encodeURI(t.card_image_path)}?quality=80`
+        : null;
+      const tradeRows = normalizeTravelerTradeRows(
+        t.trade_rows,
+        t.trade_left_icon_ids ?? [],
+        t.trade_right_icon_ids ?? []
+      );
+      const gainRows = normalizeTravelerGainRows(t.gain_rows);
+
+      const resolved_trade_rows = tradeRows.map((row) => ({
+        left_groups: row.left_groups.map((group) => group.map(resolveIcon)),
+        right_groups: row.right_groups.map((group) => group.map(resolveIcon)),
+      }));
+
+      const resolved_gain_rows = gainRows.map((groups) =>
+        groups.map((group) => group.map(resolveIcon))
+      );
+
+      const quantity = t.quantity ?? 1;
+      const baseOrderNum = t.order_num ?? 999;
+
+      return Array.from({ length: quantity }, (_, copyIndex) => ({
+        id: t.id,
+        name: t.name,
+        state: t.state,
+        order_num: baseOrderNum + copyIndex * 0.001,
+        image_url,
+        traveler_subtext: t.traveler_subtext,
+        traveler_description: t.traveler_description,
+        trade_rows: resolved_trade_rows,
+        gain_rows: resolved_gain_rows,
+        copy_index: copyIndex + 1,
+        total_copies: quantity,
+      }));
+    });
+
     // Map runes with origin/class names resolved
     const runes = runesRes.rows.map((r) => {
       const origin_name = r.origin_id ? originMap.get(r.origin_id) ?? null : null;
@@ -630,7 +917,10 @@ serve(async (req) => {
 
     // Map all icons from icon_pool
     const icon_pool = allIconsRes.rows.map((i) => {
-      const image_url = i.file_path ? `${base}${encodeURI(i.file_path)}?quality=80` : null;
+      const isSpiritWorld =
+        i.name === "SpiritWorld" ||
+        (Array.isArray(i.tags) && i.tags.includes("spirit_world"));
+      const image_url = isSpiritWorld ? spiritWorldBoardUrl : resolveStorageImageUrl(i.file_path);
       return {
         id: i.id,
         name: i.name,
@@ -646,13 +936,49 @@ serve(async (req) => {
       background_url: `${base}${encodeURI("tts_menu/background.png")}?quality=80`,
     };
 
+    // Map game locations with gain/trade reward rows resolved via icon_pool
+    const game_locations = gameLocationsRes.rows.map((l) => {
+      const origin_name = l.origin_id ? originMap.get(l.origin_id) ?? null : null;
+      const image_url = l.image_with_icons_path
+        ? `${base}${encodeURI(l.image_with_icons_path)}?quality=80`
+        : null;
+      const background_image_url = l.background_image_path
+        ? `${base}${encodeURI(l.background_image_path)}?quality=80`
+        : null;
+
+      const rewardRows = normalizeLocationRewardRows(l.reward_rows);
+      const reward_rows = rewardRows.map((row) => {
+        if (row.type === "trade") {
+          return {
+            type: "trade" as const,
+            cost_icons: (row.cost_icon_ids ?? []).map(resolveIcon),
+            gain_icons: (row.gain_icon_ids ?? []).map(resolveIcon),
+          };
+        }
+        return {
+          type: "gain" as const,
+          icons: (row.gain_icon_ids ?? []).map(resolveIcon),
+        };
+      });
+
+      return {
+        id: l.id,
+        name: l.name,
+        origin_id: l.origin_id,
+        origin_name,
+        image_url,
+        background_image_url,
+        reward_rows,
+      };
+    });
+
     // Schema documentation
     const schema_docs = `# Arc Spirits TTS Export Schema Documentation
 
 ## Overview
 
 This document describes the JSON schema for the Arc Spirits Tabletop Simulator (TTS) export format.
-All image URLs use Supabase Storage with \`?quality=80\` transformation parameter.
+Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large board images (e.g. SpiritWorld) use direct \`/storage/v1/object/public\` URLs.
 
 ---
 
@@ -668,6 +994,8 @@ All image URLs use Supabase Storage with \`?quality=80\` transformation paramete
 | \`hex_spirits\` | HexSpirit[] | Array of hex spirit cards (filtered by edition) |
 | \`artifacts\` | Artifact[] | Array of artifact cards |
 | \`monsters\` | Monster[] | Array of monster and event cards (combined, sorted by order_num) |
+| \`game_locations\` | GameLocation[] | Array of game locations |
+| \`travelers\` | Traveler[] | Array of traveler cards |
 | \`special_effects\` | SpecialEffect[] | Array of special effect definitions |
 | \`guardians\` | Guardian[] | Array of playable guardian characters |
 | \`runes\` | Rune[] | Array of rune tokens |
@@ -675,6 +1003,7 @@ All image URLs use Supabase Storage with \`?quality=80\` transformation paramete
 | \`icon_pool\` | IconPoolEntry[] | Complete icon pool with all icons (includes uploaded assets) |
 | \`custom_dice\` | CustomDice[] | Array of custom dice with face configurations |
 | \`tts_menu\` | TTSMenu | TTS menu configuration and assets |
+| \`boards\` | Board[] | Array of board images (includes SpiritWorld) |
 
 ---
 
@@ -802,6 +1131,8 @@ The monsters array contains both monster cards and event cards, distinguished by
 | \`image_url\` | string \\| null | Card image URL |
 | \`effect_ids\` | string[] | Array of special effect UUIDs (lookup via special_effects) |
 | \`reward_rows\` | RewardRow[] | Array of reward row configurations |
+| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
+| \`total_copies\` | number | Total copies when quantity > 1 |
 
 ### Event-specific fields (when type = "event")
 
@@ -833,6 +1164,58 @@ The monsters array contains both monster cards and event cards, distinguished by
 | \`id\` | string | Icon pool UUID |
 | \`name\` | string | Icon name |
 | \`image_url\` | string \\| null | Icon image URL |
+
+---
+
+## GameLocation
+
+Game locations include their resolved gain/trade rewards and the generated location image (with icons).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`name\` | string | Location name |
+| \`origin_id\` | string \\| null | Associated origin UUID |
+| \`origin_name\` | string \\| null | Resolved origin name |
+| \`image_url\` | string \\| null | Generated location image URL (with icons) |
+| \`background_image_url\` | string \\| null | Background image URL (without icons) |
+| \`reward_rows\` | LocationRewardRow[] | Array of reward rows (each gain or trade) |
+
+### LocationRewardRow
+
+- Gain row: \`{ type: "gain", icons: RewardIcon[] }\`
+- Trade row: \`{ type: "trade", cost_icons: RewardIcon[], gain_icons: RewardIcon[] }\`
+
+---
+
+## Traveler
+
+Traveler cards include resolved gain/trade icon groups, with \`/\` separators represented as grouped arrays.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`name\` | string | Traveler name |
+| \`state\` | string \\| null | Traveler state (tainted, corrupt, fallen, boss) |
+| \`order_num\` | number | Sort order (default: 999) |
+| \`image_url\` | string \\| null | Traveler card image URL |
+| \`traveler_subtext\` | string \\| null | Traveler subtext |
+| \`traveler_description\` | string \\| null | Traveler description |
+| \`trade_rows\` | TravelerTradeRow[] | Trade rows with left/right icon groups |
+| \`gain_rows\` | TravelerGainRow[] | Gain rows with icon groups |
+| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
+| \`total_copies\` | number | Total copies when quantity > 1 |
+
+### TravelerTradeRow
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`left_groups\` | RewardIcon[][] | Left icon groups (each group is an OR option) |
+| \`right_groups\` | RewardIcon[][] | Right icon groups (each group is an OR option) |
+
+### TravelerGainRow
+
+Each entry is an array of icon groups (\`RewardIcon[][]\`), where each group is an OR option.
 
 ---
 
@@ -944,6 +1327,18 @@ Complete icon pool entry with all metadata.
 
 ---
 
+## Board
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`name\` | string | Board name |
+| \`file_type\` | string \\| null | MIME type (when known) |
+| \`file_size\` | string \\| null | File size in bytes (when known) |
+| \`image_url\` | string | Board image URL |
+
+---
+
 ## Notes
 
 ### General
@@ -992,6 +1387,8 @@ Some database fields are not exported as they are internal/admin-only:
       hex_spirits,
       artifacts,
       monsters,
+      game_locations,
+      travelers,
       special_effects,
       guardians,
       runes,
@@ -999,6 +1396,7 @@ Some database fields are not exported as they are internal/admin-only:
       icon_pool,
       custom_dice,
       tts_menu,
+      boards,
     });
 
     const lastModified = new Date().toUTCString();

@@ -164,7 +164,7 @@
 		| { type: 'class'; data: ClassRow }
 		| { type: 'special'; data: SpecialCategoryRow };
 
-	const sortedGridItems = $derived<GridItem[]>(() => {
+	const sortedGridItems = $derived.by(() => {
 		const classItems: GridItem[] = regularClasses.map((c) => ({ type: 'class' as const, data: c }));
 		const specialItems: GridItem[] = specialCategories.map((s) => ({ type: 'special' as const, data: s }));
 		const combined = [...classItems, ...specialItems];
@@ -185,7 +185,7 @@
 {:else}
 	<section class="class-grid">
 		<!-- Combined grid items sorted by position -->
-		{#each sortedGridItems() as item (item.type === 'special' ? `special-${item.data.id}` : item.data.id)}
+		{#each sortedGridItems as item (item.type === 'special' ? `special-${item.data.id}` : item.data.id)}
 			{#if item.type === 'special'}
 				{@const category = item.data as SpecialCategoryRow}
 				<article class="special-category-card" style="border-left-color: {category.color ?? '#8b5cf6'}">
@@ -218,18 +218,26 @@
 											resolveDiceIdsInSchema(parseEffectSchema(cls.effect_schema))
 										)}
 										<div class="special-slot__class" style="border-left-color: {cls.color ?? '#8b5cf6'}">
-											<div class="special-slot__header">
-												<span class="special-slot__icon">{cls.icon_emoji ?? '🛡️'}</span>
-												<span class="special-slot__name">{cls.name}</span>
-												<button
-													type="button"
-													class="special-slot__edit-btn"
-													onclick={() => onEdit(cls)}
-													title="Edit {cls.name}"
-												>
-													✏️
-												</button>
-											</div>
+												<div class="special-slot__header">
+													<span class="special-slot__icon">{cls.icon_emoji ?? '🛡️'}</span>
+													<span class="special-slot__name">{cls.name}</span>
+													<button
+														type="button"
+														class="special-slot__edit-btn"
+														onclick={() => onEdit(cls)}
+														title="Edit {cls.name}"
+													>
+														✏️
+													</button>
+													<button
+														type="button"
+														class="special-slot__delete-btn"
+														onclick={() => onDelete(cls)}
+														title="Delete {cls.name}"
+													>
+														🗑️
+													</button>
+												</div>
 											{#if slotEffectSchema.length}
 												<div class="special-slot__breakpoints">
 													{#each slotEffectSchema as bp, bpIndex (`${classId}-bp-${bpIndex}`)}
@@ -697,10 +705,26 @@
 		transition: opacity 0.15s ease, background 0.15s ease;
 	}
 
-	.special-slot__edit-btn:hover {
-		opacity: 1;
-		background: rgba(59, 130, 246, 0.35);
-	}
+		.special-slot__edit-btn:hover {
+			opacity: 1;
+			background: rgba(59, 130, 246, 0.35);
+		}
+
+		.special-slot__delete-btn {
+			padding: 0.1rem 0.2rem;
+			font-size: 0.65rem;
+			background: rgba(248, 113, 113, 0.15);
+			border: 1px solid rgba(248, 113, 113, 0.25);
+			border-radius: 4px;
+			cursor: pointer;
+			opacity: 0.6;
+			transition: opacity 0.15s ease, background 0.15s ease;
+		}
+
+		.special-slot__delete-btn:hover {
+			opacity: 1;
+			background: rgba(248, 113, 113, 0.25);
+		}
 
 	.special-slot__breakpoints {
 		display: flex;

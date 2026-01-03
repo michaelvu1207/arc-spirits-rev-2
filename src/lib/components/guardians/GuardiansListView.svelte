@@ -66,7 +66,7 @@
 	totalCount={guardians.length}
 	onSelectAll={selectAll}
 	onDeselectAll={deselectAll}
-	onDelete={deleteSelected}
+	onDeleteSelected={deleteSelected}
 />
 
 <section class="list-view">

@@ -2,6 +2,78 @@
  * Shared canvas utility functions for image generation
  */
 
+// Track loaded fonts to avoid race conditions
+const loadedFonts = new Set<string>();
+let opsilonLoaded = false;
+let opsilonLoadPromise: Promise<void> | null = null;
+
+/**
+ * Loads a font and ensures it's ready for canvas rendering
+ * @param fontFamily - The font family name
+ * @param fontUrl - URL to the font file
+ * @param options - Font face options (weight, style, etc.)
+ */
+export async function loadFont(
+	fontFamily: string,
+	fontUrl: string,
+	options?: { weight?: string; style?: string }
+): Promise<void> {
+	const weight = options?.weight || 'normal';
+	const style = options?.style || 'normal';
+	const key = `${fontFamily}-${weight}-${style}`;
+
+	// Skip if already loaded by us
+	if (loadedFonts.has(key)) {
+		return;
+	}
+
+	const font = new FontFace(fontFamily, `url(${fontUrl})`, {
+		weight,
+		style
+	});
+
+	await font.load();
+	document.fonts.add(font);
+	loadedFonts.add(key);
+	await document.fonts.ready;
+}
+
+/**
+ * Loads the Opsilon font family with all needed weights
+ */
+export async function loadOpsilonFont(): Promise<void> {
+	// Return immediately if already loaded
+	if (opsilonLoaded) {
+		return;
+	}
+
+	// If currently loading, wait for that promise
+	if (opsilonLoadPromise) {
+		return opsilonLoadPromise;
+	}
+
+	// Start loading
+	opsilonLoadPromise = (async () => {
+		const regularUrl = '/fonts/Opsilon-Regular.ttf';
+		const italicUrl = '/fonts/Opsilon-Italic.ttf';
+
+		await Promise.all([
+			// Normal weights
+			loadFont('Opsilon', regularUrl, { weight: 'normal', style: 'normal' }),
+			loadFont('Opsilon', regularUrl, { weight: '400', style: 'normal' }),
+			loadFont('Opsilon', regularUrl, { weight: '600', style: 'normal' }),
+			loadFont('Opsilon', regularUrl, { weight: '700', style: 'normal' }),
+			// Italic
+			loadFont('Opsilon', italicUrl, { weight: 'normal', style: 'italic' }),
+			loadFont('Opsilon', italicUrl, { weight: '400', style: 'italic' })
+		]);
+
+		opsilonLoaded = true;
+	})();
+
+	return opsilonLoadPromise;
+}
+
 /**
  * Creates a canvas element with the specified dimensions
  */

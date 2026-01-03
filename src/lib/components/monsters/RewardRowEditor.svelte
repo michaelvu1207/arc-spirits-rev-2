@@ -16,11 +16,8 @@
 	let showIconPicker = $state(false);
 
 	const typeOptions = [
-		{ value: 'all_in_combat', label: 'All In Combat Gain' },
-		{ value: 'all_losers', label: 'All Losers Gain' },
-		{ value: 'all_winners', label: 'All Winners Gain' },
-		{ value: 'one_winner', label: 'One Winner Gains' },
-		{ value: 'tournament', label: 'Tournament' }
+		{ value: 'all_in_combat', label: 'On kill, all in combat gain' },
+		{ value: 'all_losers', label: 'All in monster combat gain' }
 	];
 
 	const config = $derived(REWARD_ROW_CONFIG[row.type]);
@@ -176,11 +173,24 @@
 		overflow: hidden;
 	}
 
-	.reward-row-editor__icon img {
-		width: 100%;
-		height: 100%;
-		object-fit: contain;
-	}
+		.reward-row-editor__icon img {
+			width: 100%;
+			height: 100%;
+			object-fit: contain;
+			filter:
+				drop-shadow(1px 0 0 #2b1a12)
+				drop-shadow(-1px 0 0 #2b1a12)
+				drop-shadow(0 1px 0 #2b1a12)
+				drop-shadow(0 -1px 0 #2b1a12)
+				drop-shadow(1px 1px 0 #2b1a12)
+				drop-shadow(-1px 1px 0 #2b1a12)
+				drop-shadow(1px -1px 0 #2b1a12)
+				drop-shadow(-1px -1px 0 #2b1a12)
+				drop-shadow(2px 0 0 #2b1a12)
+				drop-shadow(-2px 0 0 #2b1a12)
+				drop-shadow(0 2px 0 #2b1a12)
+				drop-shadow(0 -2px 0 #2b1a12);
+		}
 
 	.reward-row-editor__icon-placeholder {
 		display: flex;

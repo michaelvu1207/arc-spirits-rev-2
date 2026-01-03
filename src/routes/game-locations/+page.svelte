@@ -1,20 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { GameLocationRewardRow, GameLocationRow, OriginRow } from '$lib/types/gameData';
+	import type { GameLocationRewardRow, GameLocationRow, GameLocationRowCompositionRow, OriginRow } from '$lib/types/gameData';
+	import { fetchGameLocationRows } from '$lib/api/gameLocationRows';
 	import { getErrorMessage } from '$lib/utils';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
-	import { publicAssetUrl, sanitizeFilename } from '$lib/utils/storage';
-	import JSZip from 'jszip';
+	import { publicAssetUrl } from '$lib/utils/storage';
 	import { PageLayout, Modal, type Tab } from '$lib/components/layout';
 	import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
-	import { LocationIconPlacementConfigurator, LocationRewardRowsEditor } from '$lib/components/game-locations';
+	import { LocationPlacerModal, LocationRewardRowsEditor } from '$lib/components/game-locations';
 	import { Button, FormField, Input, Select } from '$lib/components/ui';
-	import {
-		generateLocationWithIcons,
-		loadLocationIconPlacementConfig,
-		type LocationRewardRowIcons
-	} from '$lib/generators/locations/locationIconPlacer';
 
 	const tabs: Tab[] = [{ id: 'locations', label: 'Locations', icon: '📍' }];
 	let activeTab = $state('locations');
@@ -39,7 +34,7 @@
 	let formData = $state({
 		name: '',
 		origin_id: null as string | null,
-		reward_rows: [] as GameLocationRewardRow[],
+		reward_rows: normalizeRewardRows([]),
 		background_image_path: null as string | null
 	});
 
@@ -48,21 +43,11 @@
 	let deleteTarget = $state<Location | null>(null);
 
 	let iconPlacerOpen = $state(false);
-	let generatingWithIcons = $state(false);
-	let generatingProgress = $state({ processed: 0, total: 0, current: '' });
+	let locationRows = $state<GameLocationRowCompositionRow[]>([]);
+	let locationRowsLoading = $state(false);
+	let locationRowsError = $state<string | null>(null);
 
 	const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
-	const sampleLocations = $derived.by(() =>
-		locations
-			.filter((l) => !!l.background_image_path)
-			.map((l) => ({
-				id: l.id,
-				name: l.name,
-				backgroundUrl: publicAssetUrl(l.background_image_path, { updatedAt: l.updated_at ?? undefined })
-			}))
-	);
-
-	const gameAssetsStorage = supabase.storage.from('game_assets');
 
 	const filteredLocations = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
@@ -96,40 +81,39 @@
 
 	function normalizeRewardRows(rows: any): GameLocationRewardRow[] {
 		if (!Array.isArray(rows)) return [];
-		return rows
-			.map((row) => {
-				if (!row || typeof row !== 'object') {
-					return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
-				}
+		return rows.map((row) => {
+			if (!row || typeof row !== 'object') {
+				return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
+			}
 
-				// Back-compat for earlier shape: { icon_ids: [...] }
-				if (Array.isArray((row as any).icon_ids)) {
-					return {
-						type: 'gain',
-						gain_icon_ids: (row as any).icon_ids.filter((id: any) => typeof id === 'string')
-					} satisfies GameLocationRewardRow;
-				}
+			// Back-compat for earlier shape: { icon_ids: [...] }
+			if (Array.isArray((row as any).icon_ids)) {
+				return {
+					type: 'gain',
+					gain_icon_ids: (row as any).icon_ids.filter((id: any) => typeof id === 'string')
+				} satisfies GameLocationRewardRow;
+			}
 
-				const type = (row as any).type === 'trade' ? 'trade' : 'gain';
+			const type = (row as any).type === 'trade' ? 'trade' : 'gain';
 
-				const gain_icon_ids = Array.isArray((row as any).gain_icon_ids)
-					? (row as any).gain_icon_ids.filter((id: any) => typeof id === 'string')
+			const gain_icon_ids = Array.isArray((row as any).gain_icon_ids)
+				? (row as any).gain_icon_ids.filter((id: any) => typeof id === 'string')
+				: [];
+
+			if (type === 'trade') {
+				const cost_icon_ids = Array.isArray((row as any).cost_icon_ids)
+					? (row as any).cost_icon_ids.filter((id: any) => typeof id === 'string')
 					: [];
 
-				if (type === 'trade') {
-					const cost_icon_ids = Array.isArray((row as any).cost_icon_ids)
-						? (row as any).cost_icon_ids.filter((id: any) => typeof id === 'string')
-						: [];
+				return {
+					type: 'trade',
+					cost_icon_ids,
+					gain_icon_ids
+				} satisfies GameLocationRewardRow;
+			}
 
-					return {
-						type: 'trade',
-						cost_icon_ids,
-						gain_icon_ids
-					} satisfies GameLocationRewardRow;
-				}
-
-				return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
-			});
+			return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
+		});
 	}
 
 	async function loadLocations() {
@@ -143,7 +127,7 @@
 	}
 
 	function resetForm() {
-		formData = { name: '', origin_id: null, reward_rows: [], background_image_path: null };
+		formData = { name: '', origin_id: null, reward_rows: normalizeRewardRows([]), background_image_path: null };
 		formError = null;
 		nameError = null;
 	}
@@ -151,6 +135,9 @@
 	function openCreate() {
 		editingLocation = null;
 		resetForm();
+		locationRows = [];
+		locationRowsError = null;
+		locationRowsLoading = false;
 		showForm = true;
 	}
 
@@ -162,9 +149,26 @@
 			reward_rows: normalizeRewardRows(location.reward_rows),
 			background_image_path: location.background_image_path
 		};
+		locationRows = [];
+		locationRowsError = null;
+		locationRowsLoading = false;
+		void loadLocationRows(location.id);
 		formError = null;
 		nameError = null;
 		showForm = true;
+	}
+
+	async function loadLocationRows(locationId: string) {
+		locationRowsLoading = true;
+		locationRowsError = null;
+		try {
+			locationRows = await fetchGameLocationRows(locationId);
+		} catch (err) {
+			locationRows = [];
+			locationRowsError = getErrorMessage(err);
+		} finally {
+			locationRowsLoading = false;
+		}
 	}
 
 	async function saveLocation() {
@@ -206,101 +210,11 @@
 		}
 	}
 
-	function normalizeIconUrls(iconIds: string[]): string[] {
-		return iconIds.map((id) => getIconPoolUrl(id)).filter((u): u is string => !!u);
-	}
-
-	function locationToRewardRowIcons(location: Location): LocationRewardRowIcons[] {
-		return (location.reward_rows ?? []).map((row) => {
-			if (row.type === 'trade') {
-				return {
-					type: 'trade',
-					costIconUrls: normalizeIconUrls(row.cost_icon_ids ?? []),
-					gainIconUrls: normalizeIconUrls(row.gain_icon_ids ?? [])
-				};
-			}
-			return {
-				type: 'gain',
-				gainIconUrls: normalizeIconUrls(row.gain_icon_ids ?? [])
-			};
-		});
-	}
-
-	async function generateAllLocationImagesWithIcons() {
-		const locationsWithBackground = locations.filter((l) => !!l.background_image_path);
-		if (locationsWithBackground.length === 0) {
-			alert('No locations with background images found.');
-			return;
+	function hasRewardIcons(row: GameLocationRewardRow): boolean {
+		if (row.type === 'trade') {
+			return (row.cost_icon_ids?.length ?? 0) > 0 || (row.gain_icon_ids?.length ?? 0) > 0;
 		}
-
-		generatingWithIcons = true;
-		generatingProgress = { processed: 0, total: locationsWithBackground.length, current: '' };
-
-		const config = loadLocationIconPlacementConfig();
-		const zip = new JSZip();
-		const errors: string[] = [];
-
-		for (const location of locationsWithBackground) {
-			generatingProgress.current = location.name;
-
-			try {
-				const backgroundUrl = publicAssetUrl(location.background_image_path, {
-					updatedAt: location.updated_at ?? undefined
-				});
-				if (!backgroundUrl) throw new Error('No background image URL available.');
-
-				const rewardRows = locationToRewardRowIcons(location);
-				const resultBlob = await generateLocationWithIcons({ backgroundUrl, rewardRows, config });
-
-				const storagePath = `game_locations/${location.id}/location_with_icons.png`;
-				const { error: uploadError } = await gameAssetsStorage.upload(storagePath, resultBlob, {
-					contentType: 'image/png',
-					upsert: true
-				});
-				if (uploadError) throw uploadError;
-
-				const { error: updateError } = await supabase
-					.from('game_locations')
-					.update({ image_with_icons_path: storagePath, updated_at: new Date().toISOString() })
-					.eq('id', location.id);
-				if (updateError) throw updateError;
-
-				const safeSlug = sanitizeFilename(location.name) || 'location';
-				const fileName = `${location.id}_${safeSlug}_with_icons.png`;
-				zip.file(fileName, await resultBlob.arrayBuffer());
-			} catch (err) {
-				errors.push(`${location.name}: ${getErrorMessage(err)}`);
-			}
-
-			generatingProgress.processed += 1;
-		}
-
-		await loadLocations();
-
-		try {
-			const blob = await zip.generateAsync({ type: 'blob' });
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement('a');
-			anchor.href = url;
-			anchor.download = `locations_with_icons_${new Date().toISOString().slice(0, 10)}.zip`;
-			anchor.click();
-			URL.revokeObjectURL(url);
-
-			if (errors.length > 0) {
-				alert(
-					`Generated ${locationsWithBackground.length - errors.length} location image(s) with ${errors.length} error(s).\n` +
-						errors.slice(0, 5).join('\n')
-				);
-			} else {
-				alert(`Successfully generated ${locationsWithBackground.length} location image(s) with icons!`);
-			}
-		} catch (err) {
-			console.error(err);
-			alert('Failed to create ZIP file.');
-		} finally {
-			generatingWithIcons = false;
-			iconPlacerOpen = false;
-		}
+		return (row.gain_icon_ids?.length ?? 0) > 0;
 	}
 
 	function requestDelete(location: Location) {
@@ -334,29 +248,20 @@
 >
 	{#snippet headerActions()}
 		<Button variant="primary" onclick={openCreate}>+ Location</Button>
-		<Button
-			variant="secondary"
-			onclick={() => (iconPlacerOpen = true)}
-			disabled={sampleLocations.length === 0}
-		>
-			Icon Placer
-		</Button>
-	{/snippet}
+			<Button
+				variant="secondary"
+				onclick={() => (iconPlacerOpen = true)}
+				disabled={locations.length === 0}
+			>
+				Icon Placer
+			</Button>
+		{/snippet}
 	{#snippet children()}
 		{#if error}
 			<div class="banner banner--error">{error}</div>
 		{/if}
 
-		{#if generatingWithIcons}
-			<div class="banner">
-				Generating {generatingProgress.processed}/{generatingProgress.total}
-				{#if generatingProgress.current}
-					· {generatingProgress.current}
-				{/if}
-			</div>
-		{/if}
-
-		<FilterBar
+			<FilterBar
 			bind:searchValue={searchQuery}
 			searchPlaceholder="Search locations…"
 			filters={[
@@ -382,6 +287,7 @@
 					{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
 						updatedAt: item.updated_at ?? undefined
 					})}
+					{@const displayRows = (item.reward_rows ?? []).filter(hasRewardIcons)}
 					<div class="location-card">
 						{#if previewUrl}
 							<div class="location-card__preview">
@@ -411,13 +317,13 @@
 						</header>
 
 							<div class="location-card__rewards">
-								{#if (item.reward_rows ?? []).length === 0}
-									<p class="location-card__empty-rewards">No reward rows</p>
+								{#if displayRows.length === 0}
+									<p class="location-card__empty-rewards">No rewards set</p>
 								{:else}
-									{#each item.reward_rows as row, idx (idx)}
+									{#each displayRows as row, idx (idx)}
 										<div class="reward-row" class:reward-row--trade={row.type === 'trade'}>
 											<span class="reward-row__label">
-												Row {idx + 1} · {row.type === 'trade' ? 'Trade' : 'Gain'}
+												{row.type === 'trade' ? 'Trade' : 'Gain Reward'}
 											</span>
 
 											{#if row.type === 'trade'}
@@ -647,7 +553,7 @@
 
 	.image-uploads {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 1rem;
 		padding: 0.75rem;
 		border-radius: 12px;
@@ -682,6 +588,49 @@
 		height: auto;
 	}
 
+	.generated-rows {
+		display: grid;
+		gap: 0.6rem;
+		max-height: 320px;
+		overflow: auto;
+		padding-right: 0.2rem;
+	}
+
+	.generated-row {
+		display: grid;
+		gap: 0.35rem;
+		padding: 0.5rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(2, 6, 23, 0.35);
+	}
+
+	.generated-row__label {
+		font-size: 0.7rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: rgba(148, 163, 184, 0.9);
+	}
+
+	.generated-row img {
+		display: block;
+		width: 100%;
+		height: auto;
+		border-radius: 8px;
+	}
+
+	.generated-row__missing {
+		display: grid;
+		place-items: center;
+		min-height: 120px;
+		border-radius: 8px;
+		border: 1px dashed rgba(148, 163, 184, 0.25);
+		color: #94a3b8;
+		background: rgba(2, 6, 23, 0.2);
+		font-size: 0.8rem;
+	}
+
 	.generated-placeholder {
 		display: grid;
 		place-items: center;
@@ -696,6 +645,12 @@
 		margin: 0.25rem 0 0;
 		font-size: 0.8rem;
 		color: rgba(148, 163, 184, 0.75);
+	}
+
+	@media (max-width: 1200px) {
+		.image-uploads {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
 	}
 
 	@media (max-width: 860px) {
@@ -749,7 +704,41 @@
 					/>
 				</div>
 				<div class="image-upload-section">
-					<div class="upload-label">Generated (With Icons)</div>
+					<div class="upload-label">Generated Rows</div>
+					{#if locationRowsLoading}
+						<div class="generated-placeholder">
+							<span>Loading rows…</span>
+						</div>
+					{:else if locationRows.length === 0}
+						<div class="generated-placeholder">
+							<span>Not yet generated</span>
+							<p class="image-note">Render rows in Icon Placer.</p>
+						</div>
+					{:else}
+						<div class="generated-rows">
+							{#each locationRows as row (row.id)}
+								{@const rowUrl = row.row_image_path
+									? publicAssetUrl(row.row_image_path, { updatedAt: row.updated_at ?? undefined })
+									: null}
+								<div class="generated-row">
+									<div class="generated-row__label">{row.type} row {row.row_index + 1}</div>
+									{#if rowUrl}
+										<img src={rowUrl} alt={`Generated ${row.type} row ${row.row_index + 1}`} loading="lazy" />
+									{:else}
+										<div class="generated-row__missing">Not yet generated</div>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+					{#if locationRowsError}
+						<p class="image-note">Failed to load rows: {locationRowsError}</p>
+					{:else if locationRows.length > 0}
+						<p class="image-note">Generated by Icon Placer</p>
+					{/if}
+				</div>
+				<div class="image-upload-section">
+					<div class="upload-label">Generated Location</div>
 					{#if editingLocation.image_with_icons_path}
 						{@const generatedUrl = publicAssetUrl(editingLocation.image_with_icons_path, {
 							updatedAt: editingLocation.updated_at ?? undefined
@@ -791,10 +780,9 @@
 	oncancel={() => (deleteTarget = null)}
 />
 
-<LocationIconPlacementConfigurator
-	isOpen={iconPlacerOpen}
-	sampleLocations={sampleLocations}
-	onClose={() => (iconPlacerOpen = false)}
-	onSave={() => alert('Configuration saved!')}
-	onGenerateAll={generateAllLocationImagesWithIcons}
-/>
+	<LocationPlacerModal
+		bind:isOpen={iconPlacerOpen}
+		locations={locations}
+		onClose={() => (iconPlacerOpen = false)}
+		onUpdated={loadLocations}
+	/>

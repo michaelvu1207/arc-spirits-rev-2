@@ -25,6 +25,13 @@
 		iconPoolLoaded = true;
 	});
 
+	function maxFor(row: GameLocationRewardRow, list: 'gain' | 'cost'): number {
+		if (row.type === 'trade') {
+			return list === 'cost' ? 2 : 3;
+		}
+		return 4;
+	}
+
 	function addGainRow() {
 		rewardRows = [...rewardRows, { type: 'gain', gain_icon_ids: [] }];
 		onchange?.(rewardRows);
@@ -61,13 +68,13 @@
 
 	function setGainIcons(index: number, iconIds: string[]) {
 		const row = rewardRows[index];
-		updateRow(index, { ...row, gain_icon_ids: iconIds } as GameLocationRewardRow);
+		updateRow(index, { ...row, gain_icon_ids: iconIds.slice(0, maxFor(row, 'gain')) } as GameLocationRewardRow);
 	}
 
 	function setCostIcons(index: number, iconIds: string[]) {
 		const row = rewardRows[index];
 		if (row.type !== 'trade') return;
-		updateRow(index, { ...row, cost_icon_ids: iconIds });
+		updateRow(index, { ...row, cost_icon_ids: iconIds.slice(0, maxFor(row, 'cost')) });
 	}
 
 	function removeGainIconAt(index: number, iconIndex: number) {
@@ -186,7 +193,7 @@
 											</button>
 										</div>
 									{/each}
-									{#if row.gain_icon_ids.length < maxIconsPerList}
+									{#if row.gain_icon_ids.length < maxFor(row, 'gain')}
 										<button
 											type="button"
 											class="location-reward-rows__add-more"
@@ -229,7 +236,7 @@
 												</button>
 											</div>
 										{/each}
-										{#if row.cost_icon_ids.length < maxIconsPerList}
+										{#if row.cost_icon_ids.length < maxFor(row, 'cost')}
 											<button
 												type="button"
 												class="location-reward-rows__add-more"
@@ -273,7 +280,7 @@
 												</button>
 											</div>
 										{/each}
-										{#if row.gain_icon_ids.length < maxIconsPerList}
+										{#if row.gain_icon_ids.length < maxFor(row, 'gain')}
 											<button
 												type="button"
 												class="location-reward-rows__add-more"
@@ -289,12 +296,13 @@
 					{/if}
 
 					{#if picking?.rowIndex === index}
+						{@const activePicking = picking as NonNullable<typeof picking>}
 						<div class="location-reward-rows__picker">
 							<IconPicker
-								selected={picking.list === 'cost' && row.type === 'trade' ? row.cost_icon_ids : row.gain_icon_ids}
-								onselect={(ids) => (picking.list === 'cost' ? setCostIcons(index, ids) : setGainIcons(index, ids))}
+								selected={activePicking.list === 'cost' && row.type === 'trade' ? row.cost_icon_ids : row.gain_icon_ids}
+								onselect={(ids) => (activePicking.list === 'cost' ? setCostIcons(index, ids) : setGainIcons(index, ids))}
 								multiple={true}
-								maxSelection={maxIconsPerList}
+								maxSelection={maxFor(row, activePicking.list)}
 								allowDuplicates={true}
 							/>
 							<Button variant="secondary" onclick={() => (picking = null)}>Done</Button>

@@ -143,6 +143,24 @@
 				{ name: 'state', type: 'text' },
 				{ name: 'invade_location_id', type: 'uuid', fk: 'game_locations' },
 				{ name: 'reward_icons', type: 'uuid[]', note: '→ icon_pool' },
+				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
+				{ name: 'trade_rows', type: 'jsonb', note: '→ icon_pool' },
+				{ name: 'gain_rows', type: 'jsonb', note: '→ icon_pool' }
+			]
+		},
+		{
+			id: 'travelers',
+			name: 'travelers',
+			color: '#f59e0b',
+			category: 'Combat',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'name', type: 'text' },
+				{ name: 'barrier', type: 'integer' },
+				{ name: 'damage', type: 'integer' },
+				{ name: 'state', type: 'text' },
+				{ name: 'invade_location_id', type: 'uuid', fk: 'game_locations' },
+				{ name: 'reward_icons', type: 'uuid[]', note: '→ icon_pool' },
 				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' }
 			]
 		},
@@ -167,6 +185,18 @@
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'monster_id', type: 'uuid', fk: 'monsters' },
+				{ name: 'special_effect_id', type: 'uuid', fk: 'special_effects' },
+				{ name: 'position', type: 'integer' }
+			]
+		},
+		{
+			id: 'traveler_special_effects',
+			name: 'traveler_special_effects',
+			color: '#a855f7',
+			category: 'Combat',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'traveler_id', type: 'uuid', fk: 'travelers' },
 				{ name: 'special_effect_id', type: 'uuid', fk: 'special_effects' },
 				{ name: 'position', type: 'integer' }
 			]
@@ -350,8 +380,11 @@
 		{ source: 'artifacts', target: 'artifact_templates', type: 'fk', label: 'template_id' },
 		{ source: 'dice_sides', target: 'custom_dice', type: 'fk', label: 'dice_id' },
 		{ source: 'monsters', target: 'game_locations', type: 'fk', label: 'invade_location_id' },
+		{ source: 'travelers', target: 'game_locations', type: 'fk', label: 'invade_location_id' },
 		{ source: 'monster_special_effects', target: 'monsters', type: 'fk', label: 'monster_id' },
 		{ source: 'monster_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
+		{ source: 'traveler_special_effects', target: 'travelers', type: 'fk', label: 'traveler_id' },
+		{ source: 'traveler_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
 		{ source: 'scenario_cards', target: 'abyss_scenarios', type: 'fk', label: 'scenario_id' },
 		{ source: 'calling_orb_images', target: 'origins', type: 'fk', label: 'origin_id' },
 
@@ -363,6 +396,8 @@
 		{ source: 'artifacts', target: 'artifact_tags', type: 'array', label: 'tag_ids' },
 		{ source: 'monsters', target: 'icon_pool', type: 'array', label: 'reward_icons' },
 		{ source: 'monsters', target: 'icon_pool', type: 'json', label: 'reward_rows' },
+		{ source: 'travelers', target: 'icon_pool', type: 'array', label: 'reward_icons' },
+		{ source: 'travelers', target: 'icon_pool', type: 'json', label: 'reward_rows' },
 		{ source: 'game_locations', target: 'icon_pool', type: 'json', label: 'reward_rows' },
 		{ source: 'editions', target: 'origins', type: 'array', label: 'origin_ids' },
 		{ source: 'special_categories', target: 'classes', type: 'array', label: 'slot_*_class_ids' },

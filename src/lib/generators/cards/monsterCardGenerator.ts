@@ -1,6 +1,5 @@
-import type { MonsterRow, RewardRow, RewardRowType, SpecialEffectRow } from '$lib/types/gameData';
-import { REWARD_ROW_CONFIG } from '$lib/types/gameData';
-import { createCanvas, getContext, loadImage, canvasToBlob, roundRect, wrapText, computeTrimRect } from '../shared/canvas';
+import type { MonsterRow, RewardRow, SpecialEffectRow } from '$lib/types/gameData';
+import { canvasToBlob, createCanvas, getContext, loadImage, loadOpsilonFont, roundRect, wrapText } from '../shared/canvas';
 
 /**
  * Strip HTML tags and decode HTML entities for plain text rendering
@@ -28,6 +27,124 @@ type ResolvedRewardRow = RewardRow & {
 	icon_urls: (string | null)[];
 };
 
+const MONSTER_CARD_WIDTH = 600;
+const MONSTER_CARD_HEIGHT = 437;
+const EXPORT_SCALE = 2;
+const LEFT_PANEL_WIDTH = Math.round(MONSTER_CARD_WIDTH * 0.6); // 1.2fr of 2.0fr
+const RIGHT_PANEL_WIDTH = MONSTER_CARD_WIDTH - LEFT_PANEL_WIDTH;
+
+const MAIN_PADDING = 20;
+const CONTENT_GAP = 10;
+
+function drawImageCover(
+	ctx: CanvasRenderingContext2D,
+	img: HTMLImageElement,
+	x: number,
+	y: number,
+	w: number,
+	h: number
+) {
+	const naturalW = img.naturalWidth || img.width || w;
+	const naturalH = img.naturalHeight || img.height || h;
+	const safeW = naturalW > 0 ? naturalW : w;
+	const safeH = naturalH > 0 ? naturalH : h;
+	const scale = Math.max(w / safeW, h / safeH);
+	const drawW = safeW * scale;
+	const drawH = safeH * scale;
+	const drawX = x + (w - drawW) / 2;
+	const drawY = y + (h - drawH) / 2;
+	ctx.drawImage(img, drawX, drawY, drawW, drawH);
+}
+
+function drawImageContain(
+	ctx: CanvasRenderingContext2D,
+	img: HTMLImageElement,
+	x: number,
+	y: number,
+	w: number,
+	h: number
+) {
+	const naturalW = img.naturalWidth || img.width || w;
+	const naturalH = img.naturalHeight || img.height || h;
+	const safeW = naturalW > 0 ? naturalW : w;
+	const safeH = naturalH > 0 ? naturalH : h;
+	const scale = Math.min(w / safeW, h / safeH);
+	const drawW = safeW * scale;
+	const drawH = safeH * scale;
+	const drawX = x + (w - drawW) / 2;
+	const drawY = y + (h - drawH) / 2;
+	ctx.drawImage(img, drawX, drawY, drawW, drawH);
+}
+
+function drawVeinOverlay(ctx: CanvasRenderingContext2D, width: number, height: number) {
+	const patternCanvas = document.createElement('canvas');
+	patternCanvas.width = 100;
+	patternCanvas.height = 100;
+	const pctx = patternCanvas.getContext('2d');
+	if (!pctx) return;
+
+	pctx.clearRect(0, 0, 100, 100);
+	pctx.lineCap = 'round';
+
+	pctx.strokeStyle = 'rgba(69, 10, 10, 0.3)';
+	pctx.lineWidth = 1;
+	pctx.beginPath();
+	pctx.moveTo(10, 50);
+	pctx.quadraticCurveTo(30, 20, 50, 50);
+	pctx.quadraticCurveTo(70, 80, 90, 50);
+	pctx.stroke();
+
+	pctx.strokeStyle = 'rgba(69, 10, 10, 0.2)';
+	pctx.lineWidth = 0.75;
+	pctx.beginPath();
+	pctx.moveTo(20, 30);
+	pctx.quadraticCurveTo(40, 60, 60, 30);
+	pctx.quadraticCurveTo(80, 0, 100, 30);
+	pctx.stroke();
+
+	const pattern = ctx.createPattern(patternCanvas, 'repeat');
+	if (!pattern) return;
+
+	ctx.save();
+	ctx.globalAlpha = 0.8;
+	ctx.fillStyle = pattern;
+	ctx.fillRect(0, 0, width, height);
+	ctx.restore();
+}
+
+function drawSlashMarks(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+	ctx.save();
+	ctx.globalAlpha = 1;
+	ctx.beginPath();
+	ctx.rect(x, y, w, h);
+	ctx.clip();
+
+	ctx.translate(x + w / 2, y + h / 2);
+	ctx.rotate((-45 * Math.PI) / 180);
+	ctx.translate(-(x + w / 2), -(y + h / 2));
+
+	ctx.fillStyle = 'rgba(220, 38, 38, 0.2)';
+	const stripeW = 2;
+	const period = 10;
+	const long = Math.max(w, h) * 3;
+	for (let i = -long; i < long; i += period) {
+		ctx.fillRect(x + i, y - long, stripeW, h + long * 2);
+	}
+
+	ctx.restore();
+}
+
+function computeRewardSectionHeight(iconCount: number, availableWidth: number): { height: number; rows: number; perRow: number } {
+	const iconSize = 36;
+	const gap = 6;
+	const labelLineHeight = 13;
+	const perRow = Math.max(1, Math.floor((availableWidth + gap) / (iconSize + gap)));
+	const rows = Math.max(1, Math.ceil(iconCount / perRow));
+	const iconsHeight = rows * iconSize + Math.max(0, rows - 1) * gap;
+	const height = labelLineHeight + gap + iconsHeight;
+	return { height, rows, perRow };
+}
+
 export async function generateMonsterCardPNG(
 	monster: MonsterRow & { effects?: SpecialEffectRow[] },
 	artUrl?: string | null,
@@ -38,346 +155,418 @@ export async function generateMonsterCardPNG(
 		throw new Error('Monster missing ID or name');
 	}
 
-	// Target output size 600x400 with 1:1 split (300 data, 300 art)
-	const width = 600;
-	const height = 400;
-	const dataWidth = 300;
-	const artWidth = width - dataWidth;
+	await loadOpsilonFont();
 
 	// Create canvas
-	const canvas = createCanvas(width, height);
+	const canvas = createCanvas(MONSTER_CARD_WIDTH * EXPORT_SCALE, MONSTER_CARD_HEIGHT * EXPORT_SCALE);
 	const ctx = getContext(canvas);
+	ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
+	ctx.imageSmoothingEnabled = true;
+	try {
+		ctx.imageSmoothingQuality = 'high';
+	} catch {
+		// ignore
+	}
 
 	const stateColors: Record<string, string> = {
-		tainted: '#c084fc', // light purple
-		corrupt: '#6b21a8', // dark purple
-		fallen: '#065f46', // dark green
-		boss: '#ef4444' // red
+		tainted: '#dc2626',
+		corrupt: '#991b1b',
+		fallen: '#7f1d1d',
+		boss: '#450a0a'
 	};
 
-	const accentColor = '#a855f7';
-	const cardBgColor = '#0c0b13';
-	const textColor = '#f5f3ff';
-	const secondaryTextColor = '#d8b4fe';
+	const stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
 
-	// Draw card background with rounded corners
-	ctx.fillStyle = cardBgColor;
-	roundRect(ctx, 0, 0, width, height, 12);
-	ctx.fill();
+	ctx.save();
+	roundRect(ctx, 0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT, 4);
+	ctx.clip();
 
-	// Accent border on the left
-	ctx.fillStyle = accentColor;
-	ctx.fillRect(0, 0, 6, height);
+	// Base background gradient
+	const cardGrad = ctx.createLinearGradient(0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT);
+	cardGrad.addColorStop(0, '#1a0505');
+	cardGrad.addColorStop(0.5, '#430d4a');
+	cardGrad.addColorStop(1, '#0d0202');
+	ctx.fillStyle = cardGrad;
+	ctx.fillRect(0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT);
 
-	// Divider between data and art
-	ctx.fillStyle = 'rgba(168, 85, 247, 0.25)';
-	ctx.fillRect(dataWidth - 1, 12, 2, height - 24);
+	drawVeinOverlay(ctx, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT);
 
-	// Art panel background
-	ctx.fillStyle = 'rgba(12, 10, 19, 0.9)';
-	roundRect(ctx, dataWidth, 12, artWidth - 12, height - 24, 10);
-	ctx.fill();
+	// Art panel (right)
+	const artX = LEFT_PANEL_WIDTH;
+	const artY = 0;
+	const artW = RIGHT_PANEL_WIDTH;
+	const artH = MONSTER_CARD_HEIGHT;
 
-	// Render art (cover)
 	if (artUrl) {
 		try {
 			const artImg = await loadImage(artUrl);
-			ctx.filter = 'grayscale(100%)';
-
-			const destX = dataWidth + 8;
-			const destY = 20;
-			const destW = artWidth - 16;
-			const destH = height - 40;
-
-			// Fill by height
-			const ratio = destH / artImg.height;
-			const drawW = artImg.width * ratio;
-			const drawH = destH;
-			const drawX = destX + (destW - drawW) / 2;
-			const drawY = destY;
-
 			ctx.save();
-			roundRect(ctx, destX, destY, destW, destH, 10);
-			ctx.clip();
-			ctx.drawImage(artImg, drawX, drawY, drawW, drawH);
+			ctx.filter = 'saturate(80%) contrast(120%) brightness(90%)';
+			drawImageCover(ctx, artImg, artX, artY, artW, artH);
 			ctx.restore();
-			ctx.filter = 'none';
 		} catch (err) {
 			console.warn('Failed to load monster art:', err);
-			ctx.filter = 'none';
 		}
 	} else {
-		ctx.fillStyle = 'rgba(100, 116, 139, 0.15)';
-		ctx.fillRect(dataWidth + 8, 20, artWidth - 16, height - 40);
-		ctx.fillStyle = secondaryTextColor;
-		ctx.font = '600 18px system-ui';
-		ctx.fillText('Add artwork', dataWidth + 24, height / 2);
+		const noArtGrad = ctx.createLinearGradient(artX, artY, artX + artW, artY + artH);
+		noArtGrad.addColorStop(0, '#1a0505');
+		noArtGrad.addColorStop(1, '#0d0202');
+		ctx.fillStyle = noArtGrad;
+		ctx.fillRect(artX, artY, artW, artH);
 	}
 
-	// Data panel content
-	const padding = 24;
-	let yPos = padding;
+	// Art gradient overlay
+	const artGrad = ctx.createLinearGradient(artX, 0, artX + artW, 0);
+	artGrad.addColorStop(0, 'rgba(26, 5, 5, 0.9)');
+	artGrad.addColorStop(0.3, 'rgba(45, 10, 10, 0.4)');
+	artGrad.addColorStop(0.6, 'rgba(0, 0, 0, 0)');
+	artGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+	ctx.fillStyle = artGrad;
+	ctx.fillRect(artX, artY, artW, artH);
 
-	// Header
+	// Floating stat bar (bottom right)
+	const barPaddingX = 8;
+	const barPaddingY = 6;
+	const barGap = 6;
+	const statSlotSize = 54;
+	const barW = barPaddingX * 2 + statSlotSize * 2 + barGap;
+	const barH = barPaddingY * 2 + statSlotSize;
+	const barX = artX + artW - 12 - barW;
+	const barY = artY + artH - 12 - barH;
+
+	ctx.save();
+	ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+	ctx.shadowBlur = 12;
+	ctx.shadowOffsetY = 2;
+	const barBg = ctx.createLinearGradient(barX, barY, barX + barW, barY + barH);
+	barBg.addColorStop(0, 'rgba(20, 8, 8, 0.92)');
+	barBg.addColorStop(1, 'rgba(15, 5, 5, 0.95)');
+	ctx.fillStyle = barBg;
+	roundRect(ctx, barX, barY, barW, barH, 6);
+	ctx.fill();
+	ctx.shadowColor = 'transparent';
+	ctx.strokeStyle = 'rgba(120, 40, 40, 0.6)';
+	ctx.lineWidth = 1;
+	roundRect(ctx, barX, barY, barW, barH, 6);
+	ctx.stroke();
+
+	function drawStatSlot(slotX: number, slotY: number, kind: 'damage' | 'barrier', value: number) {
+		const slotGrad = ctx.createLinearGradient(slotX, slotY, slotX + statSlotSize, slotY + statSlotSize);
+		if (kind === 'damage') {
+			slotGrad.addColorStop(0, 'rgba(80, 20, 20, 0.6)');
+			slotGrad.addColorStop(1, 'rgba(20, 5, 5, 0.7)');
+			ctx.strokeStyle = 'rgba(140, 50, 50, 0.7)';
+		} else {
+			slotGrad.addColorStop(0, 'rgba(60, 25, 25, 0.5)');
+			slotGrad.addColorStop(1, 'rgba(20, 5, 5, 0.7)');
+			ctx.strokeStyle = 'rgba(100, 40, 40, 0.6)';
+		}
+
+		ctx.fillStyle = slotGrad;
+		roundRect(ctx, slotX, slotY, statSlotSize, statSlotSize, 4);
+		ctx.fill();
+		ctx.lineWidth = 1;
+		roundRect(ctx, slotX, slotY, statSlotSize, statSlotSize, 4);
+		ctx.stroke();
+
+		ctx.textAlign = 'center';
+		ctx.fillStyle = 'rgba(240, 220, 220, 0.95)';
+		ctx.font = '800 21px Opsilon, serif';
+		ctx.fillText(String(value), slotX + statSlotSize / 2, slotY + 30);
+
+		ctx.fillStyle = 'rgba(180, 140, 140, 0.8)';
+		ctx.font = '600 8px Opsilon, serif';
+		ctx.fillText(kind === 'damage' ? 'DMG' : 'BAR', slotX + statSlotSize / 2, slotY + 46);
+
+		ctx.textAlign = 'left';
+	}
+
+	const statY = barY + barPaddingY;
+	drawStatSlot(barX + barPaddingX, statY, 'damage', monster.damage ?? 0);
+	drawStatSlot(barX + barPaddingX + statSlotSize + barGap, statY, 'barrier', (monster as any).barrier ?? 0);
+	ctx.restore();
+
+	// Main panel (left)
+	const mainGrad = ctx.createLinearGradient(0, 0, LEFT_PANEL_WIDTH, MONSTER_CARD_HEIGHT);
+	mainGrad.addColorStop(0, 'rgba(45, 10, 10, 0.9)');
+	mainGrad.addColorStop(1, 'rgba(26, 5, 5, 0.95)');
+	ctx.fillStyle = mainGrad;
+	ctx.fillRect(0, 0, LEFT_PANEL_WIDTH, MONSTER_CARD_HEIGHT);
+
+	// Slash marks in top-right of main panel
+	drawSlashMarks(ctx, LEFT_PANEL_WIDTH - 10 - 60, 10, 60, 80);
+
+	const innerX = MAIN_PADDING;
+	const innerW = LEFT_PANEL_WIDTH - MAIN_PADDING * 2;
+	let yPos = MAIN_PADDING;
+
+	// Header row: icon + name
+	const headerIconSize = 52;
+	const headerGap = 12;
+	const nameX = innerX + (iconUrl || monster.icon ? headerIconSize + headerGap : 0);
+
 	if (iconUrl) {
 		try {
 			const iconImg = await loadImage(iconUrl);
-			const iconSize = 56;
-			ctx.drawImage(iconImg, padding, yPos, iconSize, iconSize);
+			ctx.save();
+			ctx.shadowColor = 'rgba(220, 38, 38, 0.4)';
+			ctx.shadowBlur = 15;
+			ctx.shadowOffsetX = 0;
+			ctx.shadowOffsetY = 0;
+			ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+			roundRect(ctx, innerX, yPos, headerIconSize, headerIconSize, 4);
+			ctx.fill();
+			ctx.shadowColor = 'transparent';
+			drawImageContain(ctx, iconImg, innerX, yPos, headerIconSize, headerIconSize);
+			ctx.strokeStyle = '#991b1b';
+			ctx.lineWidth = 2;
+			roundRect(ctx, innerX, yPos, headerIconSize, headerIconSize, 4);
+			ctx.stroke();
+			ctx.restore();
 		} catch (err) {
-			console.warn('Failed to load icon image:', err);
+			console.warn('Failed to load monster icon:', err);
 		}
 	} else if (monster.icon) {
-		ctx.font = 'bold 40px system-ui';
-		ctx.fillStyle = textColor;
-		ctx.fillText(monster.icon, padding, yPos + 44);
-	}
-
-	ctx.font = '700 26px "Inter", system-ui, -apple-system, sans-serif';
-	ctx.fillStyle = textColor;
-	const nameX = iconUrl || monster.icon ? padding + 68 : padding;
-	ctx.fillText(monster.name, nameX, yPos + 26);
-
-	ctx.font = '600 15px system-ui';
-	ctx.fillStyle = accentColor;
-	const stateLabel = ((monster as any).state ?? 'normal').toString();
-	ctx.fillText(stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1), nameX, yPos + 48);
-
-	// Level + state badges
-	const badgeY = yPos + 68;
-	const stateTextUpper = (monster.state ?? 'normal').toUpperCase();
-
-	ctx.font = '700 13px "Inter", system-ui';
-	const stateWidth = ctx.measureText(stateTextUpper).width + 20;
-	const stateColor = stateColors[monster.state ?? 'tainted'] ?? '#94a3b8';
-	ctx.fillStyle = stateColor;
-	roundRect(ctx, nameX, badgeY, stateWidth, 22, 8);
-	ctx.fill();
-	ctx.fillStyle = '#0f172a';
-	ctx.fillText(stateTextUpper, nameX + 10, badgeY + 15);
-
-	yPos += 96;
-
-	// Damage + Barrier box (match HTML look)
-	const statBoxWidth = dataWidth - padding * 2;
-	const effects = monster.effects ?? [];
-	const lineHeight = 12;
-	const maxEffectWidth = statBoxWidth - 16;
-	
-	// Pre-calculate effect lines to determine box height
-	const effectLines: { name: string; color: string; descLines: string[] }[] = [];
-	let totalEffectLines = 0;
-	
-	if (effects.length > 0) {
-		ctx.font = '400 9px "Inter", system-ui';
-		for (const effect of effects.slice(0, 4)) { // max 4 effects
-			const nameText = `${effect.name}:`;
-			ctx.font = '700 9px "Inter", system-ui';
-			const nameWidth = ctx.measureText(nameText).width;
-			ctx.font = '400 9px "Inter", system-ui';
-			const descMaxWidth = maxEffectWidth - nameWidth - 6;
-			const descLines = effect.description ? wrapText(ctx, stripHtml(effect.description), descMaxWidth) : [];
-			effectLines.push({ name: nameText, color: effect.color || '#a78bfa', descLines });
-			totalEffectLines += Math.max(1, descLines.length);
-		}
-	}
-	
-	const effectGapTotal = Math.max(0, effectLines.length - 1) * 6; // 6px gap between effects
-	const statBoxHeight = effects.length > 0 ? 68 + totalEffectLines * lineHeight + effectGapTotal + 8 : 68;
-	
-	ctx.fillStyle = 'rgba(91, 33, 182, 0.35)';
-	roundRect(ctx, padding, yPos, statBoxWidth, statBoxHeight, 14);
-	ctx.fill();
-	ctx.strokeStyle = 'rgba(168, 85, 247, 0.6)';
-	ctx.lineWidth = 2;
-	roundRect(ctx, padding, yPos, statBoxWidth, statBoxHeight, 14);
-	ctx.stroke();
-
-	ctx.font = '700 12px "Inter", system-ui';
-	ctx.fillStyle = secondaryTextColor;
-	ctx.fillText('DAMAGE', padding + 12, yPos + 22);
-	ctx.fillText('BARRIER', padding + statBoxWidth / 2 + 12, yPos + 22);
-
-	ctx.font = '800 24px "Inter", system-ui';
-	ctx.fillStyle = textColor;
-	ctx.fillText(String(monster.damage ?? 0), padding + 12, yPos + 52);
-	ctx.fillText(String((monster as any).barrier ?? 0), padding + statBoxWidth / 2 + 12, yPos + 52);
-
-	// Special effects (if present)
-	if (effectLines.length > 0) {
-		ctx.strokeStyle = 'rgba(168, 85, 247, 0.3)';
-		ctx.lineWidth = 1;
-		ctx.beginPath();
-		ctx.moveTo(padding + 8, yPos + 60);
-		ctx.lineTo(padding + statBoxWidth - 8, yPos + 60);
-		ctx.stroke();
-
-		let effectY = yPos + 72;
-		
-		const effectGap = 6; // Gap between effects
-		for (let idx = 0; idx < effectLines.length; idx++) {
-			const effectLine = effectLines[idx];
-			// Effect name in color
-			ctx.font = '700 9px "Inter", system-ui';
-			ctx.fillStyle = effectLine.color;
-			ctx.textAlign = 'left';
-			const nameWidth = ctx.measureText(effectLine.name).width;
-			ctx.fillText(effectLine.name, padding + 8, effectY);
-
-			// Effect description lines
-			if (effectLine.descLines.length > 0) {
-				ctx.font = '400 9px "Inter", system-ui';
-				ctx.fillStyle = '#cbd5e1';
-				// First line next to name
-				ctx.fillText(effectLine.descLines[0], padding + 8 + nameWidth + 3, effectY);
-				effectY += lineHeight;
-
-				// Additional lines indented
-				for (let i = 1; i < effectLine.descLines.length; i++) {
-					ctx.fillText(effectLine.descLines[i], padding + 12, effectY);
-					effectY += lineHeight;
-				}
-			} else {
-				effectY += lineHeight;
-			}
-
-			// Add gap between effects (but not after the last one)
-			if (idx < effectLines.length - 1) {
-				effectY += effectGap;
-			}
-		}
+		ctx.save();
+		ctx.font = '800 44px Opsilon, serif';
+		ctx.fillStyle = '#fecaca';
+		ctx.shadowColor = 'rgba(220, 38, 38, 0.6)';
+		ctx.shadowBlur = 8;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(monster.icon, innerX + headerIconSize / 2, yPos + headerIconSize / 2 + 2);
+		ctx.restore();
 		ctx.textAlign = 'left';
+		ctx.textBaseline = 'alphabetic';
 	}
-	
-	yPos += statBoxHeight + 8; // Move yPos past the stat box
 
-	// Render reward rows
-	const validRows = (rewardRows ?? []).filter(row => row.icon_urls.some(Boolean));
-	if (validRows.length > 0) {
-		const dataPanelCenter = dataWidth / 2;
-		const rowGap = 12; // Gap between rows
-		let rewardsY = yPos + 4; // Start right after stat box
+	const monsterName = monster.name.toUpperCase();
+	const maxNameWidth = innerX + innerW - nameX;
+	let nameFontSize = 34;
+	ctx.fillStyle = '#fecaca';
+	while (nameFontSize > 18) {
+		ctx.font = `800 ${nameFontSize}px Opsilon, serif`;
+		if (ctx.measureText(monsterName).width <= maxNameWidth) break;
+		nameFontSize -= 2;
+	}
 
-		for (const row of validRows) {
-			const config = REWARD_ROW_CONFIG[row.type] || REWARD_ROW_CONFIG.all_in_combat;
-			const validUrls = row.icon_urls.filter(Boolean) as string[];
-			
-			// Load images for this row
-			const rowImages: { img: HTMLImageElement; crop: { sx: number; sy: number; sw: number; sh: number } }[] = [];
-			for (const url of validUrls.slice(0, 5)) {
-				try {
-					const img = await loadImage(url);
-					rowImages.push({ img, crop: computeTrimRect(img) });
-				} catch (err) {
-					console.warn('Failed to load reward icon', err);
+	ctx.save();
+	ctx.shadowColor = 'rgba(220, 38, 38, 0.5)';
+	ctx.shadowBlur = 10;
+	ctx.shadowOffsetY = 0;
+	ctx.shadowOffsetX = 0;
+	ctx.fillText(monsterName, nameX, yPos + 30);
+	ctx.restore();
+
+	if ((monster as any).invade_location_name) {
+		ctx.font = 'italic 600 12px Opsilon, serif';
+		ctx.fillStyle = '#b89090';
+		ctx.fillText(`Invades: ${(monster as any).invade_location_name}`, nameX, yPos + 46);
+	}
+
+	yPos += headerIconSize + CONTENT_GAP;
+
+	// Reward sections (kill + defeat)
+	const resolvedRows = (rewardRows ?? []) as ResolvedRewardRow[];
+	const killRewardRow = resolvedRows.find((row) => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean));
+	const defeatRewardRow = resolvedRows.find((row) => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
+
+	const rewardSections: { label: string; icons: string[] }[] = [];
+	if (killRewardRow) {
+		rewardSections.push({
+			label: 'On kill, all in combat gain:',
+			icons: (killRewardRow.icon_urls ?? []).filter(Boolean) as string[]
+		});
+	}
+	if (defeatRewardRow) {
+		rewardSections.push({
+			label: 'All in monster combat gain:',
+			icons: (defeatRewardRow.icon_urls ?? []).filter(Boolean) as string[]
+		});
+	}
+
+	const rewardLayout = rewardSections.map((section) =>
+		computeRewardSectionHeight(section.icons.length, innerW)
+	);
+	const rewardHeightsSum = rewardLayout.reduce((sum, r) => sum + r.height, 0);
+
+	// Footer and state badge
+	const footerHeight = 34;
+	const innerBottom = MONSTER_CARD_HEIGHT - MAIN_PADDING;
+
+	// Effects section: flexes to fill remaining space when present.
+	const effects = monster.effects ?? [];
+	const showEffects = effects.length > 0;
+
+	if (showEffects) {
+		const rewardCount = rewardSections.length;
+		const itemCount = 1 + rewardCount + 1; // effects + rewards + footer
+		const totalGaps = (itemCount - 1) * CONTENT_GAP;
+		const available = innerBottom - yPos;
+		const effectsHeight = Math.max(0, available - (rewardHeightsSum + footerHeight + totalGaps));
+
+		// Effects section background
+		const effectsX = innerX;
+		const effectsY = yPos;
+		const effectsW = innerW;
+		const effectsH = effectsHeight;
+
+		if (effectsH > 0) {
+			ctx.save();
+			ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+			ctx.beginPath();
+			ctx.moveTo(effectsX, effectsY);
+			ctx.lineTo(effectsX + effectsW, effectsY);
+			ctx.lineTo(effectsX + effectsW - 6, effectsY + effectsH);
+			ctx.lineTo(effectsX, effectsY + effectsH);
+			ctx.closePath();
+			ctx.fill();
+
+			ctx.fillStyle = '#dc2626';
+			ctx.fillRect(effectsX, effectsY, 3, effectsH);
+
+			const pad = 12;
+			const bulletSize = 6;
+			const bulletGap = 8;
+			const lineHeight = 18;
+
+			let effectY = effectsY + pad + lineHeight - 6;
+			const maxY = effectsY + effectsH - pad;
+			const maxTextW = effectsW - pad * 2 - bulletSize - bulletGap;
+
+			for (const effect of effects.slice(0, 2)) {
+				if (effectY > maxY) break;
+				const desc = stripHtml(effect.description).trim();
+
+				// Bullet diamond
+				const bulletX = effectsX + pad + bulletSize / 2;
+				ctx.save();
+				ctx.translate(bulletX, effectY - 5);
+				ctx.rotate(Math.PI / 4);
+				ctx.fillStyle = '#dc2626';
+				ctx.fillRect(-bulletSize / 2, -bulletSize / 2, bulletSize, bulletSize);
+				ctx.restore();
+
+				const textX = effectsX + pad + bulletSize + bulletGap;
+				ctx.font = '700 12px Opsilon, serif';
+				ctx.fillStyle = '#fca5a5';
+				const nameText = `${effect.name}:`;
+				const nameW = ctx.measureText(nameText).width;
+				ctx.fillText(nameText, textX, effectY);
+
+				ctx.font = '400 12px Opsilon, serif';
+				ctx.fillStyle = '#a8a0b0';
+
+				const firstLineX = textX + nameW + 4;
+				const firstLineMaxW = Math.max(10, effectsX + effectsW - pad - firstLineX);
+				const firstLine = desc ? wrapText(ctx, desc, firstLineMaxW)[0] ?? '' : '';
+				if (firstLine) {
+					ctx.fillText(firstLine, firstLineX, effectY);
 				}
-			}
 
-			if (rowImages.length === 0) continue;
+				let used = firstLine ? firstLine.split(' ').length : 0;
+				let remainder = desc;
+				if (firstLine && desc) {
+					// Remove the used words from the remainder (approximation, good enough for short lines).
+					const words = desc.split(/\s+/);
+					remainder = words.slice(used).join(' ').trim();
+				}
 
-			if (row.type === 'tournament') {
-				// Tournament style with title and placement headers
-				const iconSize = 38;
-				const iconGap = 5;
-				
-				// Title - left aligned
-				ctx.font = '700 10px "Inter", system-ui';
-				ctx.fillStyle = config.color;
-				ctx.textAlign = 'left';
-				ctx.fillText('THOSE THAT KILL, RANK DAMAGE', padding, rewardsY + 10);
-				
-				const placementLabels = ['1ST', '2ND', '3RD+'];
-				const chooseLabels = ['CHOOSE 3', 'CHOOSE 2', 'CHOOSE 1'];
-				const numHeaders = 3;
-				const numIcons = Math.min(rowImages.length, 5);
-				const slotWidth = iconSize + 8;
-				const totalWidth = slotWidth * numIcons + 16;
-				const headerSlotWidth = totalWidth / numHeaders;
-				const startX = dataPanelCenter - totalWidth / 2;
-				
-				// Draw header labels
-				for (let i = 0; i < numHeaders; i++) {
-					const slotCenterX = startX + i * headerSlotWidth + headerSlotWidth / 2;
-					ctx.font = '700 10px "Inter", system-ui';
-					ctx.fillStyle = config.color;
-					ctx.textAlign = 'center';
-					ctx.fillText(placementLabels[i], slotCenterX, rewardsY + 24);
-					ctx.font = '600 8px "Inter", system-ui';
-					ctx.fillStyle = '#d97706';
-					ctx.fillText(chooseLabels[i], slotCenterX, rewardsY + 34);
-					
-					if (i < numHeaders - 1) {
-						const dividerX = startX + (i + 1) * headerSlotWidth;
-						ctx.strokeStyle = config.borderColor;
-						ctx.lineWidth = 1;
-						ctx.beginPath();
-						ctx.moveTo(dividerX, rewardsY + 14);
-						ctx.lineTo(dividerX, rewardsY + 36);
-						ctx.stroke();
+				effectY += lineHeight;
+				if (remainder) {
+					const lines = wrapText(ctx, remainder, maxTextW);
+					for (const line of lines) {
+						if (effectY > maxY) break;
+						ctx.fillText(line, textX, effectY);
+						effectY += lineHeight;
 					}
 				}
-				ctx.textAlign = 'left';
-				
-				// Draw icons panel
-				const panelY = rewardsY + 38;
-				const panelPadding = 6;
-				const iconsWidth = numIcons * iconSize + (numIcons - 1) * iconGap;
-				const panelWidth = iconsWidth + panelPadding * 2;
-				const panelX = dataPanelCenter - panelWidth / 2;
-				
-				ctx.fillStyle = config.bgColor;
-				roundRect(ctx, panelX, panelY, panelWidth, iconSize + 8, 6);
-				ctx.fill();
-				ctx.strokeStyle = config.borderColor;
-				ctx.lineWidth = 1;
-				roundRect(ctx, panelX, panelY, panelWidth, iconSize + 8, 6);
-				ctx.stroke();
-				
-				let iconX = panelX + panelPadding;
-				for (const entry of rowImages) {
-					ctx.drawImage(entry.img, entry.crop.sx, entry.crop.sy, entry.crop.sw, entry.crop.sh, iconX, panelY + 4, iconSize, iconSize);
-					iconX += iconSize + iconGap;
-				}
-				
-				rewardsY += 38 + iconSize + 8 + rowGap; // title + headers + panel + gap
-			} else {
-				// Standard row style (all_in_combat, all_losers, all_winners, one_winner)
-				const iconSize = 34;
-				const iconGap = 5;
-				const numIcons = Math.min(rowImages.length, 5);
-				const panelPadding = 6;
-				const iconsWidth = numIcons * iconSize + (numIcons - 1) * iconGap;
-				const panelWidth = iconsWidth + panelPadding * 2;
-				const panelX = dataPanelCenter - panelWidth / 2;
-				const label = row.label || config.label;
-				
-				// Draw header label - left aligned
-				ctx.font = '700 10px "Inter", system-ui';
-				ctx.fillStyle = config.color;
-				ctx.textAlign = 'left';
-				ctx.fillText(label, padding, rewardsY + 10);
-				
-				// Draw icons panel
-				const panelY = rewardsY + 14;
-				
-				ctx.fillStyle = config.bgColor;
-				roundRect(ctx, panelX, panelY, panelWidth, iconSize + 8, 6);
-				ctx.fill();
-				ctx.strokeStyle = config.borderColor;
-				ctx.lineWidth = 1;
-				roundRect(ctx, panelX, panelY, panelWidth, iconSize + 8, 6);
-				ctx.stroke();
-				
-				let iconX = panelX + panelPadding;
-				for (const entry of rowImages) {
-					ctx.drawImage(entry.img, entry.crop.sx, entry.crop.sy, entry.crop.sw, entry.crop.sh, iconX, panelY + 4, iconSize, iconSize);
-					iconX += iconSize + iconGap;
-				}
-				
-				rewardsY += 14 + iconSize + 8 + rowGap; // label + panel + gap
+
+				effectY += 8; // gap between effects
 			}
+
+			ctx.restore();
+			yPos += effectsH + CONTENT_GAP;
 		}
 	}
+
+	// Rewards
+	for (let i = 0; i < rewardSections.length; i++) {
+		const section = rewardSections[i];
+		const layout = rewardLayout[i];
+
+		ctx.font = '600 11px Opsilon, serif';
+		ctx.fillStyle = '#b89090';
+		ctx.fillText(section.label, innerX, yPos + 11);
+
+		const iconSize = 36;
+		const iconGap = 6;
+		let iconX = innerX;
+		let iconY = yPos + 11 + iconGap;
+
+		for (let idx = 0; idx < section.icons.length; idx++) {
+			const url = section.icons[idx];
+			const col = idx % layout.perRow;
+			const row = Math.floor(idx / layout.perRow);
+			const x = iconX + col * (iconSize + iconGap);
+			const y = iconY + row * (iconSize + iconGap);
+
+			try {
+				const img = await loadImage(url);
+				drawImageContain(ctx, img, x, y, iconSize, iconSize);
+			} catch (err) {
+				console.warn('Failed to load reward icon', err);
+			}
+		}
+
+		yPos += layout.height;
+		if (i < rewardSections.length - 1) yPos += CONTENT_GAP;
+	}
+
+	// Footer (always present)
+	if (rewardSections.length > 0 || showEffects) {
+		yPos += CONTENT_GAP;
+	}
+
+	// Footer line
+	ctx.strokeStyle = 'rgba(220, 38, 38, 0.3)';
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	ctx.moveTo(innerX, yPos);
+	ctx.lineTo(innerX + innerW, yPos);
+	ctx.stroke();
+
+	const footerTextY = yPos + 22;
+	ctx.font = '600 11px Opsilon, serif';
+	ctx.fillStyle = '#991b1b';
+	ctx.fillText('Arc Spirits // Monster', innerX, footerTextY);
+
+	const stateText = (monster.state ?? 'tainted').toUpperCase();
+	ctx.font = '700 10px Opsilon, serif';
+	const badgePadX = 10;
+	const badgePadY = 4;
+	const badgeTextW = ctx.measureText(stateText).width;
+	const badgeW = badgeTextW + badgePadX * 2;
+	const badgeH = 18;
+	const badgeX = innerX + innerW - badgeW;
+	const badgeY = yPos + 10;
+	ctx.fillStyle = stateColor;
+	roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+	ctx.fill();
+	ctx.fillStyle = '#fecaca';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	ctx.fillText(stateText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+	ctx.textAlign = 'left';
+	ctx.textBaseline = 'alphabetic';
+
+	ctx.restore();
+
+	// Card border
+	ctx.strokeStyle = '#3d0363';
+	ctx.lineWidth = 2;
+	roundRect(ctx, 1, 1, MONSTER_CARD_WIDTH - 2, MONSTER_CARD_HEIGHT - 2, 4);
+	ctx.stroke();
 
 	// Convert canvas to blob
 	return canvasToBlob(canvas);

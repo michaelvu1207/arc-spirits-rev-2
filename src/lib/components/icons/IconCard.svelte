@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { IconPoolSourceType } from '$lib/types/gameData';
 
-	type BadgeType = IconPoolSourceType | 'uploaded' | 'rune';
+	type BadgeType = IconPoolSourceType | 'uploaded' | 'rune' | 'custom';
 
 	interface Props {
 		name: string;

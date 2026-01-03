@@ -112,6 +112,8 @@ export type RuneRow = {
 	origin_id: string | null;
 	class_id: string | null;
 	icon_path: string | null;
+	/** Optional per-rune background image used when generating rune icons. */
+	icon_background_path: string | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
@@ -229,6 +231,18 @@ export type RewardRow = {
 	label?: string; // Optional custom label override
 };
 
+export type TradeRow = {
+	left_icon_ids: string[];
+	right_icon_ids: string[];
+	left_icon_groups?: string[][];
+	right_icon_groups?: string[][];
+};
+
+export type GainRow = {
+	icon_ids: string[];
+	icon_groups?: string[][];
+};
+
 // Display configuration for each reward row type
 export const REWARD_ROW_CONFIG: Record<RewardRowType, { label: string; color: string; bgColor: string; borderColor: string }> = {
 	all_in_combat: { label: 'ALL IN COMBAT GAIN', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.12)', borderColor: 'rgba(251, 191, 36, 0.4)' },
@@ -258,6 +272,48 @@ export type MonsterRow = {
 	// Legacy fields kept for migration compatibility
 	reward_icons?: string[];
 	reward_header_type?: 'default' | 'tournament';
+};
+
+export type TravelerRow = {
+	id: string;
+	name: string;
+	damage: number;
+	barrier: number;
+	state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
+	icon: string | null;
+	image_path: string | null;
+	reward_rows: RewardRow[];
+	trade_left_icon_ids: string[];
+	trade_right_icon_ids: string[];
+	trade_rows: TradeRow[];
+	gain_rows: GainRow[];
+	order_num: number;
+	card_image_path: string | null;
+	special_conditions: string | null;
+	traveler_subtext: string | null;
+	traveler_description: string | null;
+	invade_location_id: string | null;
+	/** Number of copies of this traveler in the deck. Defaults to 1. */
+	quantity: number;
+	created_at: string | null;
+	updated_at: string | null;
+	// Legacy fields kept for migration compatibility
+	reward_icons?: string[];
+	reward_header_type?: 'default' | 'tournament';
+};
+
+export type TravelerQuestRow = {
+	id: string;
+	title: string;
+	description: string | null;
+	reward_text: string | null;
+	/** JSON array of icon_pool UUIDs */
+	reward_icon_ids: string[];
+	tags: string[];
+	order_num: number;
+	card_image_path: string | null;
+	created_at: string | null;
+	updated_at: string | null;
 };
 
 export type RarityTraitRow = {
@@ -339,6 +395,54 @@ export type GameLocationRow = {
 	updated_at: string | null;
 };
 
+export type LocationIconPlacementConfigRow = {
+	id: string;
+	name: string;
+	config: Json;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type SpiritWorldMapConfigRow = {
+	id: string;
+	name: string;
+	config: Json;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type GameLocationRowIconPlacement = {
+	instance_id: string;
+	icon_id: string;
+	x: number;
+	y: number;
+};
+
+export type GameLocationRowDesign =
+	| {
+			type: 'gain';
+			icons: GameLocationRowIconPlacement[];
+	  }
+	| {
+			type: 'trade';
+			cost: GameLocationRowIconPlacement | null;
+			gain: GameLocationRowIconPlacement[];
+	  };
+
+export type GameLocationRowCompositionRow = {
+	id: string;
+	location_id: string;
+	row_index: number;
+	type: 'gain' | 'trade';
+	config: Json;
+	row_image_path: string | null;
+	pos_x: number;
+	pos_y: number;
+	scale: number;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
 export type SpecialEffectRow = {
 	id: string;
 	name: string;
@@ -352,6 +456,13 @@ export type SpecialEffectRow = {
 export type MonsterSpecialEffectRow = {
 	id: string;
 	monster_id: string;
+	special_effect_id: string;
+	created_at: string | null;
+};
+
+export type TravelerSpecialEffectRow = {
+	id: string;
+	traveler_id: string;
 	special_effect_id: string;
 	created_at: string | null;
 };

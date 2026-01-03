@@ -180,11 +180,12 @@ async function handleGenerate(originId: string, imageBlob: Blob) {
 
 		// Convert background blob to data URL for persistence
 		let backgroundDataUrl: string | undefined;
-		if (backgroundBlob) {
+		const blob = backgroundBlob;
+		if (blob) {
 			backgroundDataUrl = await new Promise<string>((resolve) => {
 				const reader = new FileReader();
 				reader.onloadend = () => resolve(reader.result as string);
-				reader.readAsDataURL(backgroundBlob);
+				reader.readAsDataURL(blob);
 			});
 		}
 

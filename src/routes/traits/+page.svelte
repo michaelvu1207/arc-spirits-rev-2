@@ -12,7 +12,7 @@
 		MultiplierEffect
 	} from '$lib/types/effects';
 	import { Button, FormField, Input, Textarea, Select } from '$lib/components/ui';
-	import { FilterBar } from '$lib/components/shared';
+	import { FilterBar, ImageUploader } from '$lib/components/shared';
 	import { Modal, PageLayout, type Tab } from '$lib/components/layout';
 	import { EditorModal } from '$lib';
 	import { OriginsListView, OriginsTableView, CallingCardEditor, CallingOrbTemplate, CallingOrbGenerated } from '$lib/components/origins';
@@ -23,6 +23,7 @@
 	import { useFormModal, useFilteredData, useFileUpload, useLookup } from '$lib/composables';
 	import { getErrorMessage, publicAssetUrl, sanitizeFilename } from '$lib/utils';
 	import { emojiToPngBlob } from '$lib/utils/emojiToPng';
+	import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
 	import { processAndUploadImage } from '$lib/utils/storage';
 	import { loadAllIcons, clearIconPoolCache } from '$lib/utils/iconPool';
 
@@ -146,6 +147,16 @@
 		class_id: null,
 		runeType: 'origin'
 	});
+
+	let savingRune = $state(false);
+	let runeIconNeedsRegeneration = $state(false);
+	let runeIconStatus = $state<string | null>(null);
+	let runeBaseline = $state<{
+		runeType: 'origin' | 'class';
+		origin_id: string | null;
+		class_id: string | null;
+		icon_background_path: string | null;
+	} | null>(null);
 
 	const originLookup = useLookup(() => origins, 'name');
 	const classLookup = useLookup(() => classes, 'name');
@@ -451,6 +462,21 @@
 			await loadAllData();
 		} catch (err) {
 			alert(`Failed to delete origin: ${getErrorMessage(err)}`);
+		}
+	}
+
+	async function deleteOrigins(ids: string[]) {
+		if (ids.length === 0) return;
+		if (!confirm(`Delete ${ids.length} origin${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+		try {
+			const { error: deleteError } = await supabase
+				.from('origins')
+				.delete()
+				.in('id', ids);
+			if (deleteError) throw deleteError;
+			await loadAllData();
+		} catch (err) {
+			alert(`Failed to delete origins: ${getErrorMessage(err)}`);
 		}
 	}
 
@@ -894,13 +920,78 @@
 	}
 
 	async function deleteClass(entry: ClassRow) {
-		if (!confirm(`Delete class "${entry.name}"? Units referencing it will be orphaned.`)) return;
-		try {
-			await deleteClassRecord(entry.id);
+			const categoriesUsingClass = specialCategories.filter((cat) =>
+				cat.slot_1_class_ids.includes(entry.id) ||
+				cat.slot_2_class_ids.includes(entry.id) ||
+				cat.slot_3_class_ids.includes(entry.id)
+			);
+
+			const confirmMessage = categoriesUsingClass.length
+				? `Delete class "${entry.name}"?\n\nIt will also be removed from: ${categoriesUsingClass.map((c) => c.name).join(', ')}`
+				: `Delete class "${entry.name}"? Units referencing it will be orphaned.`;
+			if (!confirm(confirmMessage)) return;
+			try {
+				if (categoriesUsingClass.length) {
+					const now = new Date().toISOString();
+					for (const cat of categoriesUsingClass) {
+						const { error: updateError } = await supabase
+							.from('special_categories')
+							.update({
+								slot_1_class_ids: cat.slot_1_class_ids.filter((id) => id !== entry.id),
+								slot_2_class_ids: cat.slot_2_class_ids.filter((id) => id !== entry.id),
+								slot_3_class_ids: cat.slot_3_class_ids.filter((id) => id !== entry.id),
+								updated_at: now
+							})
+							.eq('id', cat.id);
+						if (updateError) throw updateError;
+					}
+				}
+
+				await deleteClassRecord(entry.id);
+				await loadAllData();
+			} catch (err) {
+				alert(`Failed to delete class: ${getErrorMessage(err)}`);
+			}
+		}
+
+		async function deleteClasses(ids: string[]) {
+			if (ids.length === 0) return;
+			const idSet = new Set(ids);
+			const categoriesToUpdate = specialCategories.filter((cat) =>
+				cat.slot_1_class_ids.some((id) => idSet.has(id)) ||
+				cat.slot_2_class_ids.some((id) => idSet.has(id)) ||
+				cat.slot_3_class_ids.some((id) => idSet.has(id))
+			);
+
+			const confirmMessage = categoriesToUpdate.length
+				? `Delete ${ids.length} class${ids.length === 1 ? '' : 'es'}?\n\nThey will also be removed from: ${categoriesToUpdate.map((c) => c.name).join(', ')}`
+				: `Delete ${ids.length} class${ids.length === 1 ? '' : 'es'}? Units referencing them will be orphaned.`;
+			if (!confirm(confirmMessage)) return;
+			try {
+				if (categoriesToUpdate.length) {
+					const now = new Date().toISOString();
+					for (const cat of categoriesToUpdate) {
+						const { error: updateError } = await supabase
+							.from('special_categories')
+							.update({
+								slot_1_class_ids: cat.slot_1_class_ids.filter((id) => !idSet.has(id)),
+								slot_2_class_ids: cat.slot_2_class_ids.filter((id) => !idSet.has(id)),
+								slot_3_class_ids: cat.slot_3_class_ids.filter((id) => !idSet.has(id)),
+								updated_at: now
+							})
+							.eq('id', cat.id);
+						if (updateError) throw updateError;
+					}
+				}
+
+				const { error: deleteError } = await supabase
+					.from('classes')
+					.delete()
+					.in('id', ids);
+			if (deleteError) throw deleteError;
 			await loadAllData();
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			alert(`Failed to delete class: ${message}`);
+			alert(`Failed to delete classes: ${getErrorMessage(err)}`);
 		}
 	}
 
@@ -972,30 +1063,100 @@
 	// Runes handlers
 	function openRuneForm(rune?: RuneRow) {
 		if (rune) {
+			const runeType: 'origin' | 'class' = rune.class_id ? 'class' : 'origin';
+			runeBaseline = {
+				runeType,
+				origin_id: rune.origin_id ?? null,
+				class_id: rune.class_id ?? null,
+				icon_background_path: rune.icon_background_path ?? null
+			};
+			runeIconNeedsRegeneration = false;
+			runeIconStatus = null;
 			runeModal.open({
 				...rune,
-				runeType: rune.class_id ? 'class' : 'origin'
+				runeType
 			});
 		} else {
+			const originId = origins[0]?.id ?? null;
+			runeBaseline = { runeType: 'origin', origin_id: originId, class_id: null, icon_background_path: null };
+			runeIconNeedsRegeneration = true;
+			runeIconStatus = null;
 			runeModal.open({
 				name: '',
-				origin_id: origins[0]?.id ?? null,
+				origin_id: originId,
 				class_id: null,
+				icon_path: null,
+				icon_background_path: null,
 				runeType: 'origin'
 			});
+			// Assign an ID for storage paths without switching into "edit" mode.
+			runeModal.formData = { ...runeModal.formData, id: crypto.randomUUID() };
 		}
 	}
+
+	$effect(() => {
+		if (!runeModal.isOpen) return;
+		if (!runeBaseline) return;
+
+		const runeType = runeModal.formData.runeType ?? 'origin';
+		const effectiveOriginId = runeType === 'origin' ? runeModal.formData.origin_id ?? null : null;
+		const effectiveClassId = runeType === 'class' ? runeModal.formData.class_id ?? null : null;
+		const effectiveBackgroundPath = runeModal.formData.icon_background_path ?? null;
+
+		const baselineOriginId = runeBaseline.runeType === 'origin' ? runeBaseline.origin_id ?? null : null;
+		const baselineClassId = runeBaseline.runeType === 'class' ? runeBaseline.class_id ?? null : null;
+		const baselineBackgroundPath = runeBaseline.icon_background_path ?? null;
+
+		if (
+			runeType !== runeBaseline.runeType ||
+			effectiveOriginId !== baselineOriginId ||
+			effectiveClassId !== baselineClassId ||
+			effectiveBackgroundPath !== baselineBackgroundPath
+		) {
+			runeIconNeedsRegeneration = true;
+		}
+	});
 
 	async function handleRuneSubmit(event: Event) {
 		event.preventDefault();
 		await saveRune();
 	}
 
-	async function saveRune() {
-		if (!runeModal.formData.name?.trim()) {
-			alert('Rune name is required.');
-			return;
+	function dataUrlToBlob(dataUrl: string): Blob {
+		const [meta, base64] = dataUrl.split(',');
+		const mimeMatch = meta?.match(/data:(.*?);base64/);
+		const mime = mimeMatch?.[1] ?? 'application/octet-stream';
+		const bytes = Uint8Array.from(atob(base64 ?? ''), (c) => c.charCodeAt(0));
+		return new Blob([bytes], { type: mime });
+	}
+
+	function resolveIconSource(input: { icon_png?: string | null; icon_emoji?: string | null } | null | undefined): {
+		iconUrl: string | null;
+		iconEmoji: string | null;
+	} {
+		if (!input) return { iconUrl: null, iconEmoji: null };
+
+		const iconPng = input.icon_png ?? null;
+		const iconEmoji = input.icon_emoji ?? null;
+
+		// Prefer a stored PNG path if it looks like a storage path.
+		if (iconPng && iconPng.includes('/')) {
+			return { iconUrl: publicAssetUrl(iconPng, { updatedAt: Date.now() }), iconEmoji: null };
 		}
+
+		// Fallbacks: explicit emoji column, or legacy emoji stored in icon_png.
+		if (iconEmoji && iconEmoji.trim()) return { iconUrl: null, iconEmoji: iconEmoji.trim() };
+		if (iconPng && iconPng.trim()) return { iconUrl: null, iconEmoji: iconPng.trim() };
+
+		return { iconUrl: null, iconEmoji: null };
+	}
+
+		async function saveRune() {
+			const name = runeModal.formData.name?.trim() ?? '';
+			if (!name) {
+				alert('Rune name is required.');
+				return;
+			}
 		if (runeModal.formData.runeType === 'origin' && !runeModal.formData.origin_id) {
 			alert('Select an origin for the rune.');
 			return;
@@ -1005,31 +1166,97 @@
 			return;
 		}
 
-		const payload = {
-			name: runeModal.formData.name.trim(),
-			origin_id: runeModal.formData.runeType === 'origin' ? runeModal.formData.origin_id : null,
-			class_id: runeModal.formData.runeType === 'class' ? runeModal.formData.class_id : null
-		};
+		if (savingRune) return;
+		savingRune = true;
+		runeIconStatus = null;
 
-		let saveError: string | null = null;
-		if (runeModal.isEditing) {
-			const { error: updateError } = await supabase
-				.from('runes')
-				.update({ ...payload, updated_at: new Date().toISOString() })
-				.eq('id', runeModal.editingId!);
-			saveError = updateError ? getErrorMessage(updateError) : null;
-		} else {
-			const { error: insertError } = await supabase.from('runes').insert(payload);
-			saveError = insertError ? getErrorMessage(insertError) : null;
+		const now = new Date().toISOString();
+		const runeId = runeModal.isEditing
+			? runeModal.editingId!
+			: (runeModal.formData.id ?? crypto.randomUUID());
+			if (!runeModal.formData.id) {
+				runeModal.formData = { ...runeModal.formData, id: runeId };
+			}
+
+			const payload = {
+				name,
+				origin_id: runeModal.formData.runeType === 'origin' ? runeModal.formData.origin_id : null,
+				class_id: runeModal.formData.runeType === 'class' ? runeModal.formData.class_id : null,
+				icon_background_path: runeModal.formData.icon_background_path ?? null
+			};
+
+		try {
+			let saveError: string | null = null;
+			if (runeModal.isEditing) {
+				const { error: updateError } = await supabase
+					.from('runes')
+					.update({ ...payload, updated_at: now })
+					.eq('id', runeId);
+				saveError = updateError ? getErrorMessage(updateError) : null;
+			} else {
+				const { error: insertError } = await supabase.from('runes').insert({ id: runeId, ...payload });
+				saveError = insertError ? getErrorMessage(insertError) : null;
+			}
+
+			if (saveError) {
+				alert(`Failed to save rune: ${saveError}`);
+				return;
+			}
+
+			if (runeIconNeedsRegeneration) {
+				runeIconStatus = 'Generating rune icon...';
+
+				const backgroundUrl =
+					publicAssetUrl(payload.icon_background_path, { updatedAt: Date.now() }) ??
+					publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
+
+				const source =
+					runeModal.formData.runeType === 'origin'
+						? resolveIconSource(origins.find((o) => o.id === payload.origin_id))
+						: resolveIconSource(classes.find((c) => c.id === payload.class_id));
+
+				const iconDataUrl = await generateRuneIcon({
+					originIconUrl: source.iconUrl,
+					originIconEmoji: source.iconEmoji,
+					backgroundUrl,
+					size: 800
+				});
+
+				const iconBlob = dataUrlToBlob(iconDataUrl);
+				const { data, error: uploadError } = await processAndUploadImage(iconBlob, {
+					folder: `runes/${runeId}`,
+					filename: 'icon',
+					cropTransparent: false,
+					upsert: true
+				});
+				if (uploadError || !data?.path) {
+					throw uploadError ?? new Error('Failed to upload rune icon.');
+				}
+
+				const { error: updateIconError } = await supabase
+					.from('runes')
+					.update({
+						icon_path: data.path,
+						icon_background_path: payload.icon_background_path,
+						updated_at: now
+					})
+					.eq('id', runeId);
+				if (updateIconError) {
+					throw updateIconError;
+				}
+
+				runeIconNeedsRegeneration = false;
+				runeIconStatus = '✓ Rune icon exported';
+			}
+
+			runeModal.close();
+			await loadAllData();
+		} catch (err) {
+			alert(`Failed to export rune icon: ${getErrorMessage(err)}`);
+		} finally {
+			savingRune = false;
+			runeIconStatus = null;
 		}
-
-		if (saveError) {
-			alert(`Failed to save rune: ${saveError}`);
-			return;
-		}
-
-		runeModal.close();
-		await loadAllData();
 	}
 
 	async function deleteRune(rune: RuneRow) {
@@ -1037,6 +1264,18 @@
 		const { error: deleteError } = await supabase.from('runes').delete().eq('id', rune.id);
 		if (deleteError) {
 			alert(`Failed to delete rune: ${getErrorMessage(deleteError)}`);
+			return;
+		}
+		await loadAllData();
+	}
+
+	async function deleteRunes(runesToDelete: RuneRow[]) {
+		if (runesToDelete.length === 0) return;
+		if (!confirm(`Delete ${runesToDelete.length} rune${runesToDelete.length === 1 ? '' : 's'}?`)) return;
+		const ids = runesToDelete.map((r) => r.id);
+		const { error: deleteError } = await supabase.from('runes').delete().in('id', ids);
+		if (deleteError) {
+			alert(`Failed to delete runes: ${getErrorMessage(deleteError)}`);
 			return;
 		}
 		await loadAllData();
@@ -1156,6 +1395,7 @@
 				origins={originFiltered.filtered}
 				onEdit={(origin) => openOriginForm(origin)}
 				onDelete={(origin) => deleteOrigin(origin)}
+				onDeleteMultiple={deleteOrigins}
 			/>
 		{:else if activeOriginSubTab === 'table'}
 			<OriginsTableView
@@ -1195,6 +1435,7 @@
 				{diceNameById}
 				onEdit={(cls) => openClassForm(cls)}
 				onDelete={deleteClass}
+				onDeleteMultiple={deleteClasses}
 				onEditSpecial={(cat) => openSpecialCategoryForm(cat)}
 				onDeleteSpecial={deleteSpecialCategory}
 			/>
@@ -1255,6 +1496,7 @@
 				{classLookup}
 				onEdit={(rune) => openRuneForm(rune)}
 				onDelete={(rune) => deleteRune(rune)}
+				onDeleteMultiple={deleteRunes}
 			/>
 		{:else if activeRuneSubTab === 'table'}
 			<RunesTableView
@@ -1891,11 +2133,11 @@
 {/if}
 
 <!-- Runes Modal -->
-<Modal bind:open={runeModal.isOpen} title={runeModal.isEditing ? 'Edit Rune' : 'Create Rune'}>
-	<form onsubmit={handleRuneSubmit}>
-		<FormField label="Name" required>
-			<Input bind:value={runeModal.formData.name} placeholder="Enter rune name" required />
-		</FormField>
+	<Modal bind:open={runeModal.isOpen} title={runeModal.isEditing ? 'Edit Rune' : 'Create Rune'}>
+		<form onsubmit={handleRuneSubmit}>
+			<FormField label="Name" required>
+				<Input bind:value={runeModal.formData.name} placeholder="Enter rune name" required />
+			</FormField>
 
 		<fieldset class="rune-type-fieldset">
 			<legend>Rune Type</legend>
@@ -1922,25 +2164,67 @@
 					required
 				/>
 			</FormField>
-		{:else}
-			<FormField label="Class" required>
-				<Select
-					bind:value={runeModal.formData.class_id}
+			{:else}
+				<FormField label="Class" required>
+					<Select
+						bind:value={runeModal.formData.class_id}
 					options={[
 						{ value: '', label: 'Select a class' },
 						...classes.map((c) => ({ value: c.id, label: c.name }))
 					]}
 					required
 				/>
-			</FormField>
-		{/if}
+				</FormField>
+			{/if}
 
-		<div class="modal__actions">
-			<Button type="submit">Save</Button>
-			<Button variant="ghost" type="button" onclick={() => runeModal.close()}>Cancel</Button>
-		</div>
-	</form>
-</Modal>
+			<div class="rune-icon-settings">
+				<FormField label="Icon Background (optional)">
+					<ImageUploader
+						bind:value={runeModal.formData.icon_background_path}
+						folder={`rune_backgrounds/${runeModal.formData.id ?? 'unassigned'}`}
+						cropTransparent={false}
+						aspectRatio="1 / 1"
+						onupload={() => {
+							runeIconNeedsRegeneration = true;
+						}}
+						onerror={(message) => alert(message)}
+					/>
+					<div class="rune-icon-hint">
+						{#if runeIconNeedsRegeneration}
+							<span class="rune-icon-hint__dirty">Icon will regenerate on save.</span>
+						{:else}
+							<span>Icon is up to date.</span>
+						{/if}
+						{#if runeIconStatus}
+							<span class="rune-icon-hint__status">{runeIconStatus}</span>
+						{/if}
+					</div>
+				</FormField>
+
+				<div class="rune-icon-preview">
+					{#if runeModal.formData.icon_path}
+						{@const iconPreviewUrl = publicAssetUrl(runeModal.formData.icon_path, { updatedAt: runeModal.formData.updated_at ?? Date.now() })}
+						{#if iconPreviewUrl}
+							<img src={iconPreviewUrl} alt="Rune icon preview" />
+						{:else}
+							<div class="rune-icon-preview__empty">No exported icon</div>
+						{/if}
+					{:else}
+						<div class="rune-icon-preview__empty">No exported icon</div>
+					{/if}
+				</div>
+			</div>
+
+			<div class="modal__actions">
+				<Button variant="primary" type="submit" loading={savingRune}>
+					{runeIconNeedsRegeneration ? 'Save & Export' : 'Save'}
+				</Button>
+				<Button variant="ghost" type="button" onclick={() => runeModal.close()} disabled={savingRune}>
+					Cancel
+				</Button>
+			</div>
+		</form>
+	</Modal>
 
 <style>
 	.item-count {
@@ -2387,17 +2671,67 @@
 		margin: 0;
 	}
 
-	.modal__actions {
-		display: flex;
-		gap: 0.6rem;
-		justify-content: flex-end;
-		margin-top: 1rem;
-	}
+		.modal__actions {
+			display: flex;
+			gap: 0.6rem;
+			justify-content: flex-end;
+			margin-top: 1rem;
+		}
 
-	.modal-footer-actions {
-		display: flex;
-		gap: 0.6rem;
-		justify-content: flex-end;
+		.rune-icon-settings {
+			display: grid;
+			grid-template-columns: 1fr 140px;
+			gap: 1rem;
+			align-items: start;
+			margin-top: 0.75rem;
+		}
+
+		.rune-icon-preview {
+			width: 140px;
+			height: 140px;
+			border-radius: 12px;
+			border: 1px solid rgba(148, 163, 184, 0.18);
+			background: rgba(15, 23, 42, 0.35);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			overflow: hidden;
+		}
+
+		.rune-icon-preview img {
+			width: 100%;
+			height: 100%;
+			object-fit: contain;
+		}
+
+		.rune-icon-preview__empty {
+			font-size: 0.7rem;
+			color: rgba(148, 163, 184, 0.7);
+			text-align: center;
+			padding: 0.5rem;
+		}
+
+		.rune-icon-hint {
+			margin-top: 0.5rem;
+			font-size: 0.7rem;
+			color: rgba(148, 163, 184, 0.8);
+			display: flex;
+			flex-direction: column;
+			gap: 0.25rem;
+		}
+
+		.rune-icon-hint__dirty {
+			color: rgba(251, 191, 36, 0.9);
+		}
+
+		.rune-icon-hint__status {
+			color: rgba(148, 163, 184, 0.9);
+		}
+
+		.modal-footer-actions {
+			display: flex;
+			gap: 0.6rem;
+			justify-content: flex-end;
 	}
 
 	@media (max-width: 640px) {

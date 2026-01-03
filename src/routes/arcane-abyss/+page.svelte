@@ -133,12 +133,17 @@
 				.map(id => specialEffects.find(e => e.id === id))
 				.filter((e): e is SpecialEffectRow => e !== undefined);
 
+			const invadeLocation = monster.invade_location_id
+				? invadeLocations.find(loc => loc.id === monster.invade_location_id)
+				: null;
+
 			return {
 				...monster,
 				icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
 				art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
 				resolved_reward_rows: resolvedRewardRows,
-				effects: monsterEffects
+				effects: monsterEffects,
+				invade_location_name: invadeLocation?.name ?? null
 			};
 		});
 
@@ -223,13 +228,23 @@
 			.filter((x): x is { id: string; order_num: number } => x !== null);
 
 		if (monsterUpdates.length > 0) {
-			const { error: err } = await supabase.from('monsters').upsert(monsterUpdates, { onConflict: 'id' });
-			if (err) throw err;
+			for (const update of monsterUpdates) {
+				const { error: err } = await supabase
+					.from('monsters')
+					.update({ order_num: update.order_num })
+					.eq('id', update.id);
+				if (err) throw err;
+			}
 		}
 
 		if (eventUpdates.length > 0) {
-			const { error: err } = await supabase.from('events').upsert(eventUpdates, { onConflict: 'id' });
-			if (err) throw err;
+			for (const update of eventUpdates) {
+				const { error: err } = await supabase
+					.from('events')
+					.update({ order_num: update.order_num })
+					.eq('id', update.id);
+				if (err) throw err;
+			}
 		}
 
 		await Promise.all([loadMonsters(), loadEvents()]);

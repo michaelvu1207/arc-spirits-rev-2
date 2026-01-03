@@ -28,7 +28,7 @@ generators/
 Generate PNG images for game cards (artifacts, monsters, events).
 
 ```typescript
-import { generateArtifactCardPNG, generateMonsterCardPNG, generateEventCardPNG } from '$lib/generators/cards';
+import { generateArtifactCardPNG, generateMonsterCardPNG, generateEventCardPNG, generateTravelerCardPNG } from '$lib/generators/cards';
 
 // Generate artifact card
 const artifactBlob = await generateArtifactCardPNG(artifact, origins, runes, tags, guardians);
@@ -38,6 +38,9 @@ const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewar
 
 // Generate event card
 const eventBlob = await generateEventCardPNG(event, artUrl);
+
+// Generate traveler card
+const travelerBlob = await generateTravelerCardPNG(traveler);
 ```
 
 ### Dice Generators
@@ -112,14 +115,19 @@ The `shared/canvas.ts` module provides these utilities:
 - **Dependencies**: Requires rune icon generation utilities
 
 ### Monster Cards
-- **Dimensions**: 600x400px (300px data panel, 300px art)
-- **Features**: Grayscale art, state color coding, reward rows with icons, special effects
-- **States**: tainted (purple), corrupt (dark purple), fallen (green), boss (red)
+- **Dimensions**: 600x437px (Blood Crimson template, exported at 2x resolution)
+- **Features**: Full-height art panel with floating stat bar, vein/slash overlays, effect list, kill/defeat reward icons
+- **States**: tainted/corrupt/fallen/boss (red spectrum)
 
 ### Event Cards
 - **Dimensions**: 600x400px
 - **Features**: Diagonal overlay, grayscale zoomed art (130%), order badge
 - **Styling**: Blue accent color for events
+
+### Traveler Cards
+- **Dimensions**: 600x437px
+- **Features**: Canvas-rendered traveler layout with art window, description, gain/trade rows
+- **Rendering**: Drawn directly to canvas for consistent 1:1 output
 
 ## Dice Generator Details
 

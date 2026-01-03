@@ -1,3 +1,20 @@
+/* Opsilon Font Family */
+@font-face {
+	font-family: 'Opsilon';
+	src: url('/fonts/Opsilon-Regular.ttf') format('truetype');
+	font-weight: normal;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Opsilon';
+	src: url('/fonts/Opsilon-Italic.ttf') format('truetype');
+	font-weight: normal;
+	font-style: italic;
+	font-display: swap;
+}
+
 :root {
 	color-scheme: dark;
 	font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;

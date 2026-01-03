@@ -596,7 +596,7 @@
 					<FormField label="Barrier">
 						<Input type="number" min={0} bind:value={monsterFormData.barrier} />
 					</FormField>
-					<FormField label="Quantity" hint="Copies in deck">
+					<FormField label="Quantity" helperText="Copies in deck">
 						<Input type="number" min={1} bind:value={monsterFormData.quantity} />
 					</FormField>
 					<FormField label="State">

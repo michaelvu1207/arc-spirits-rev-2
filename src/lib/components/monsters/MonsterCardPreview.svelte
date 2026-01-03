@@ -1,4 +1,8 @@
 <script lang="ts">
+	/**
+	 * Blood Crimson Monster Card
+	 * Dark red/purple theme with floating stat bar over art
+	 */
 	import type { MonsterRow, SpecialEffectRow, RewardRow } from '$lib/types/gameData';
 	import { REWARD_ROW_CONFIG } from '$lib/types/gameData';
 
@@ -11,367 +15,396 @@
 		art_url?: string | null;
 		resolved_reward_rows?: ResolvedRewardRow[];
 		effects?: SpecialEffectRow[];
+		invade_location_name?: string | null;
 	};
 
 	export let monster: Monster;
 	export let orderNum: number | undefined = undefined;
+	export let footerLabel: string = 'Monster';
 
 	const stateColors: Record<string, string> = {
-		tainted: '#c084fc',
-		corrupt: '#6b21a8',
-		fallen: '#065f46',
-		boss: '#ef4444'
+		tainted: '#dc2626',
+		corrupt: '#991b1b',
+		fallen: '#7f1d1d',
+		boss: '#450a0a'
 	};
 
-	$: stateColor = stateColors[monster.state ?? 'tainted'] ?? '#94a3b8';
-	$: validRewardRows = (monster.resolved_reward_rows ?? []).filter(row => row.icon_urls?.some(Boolean));
-	$: tournamentRow = validRewardRows.find(r => r.type === 'tournament');
-	$: standardRows = validRewardRows.filter(r => r.type !== 'tournament');
+	$: stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
+	$: killRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean));
+	$: defeatRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
 </script>
 
-<div class="monster-card-preview">
-	<!-- Data Panel (Left) -->
-	<div class="data-panel">
-		<!-- Header -->
-		<div class="card-header">
-			{#if monster.icon_url}
-				<img src={monster.icon_url} alt="" class="monster-icon" />
-			{:else if monster.icon}
-				<div class="monster-icon-emoji">{monster.icon}</div>
-			{/if}
-			<div class="header-text">
-				<h3 class="monster-name">{monster.name}</h3>
-			</div>
-		</div>
+<div class="blood-card">
+	<!-- Vein Pattern Overlay -->
+	<div class="vein-overlay"></div>
 
-		<!-- State Badge -->
-		<div class="state-badge" style="--state-color: {stateColor}">
-			{(monster.state ?? 'tainted').toUpperCase()}
-		</div>
+	<!-- Main Content Area -->
+	<div class="main-area">
+		<div class="slash-marks"></div>
 
-		<!-- Stats Box -->
-		<div class="stats-box">
-			<div class="stat">
-				<span class="stat-label">DAMAGE</span>
-				<span class="stat-value">{monster.damage ?? 0}</span>
-			</div>
-			<div class="stat">
-				<span class="stat-label">BARRIER</span>
-				<span class="stat-value">{(monster as any).barrier ?? 0}</span>
+		<div class="content-zone">
+			<!-- Header -->
+			<div class="header-row">
+				{#if monster.icon_url}
+					<img src={monster.icon_url} alt="" class="monster-icon" />
+				{:else if monster.icon}
+					<div class="monster-icon-emoji">{monster.icon}</div>
+				{/if}
+				<div class="name-block">
+					<h3 class="monster-name">{monster.name}</h3>
+					{#if monster.invade_location_name}
+						<div class="invade-subtitle">Invades: {monster.invade_location_name}</div>
+					{/if}
+				</div>
 			</div>
 
+			<!-- Effects -->
 			{#if monster.effects && monster.effects.length > 0}
-				<div class="effects-divider"></div>
-				<div class="effects-list">
-					{#each monster.effects.slice(0, 4) as effect}
+				<div class="effects-section">
+					{#each monster.effects.slice(0, 2) as effect}
 						<div class="effect-item">
-							<span class="effect-name" style="color: {effect.color || '#a78bfa'}">{effect.name}:</span>
+							<span class="effect-bullet"></span>
+							<span class="effect-name">{effect.name}:</span>
 							<span class="effect-desc">{@html effect.description || ''}</span>
 						</div>
 					{/each}
 				</div>
 			{/if}
-		</div>
 
-		<!-- Tournament Reward Row -->
-		{#if tournamentRow}
-			{@const config = REWARD_ROW_CONFIG[tournamentRow.type]}
-			<div class="tournament-rewards">
-				<div class="tournament-title" style="color: {config.color}">
-					THOSE THAT KILL, RANK DAMAGE
-				</div>
-				<div class="tournament-headers">
-					<div class="tournament-header">
-						<span class="placement">1ST</span>
-						<span class="choose">CHOOSE 3</span>
-					</div>
-					<div class="tournament-divider"></div>
-					<div class="tournament-header">
-						<span class="placement">2ND</span>
-						<span class="choose">CHOOSE 2</span>
-					</div>
-					<div class="tournament-divider"></div>
-					<div class="tournament-header">
-						<span class="placement">3RD+</span>
-						<span class="choose">CHOOSE 1</span>
+			<!-- Kill Reward Row -->
+			{#if killRewardRow}
+				<div class="reward-section">
+					<div class="reward-label">On kill, all in combat gain:</div>
+					<div class="reward-icons">
+						{#each killRewardRow.icon_urls.filter(Boolean) as iconUrl}
+							<img src={iconUrl} alt="" class="reward-icon" />
+						{/each}
 					</div>
 				</div>
-				<div class="reward-icons-panel" style="
-					background: {config.bgColor};
-					border-color: {config.borderColor};
-				">
-					{#each tournamentRow.icon_urls.filter(Boolean).slice(0, 5) as iconUrl}
-						<img src={iconUrl} alt="" class="reward-icon" />
-					{/each}
+			{/if}
+
+			<!-- Defeat Reward Row -->
+			{#if defeatRewardRow}
+				<div class="reward-section">
+					<div class="reward-label">All in monster combat gain:</div>
+					<div class="reward-icons">
+						{#each defeatRewardRow.icon_urls.filter(Boolean) as iconUrl}
+							<img src={iconUrl} alt="" class="reward-icon" />
+						{/each}
+					</div>
 				</div>
+			{/if}
+
+			<!-- Footer -->
+			<div class="card-footer">
+				<span class="footer-label">Arc Spirits // {footerLabel}</span>
+				<span class="state-badge" style="--state-color: {stateColor}">
+					{(monster.state ?? 'tainted').toUpperCase()}
+				</span>
 			</div>
-		{/if}
-
-		<!-- Standard Reward Rows -->
-		{#each standardRows as row}
-			{@const config = REWARD_ROW_CONFIG[row.type] || REWARD_ROW_CONFIG.all_in_combat}
-			<div class="reward-row">
-				<div class="reward-label" style="color: {config.color}">
-					{row.label || config.label}
-				</div>
-				<div class="reward-icons-panel" style="
-					background: {config.bgColor};
-					border-color: {config.borderColor};
-				">
-					{#each row.icon_urls.filter(Boolean).slice(0, 5) as iconUrl}
-						<img src={iconUrl} alt="" class="reward-icon" />
-					{/each}
-				</div>
-			</div>
-		{/each}
-
-		<!-- Footer -->
-		<div class="card-footer">
-			Arc Spirits // Monster
 		</div>
 	</div>
 
-	<!-- Art Panel (Right) -->
+	<!-- Art Panel with Floating Stats -->
 	<div class="art-panel">
 		{#if monster.art_url}
 			<img src={monster.art_url} alt={monster.name} class="monster-art" />
 		{:else}
-			<div class="no-art">No artwork</div>
+			<div class="no-art"></div>
 		{/if}
+		<div class="art-gradient"></div>
+
+		<!-- Floating Stat Bar -->
+		<div class="floating-stat-bar">
+			<div class="stat-slot damage">
+				<span class="stat-value">{monster.damage ?? 0}</span>
+				<span class="stat-label">DMG</span>
+			</div>
+			<div class="stat-slot barrier">
+				<span class="stat-value">{(monster as any).barrier ?? 0}</span>
+				<span class="stat-label">BAR</span>
+			</div>
+		</div>
 	</div>
 </div>
 
 <style>
-	.monster-card-preview {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		background: #0c0b13;
-		border-radius: 12px;
-		overflow: hidden;
-		border-left: 6px solid #a855f7;
+	.blood-card {
 		width: 600px;
 		height: 437px;
+		font-family: 'Opsilon', serif;
+		position: relative;
+		display: grid;
+		grid-template-columns: 1.2fr 0.8fr;
+		background: linear-gradient(135deg, #1a0505 0%, #430d4a 50%, #0d0202 100%);
+		border-radius: 4px;
+		overflow: hidden;
+		box-shadow:
+			0 4px 24px rgba(220, 38, 38, 0.3),
+			0 0 60px rgba(127, 29, 29, 0.2),
+			inset 0 0 100px rgba(0, 0, 0, 0.5);
+		border: 2px solid #3d0363;
 	}
 
-	.data-panel {
-		padding: 16px 20px;
+	.vein-overlay {
+		position: absolute;
+		inset: 0;
+		background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10,50 Q30,20 50,50 T90,50' stroke='%23450a0a' stroke-width='1' fill='none' opacity='0.3'/%3E%3Cpath d='M20,30 Q40,60 60,30 T100,30' stroke='%23450a0a' stroke-width='0.5' fill='none' opacity='0.2'/%3E%3C/svg%3E");
+		pointer-events: none;
+		opacity: 0.8;
+	}
+
+	.main-area {
+		position: relative;
+		padding: 20px;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		border-right: 2px solid rgba(168, 85, 247, 0.25);
+		background: linear-gradient(135deg, rgba(45, 10, 10, 0.9) 0%, rgba(26, 5, 5, 0.95) 100%);
+		z-index: 2;
 	}
 
-	.card-header {
+	.slash-marks {
+		position: absolute;
+		top: 10px;
+		right: 10px;
+		width: 60px;
+		height: 80px;
+		background: repeating-linear-gradient(
+			-45deg,
+			transparent,
+			transparent 8px,
+			rgba(220, 38, 38, 0.2) 8px,
+			rgba(220, 38, 38, 0.2) 10px
+		);
+		pointer-events: none;
+	}
+
+	.content-zone {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		position: relative;
+		z-index: 1;
+		gap: 10px;
+	}
+
+	.header-row {
 		display: flex;
 		align-items: center;
 		gap: 12px;
 	}
 
 	.monster-icon {
-		width: 48px;
-		height: 48px;
+		width: 52px;
+		height: 52px;
 		object-fit: contain;
+		border-radius: 4px;
+		border: 2px solid #991b1b;
+		background: rgba(0, 0, 0, 0.5);
+		box-shadow: 0 0 15px rgba(220, 38, 38, 0.4);
 	}
 
 	.monster-icon-emoji {
-		font-size: 2.5rem;
-		width: 48px;
-		height: 48px;
+		font-size: 2.8rem;
+		width: 52px;
+		height: 52px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		filter: drop-shadow(0 0 8px rgba(220, 38, 38, 0.6));
 	}
 
-	.header-text {
-		flex: 1;
-	}
-
-	.monster-name {
-		margin: 0;
-		font-size: 1.4rem;
-		font-weight: 700;
-		color: #f5f3ff;
-		line-height: 1.2;
-	}
-
-	.state-badge {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		padding: 4px 12px;
-		border-radius: 8px;
-		font-size: 0.75rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		background: var(--state-color);
-		color: #0f172a;
-		width: fit-content;
-	}
-
-	.stats-box {
-		background: rgba(91, 33, 182, 0.35);
-		border: 2px solid rgba(168, 85, 247, 0.6);
-		border-radius: 14px;
-		padding: 12px 16px;
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 8px;
-	}
-
-	.stat {
+	.name-block {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 	}
 
-	.stat-label {
-		font-size: 0.7rem;
-		font-weight: 700;
-		color: #d8b4fe;
-		letter-spacing: 0.03em;
-	}
-
-	.stat-value {
-		font-size: 1.5rem;
+	.monster-name {
+		font-size: 2.1rem;
 		font-weight: 800;
-		color: #f5f3ff;
+		color: #fecaca;
+		margin: 0;
+		letter-spacing: 1px;
+		text-shadow:
+			0 0 10px rgba(220, 38, 38, 0.5),
+			0 2px 4px rgba(0, 0, 0, 0.5);
+		text-transform: uppercase;
 	}
 
-	.effects-divider {
-		grid-column: 1 / -1;
-		height: 1px;
-		background: rgba(168, 85, 247, 0.3);
-		margin: 4px 0;
+	.invade-subtitle {
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: #b89090;
+		letter-spacing: 0.03em;
+		font-style: italic;
 	}
 
-	.effects-list {
-		grid-column: 1 / -1;
+	.state-badge {
+		padding: 4px 10px;
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		background: var(--state-color);
+		color: #fecaca;
+		border-radius: 3px;
+	}
+
+	.effects-section {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 8px;
+		flex: 1;
+		padding: 12px;
+		background: rgba(0, 0, 0, 0.4);
+		border-left: 3px solid #dc2626;
+		clip-path: polygon(0 0, 100% 0, 98% 100%, 0 100%);
 	}
 
 	.effect-item {
-		font-size: 0.7rem;
+		font-size: 0.8rem;
 		line-height: 1.4;
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+	}
+
+	.effect-bullet {
+		width: 6px;
+		height: 6px;
+		background: #dc2626;
+		transform: rotate(45deg);
+		flex-shrink: 0;
+		margin-top: 5px;
 	}
 
 	.effect-name {
 		font-weight: 700;
+		color: #fca5a5;
 	}
 
 	.effect-desc {
-		color: #cbd5e1;
+		color: #a8a0b0;
 	}
 
-	.tournament-rewards {
+	.reward-section {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
-	}
-
-	.tournament-title {
-		font-size: 0.65rem;
-		font-weight: 700;
-		letter-spacing: 0.02em;
-	}
-
-	.tournament-headers {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0;
-	}
-
-	.tournament-header {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 0 12px;
-	}
-
-	.tournament-header .placement {
-		font-size: 0.7rem;
-		font-weight: 700;
-		color: #fcd34d;
-	}
-
-	.tournament-header .choose {
-		font-size: 0.6rem;
-		font-weight: 600;
-		color: #d97706;
-	}
-
-	.tournament-divider {
-		width: 1px;
-		height: 24px;
-		background: rgba(251, 191, 36, 0.3);
-	}
-
-	.reward-row {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
+		gap: 6px;
 	}
 
 	.reward-label {
 		font-size: 0.65rem;
-		font-weight: 700;
+		font-weight: 600;
+		color: #b89090;
 		letter-spacing: 0.02em;
 	}
 
-	.reward-icons-panel {
+	.reward-icons {
 		display: flex;
 		gap: 6px;
-		padding: 6px 8px;
-		border-radius: 6px;
-		border: 1px solid;
-		justify-content: center;
+		flex-wrap: wrap;
 	}
 
 	.reward-icon {
-		width: 32px;
-		height: 32px;
+		width: 36px;
+		height: 36px;
 		object-fit: contain;
+		border-radius: 4px;
 	}
 
 	.card-footer {
-		margin-top: auto;
-		padding-top: 8px;
-		font-size: 0.75rem;
-		color: #64748b;
-		font-weight: 500;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding-top: 10px;
+		border-top: 1px solid rgba(220, 38, 38, 0.3);
+	}
+
+	.footer-label {
+		font-size: 0.7rem;
+		color: #991b1b;
+		font-weight: 600;
+		letter-spacing: 0.05em;
 	}
 
 	.art-panel {
-		background: rgba(12, 10, 19, 0.9);
-		display: flex;
-		align-items: center;
-		justify-content: center;
+		position: relative;
 		overflow: hidden;
+		z-index: 1;
 	}
 
 	.monster-art {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
-		filter: grayscale(100%);
+		filter: saturate(80%) contrast(120%) brightness(90%);
 	}
 
 	.no-art {
-		color: #64748b;
-		font-size: 0.9rem;
+		width: 100%;
+		height: 100%;
+		background: linear-gradient(135deg, #1a0505, #0d0202);
 	}
 
-	@media (max-width: 500px) {
-		.monster-card-preview {
-			grid-template-columns: 1fr;
-			grid-template-rows: auto 200px;
-		}
+	.art-gradient {
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(90deg, rgba(26, 5, 5, 0.9) 0%, rgba(45, 10, 10, 0.4) 30%, transparent 60%);
+		pointer-events: none;
+	}
 
-		.data-panel {
-			border-right: none;
-			border-bottom: 2px solid rgba(168, 85, 247, 0.25);
-		}
+	/* Floating Stat Bar */
+	.floating-stat-bar {
+		position: absolute;
+		bottom: 12px;
+		right: 12px;
+		display: flex;
+		gap: 6px;
+		padding: 6px 8px;
+		background: linear-gradient(135deg, rgba(20, 8, 8, 0.92) 0%, rgba(15, 5, 5, 0.95) 100%);
+		border: 1px solid rgba(120, 40, 40, 0.6);
+		border-radius: 6px;
+		backdrop-filter: blur(6px);
+		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+		z-index: 10;
+	}
+
+	.stat-slot {
+		width: 54px;
+		height: 54px;
+		background: rgba(0, 0, 0, 0.5);
+		border: 1px solid rgba(100, 30, 30, 0.7);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		position: relative;
+		border-radius: 4px;
+	}
+
+	.stat-slot.damage {
+		background: linear-gradient(135deg, rgba(80, 20, 20, 0.6), rgba(20, 5, 5, 0.7));
+		border-color: rgba(140, 50, 50, 0.7);
+	}
+
+	.stat-slot.barrier {
+		background: linear-gradient(135deg, rgba(60, 25, 25, 0.5), rgba(20, 5, 5, 0.7));
+		border-color: rgba(100, 40, 40, 0.6);
+	}
+
+	.stat-label {
+		font-size: 0.5rem;
+		font-weight: 600;
+		color: rgba(180, 140, 140, 0.8);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.stat-value {
+		font-size: 1.3rem;
+		font-weight: 800;
+		color: rgba(240, 220, 220, 0.95);
+		line-height: 1;
 	}
 </style>

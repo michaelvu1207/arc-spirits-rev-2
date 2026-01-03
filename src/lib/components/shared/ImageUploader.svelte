@@ -12,6 +12,7 @@
 		/** Whether to crop transparent areas from images (default: true) */
 		cropTransparent?: boolean;
 		onupload?: (path: string) => void;
+		onremove?: (previousPath: string) => void;
 		onerror?: (error: string) => void;
 		children?: Snippet;
 	}
@@ -25,6 +26,7 @@
 		aspectRatio,
 		cropTransparent = true,
 		onupload,
+		onremove,
 		onerror,
 		children
 	}: Props = $props();
@@ -91,11 +93,13 @@
 
 		removing = true;
 		try {
+			const previousPath = value;
 			const { error } = await deleteStorageFile(bucket, value);
 			if (error) {
 				throw error;
 			}
 			value = null;
+			onremove?.(previousPath);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			onerror?.(message);

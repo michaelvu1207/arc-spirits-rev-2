@@ -53,7 +53,7 @@
 	totalCount={editions.length}
 	onSelectAll={selectAll}
 	onDeselectAll={deselectAll}
-	onDelete={deleteSelected}
+	onDeleteSelected={deleteSelected}
 />
 
 <section class="card-grid">

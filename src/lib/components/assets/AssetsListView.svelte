@@ -42,7 +42,7 @@
 	}
 
 	function selectAll() {
-		selectedIds = new Set(allAssets.map((asset) => asset.id));
+		selectedIds = new Set(allAssets.map((asset) => asset.filename));
 	}
 
 	function deselectAll() {
@@ -70,12 +70,12 @@
 		<h2>Origin Icons ({originImages.length})</h2>
 		<div class="asset-list">
 			{#each originImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.id)}>
+				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.id)}
-							onchange={() => toggleSelect(asset.id)}
+							checked={selectedIds.has(asset.filename)}
+							onchange={() => toggleSelect(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -91,12 +91,12 @@
 		<h2>Rune Icons ({runeImages.length})</h2>
 		<div class="asset-list">
 			{#each runeImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.id)}>
+				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.id)}
-							onchange={() => toggleSelect(asset.id)}
+							checked={selectedIds.has(asset.filename)}
+							onchange={() => toggleSelect(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -112,12 +112,12 @@
 		<h2>Hex Spirit Images ({hexSpiritImages.length})</h2>
 		<div class="asset-list">
 			{#each hexSpiritImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.id)}>
+				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.id)}
-							onchange={() => toggleSelect(asset.id)}
+							checked={selectedIds.has(asset.filename)}
+							onchange={() => toggleSelect(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -133,12 +133,12 @@
 		<h2>Dice Faces ({diceFaceImages.length})</h2>
 		<div class="asset-list">
 			{#each diceFaceImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.id)}>
+				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.id)}
-							onchange={() => toggleSelect(asset.id)}
+							checked={selectedIds.has(asset.filename)}
+							onchange={() => toggleSelect(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -154,12 +154,12 @@
 		<h2>Misc Assets ({miscAssetImages.length})</h2>
 		<div class="asset-list">
 			{#each miscAssetImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.id)}>
+				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.id)}
-							onchange={() => toggleSelect(asset.id)}
+							checked={selectedIds.has(asset.filename)}
+							onchange={() => toggleSelect(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />

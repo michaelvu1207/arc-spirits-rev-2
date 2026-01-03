@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
 	import { Button } from '$lib/components/ui';
-	import { PageLayout } from '$lib/components/layout';
+	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { processAndUploadImage } from '$lib/utils/storage';
 	import type { GuardianRow, OriginRow } from '$lib/types/gameData';
 
@@ -20,6 +20,9 @@
 
 	type PlayerColorId = typeof PLAYER_COLORS[number]['id'];
 	type GuardianImageType = 'char_select' | `${PlayerColorId}_selected`;
+
+	const tabs: Tab[] = [];
+	const activeTab = '';
 
 	// State
 	let guardians: GuardianRow[] = $state([]);
@@ -187,6 +190,8 @@
 <PageLayout
 	title="TTS Menu"
 	subtitle="Configure character selection menu graphics for Tabletop Simulator"
+	{tabs}
+	{activeTab}
 >
 	{#if loading}
 		<div class="loading-state">Loading...</div>

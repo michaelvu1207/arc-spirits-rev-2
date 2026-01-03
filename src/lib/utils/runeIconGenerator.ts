@@ -9,6 +9,48 @@ export interface RuneIconOptions {
 	size?: number;
 }
 
+function drawIconWithOutline(
+	ctx: CanvasRenderingContext2D,
+	source: CanvasImageSource,
+	drawX: number,
+	drawY: number,
+	drawW: number,
+	drawH: number,
+	outlinePx: number,
+	outlineColor: string
+) {
+	const outline = Math.max(0, Math.round(outlinePx));
+	if (outline === 0) {
+		ctx.drawImage(source, drawX, drawY, drawW, drawH);
+		return;
+	}
+
+	const maskCanvas = document.createElement('canvas');
+	maskCanvas.width = Math.max(1, Math.round(drawW));
+	maskCanvas.height = Math.max(1, Math.round(drawH));
+	const maskCtx = maskCanvas.getContext('2d');
+	if (!maskCtx) {
+		ctx.drawImage(source, drawX, drawY, drawW, drawH);
+		return;
+	}
+
+	maskCtx.drawImage(source, 0, 0, maskCanvas.width, maskCanvas.height);
+	maskCtx.globalCompositeOperation = 'source-in';
+	maskCtx.fillStyle = outlineColor;
+	maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+	maskCtx.globalCompositeOperation = 'source-over';
+
+	for (let dy = -outline; dy <= outline; dy++) {
+		for (let dx = -outline; dx <= outline; dx++) {
+			if (dx === 0 && dy === 0) continue;
+			if (dx * dx + dy * dy > outline * outline) continue;
+			ctx.drawImage(maskCanvas, drawX + dx, drawY + dy, drawW, drawH);
+		}
+	}
+
+	ctx.drawImage(source, drawX, drawY, drawW, drawH);
+}
+
 /**
  * Creates an SVG data URL for a rune icon with a custom background
  */
@@ -26,6 +68,8 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 	const scaledIconSize = iconSize * 0.7;
 	const iconPadding = (iconSize - scaledIconSize) / 2;
 	const canvasRadius = size / 2; // Radius for clipping the entire rune icon to a circle
+	const iconOutlinePx = Math.max(2, Math.round(scaledIconSize * 0.03));
+	const iconOutlineColor = '#2b1a12';
 
 	// Determine background content
 	let backgroundContent = '';
@@ -53,10 +97,10 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 		// Use image - preserve aspect ratio with xMidYMid meet, 30% smaller
 		const iconX = padding + iconPadding;
 		const iconY = padding + iconPadding;
-		centerContent = `<image href="${options.originIconUrl}" x="${iconX}" y="${iconY}" width="${scaledIconSize}" height="${scaledIconSize}" preserveAspectRatio="xMidYMid meet" />`;
+		centerContent = `<image href="${options.originIconUrl}" x="${iconX}" y="${iconY}" width="${scaledIconSize}" height="${scaledIconSize}" preserveAspectRatio="xMidYMid meet" filter="url(#iconOutline)" />`;
 	} else if (options.originIconEmoji) {
 		// Use emoji/text (rendered as text), 30% smaller
-		centerContent = `<text x="${center}" y="${center + scaledIconSize * 0.35}" font-size="${scaledIconSize * 0.7}" text-anchor="middle" dominant-baseline="middle">${options.originIconEmoji}</text>`;
+		centerContent = `<text x="${center}" y="${center + scaledIconSize * 0.35}" font-size="${scaledIconSize * 0.7}" text-anchor="middle" dominant-baseline="middle" filter="url(#iconOutline)">${options.originIconEmoji}</text>`;
 	}
 
 	const svg = `
@@ -65,6 +109,15 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 				<clipPath id="runeCircle">
 					<circle cx="${center}" cy="${center}" r="${canvasRadius}" />
 				</clipPath>
+				<filter id="iconOutline" x="0" y="0" width="${size}" height="${size}" filterUnits="userSpaceOnUse">
+					<feMorphology in="SourceAlpha" operator="dilate" radius="${iconOutlinePx}" result="dilated" />
+					<feFlood flood-color="${iconOutlineColor}" result="flood" />
+					<feComposite in="flood" in2="dilated" operator="in" result="outline" />
+					<feMerge>
+						<feMergeNode in="outline" />
+						<feMergeNode in="SourceGraphic" />
+					</feMerge>
+				</filter>
 			</defs>
 			<g clip-path="url(#runeCircle)">
 				${backgroundContent}
@@ -161,6 +214,8 @@ export async function generateRuneIconCanvas(
 	// Icon size: 30% smaller than original iconSize
 	const scaledIconSize = iconSize * 0.7;
 	const iconPadding = (iconSize - scaledIconSize) / 2;
+	const iconOutlinePx = Math.max(2, Math.round(scaledIconSize * 0.03));
+	const iconOutlineColor = '#2b1a12';
 
 	// Draw origin icon centered over background (NOT clipped to circle)
 	if (options.originIconUrl) {
@@ -191,15 +246,19 @@ export async function generateRuneIconCanvas(
 				drawY = center - drawHeight / 2;
 			}
 
-			ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+			drawIconWithOutline(ctx, img, drawX, drawY, drawWidth, drawHeight, iconOutlinePx, iconOutlineColor);
 		} catch (err) {
 			console.warn('Failed to load origin icon image:', err);
 			// Fallback to emoji if image fails
 			if (options.originIconEmoji) {
-				ctx.fillStyle = '#1e293b';
 				ctx.font = `${scaledIconSize * 0.7}px sans-serif`;
 				ctx.textAlign = 'center';
 				ctx.textBaseline = 'middle';
+				ctx.lineJoin = 'round';
+				ctx.strokeStyle = iconOutlineColor;
+				ctx.lineWidth = iconOutlinePx * 2;
+				ctx.strokeText(options.originIconEmoji, center, center);
+				ctx.fillStyle = '#1e293b';
 				ctx.fillText(options.originIconEmoji, center, center);
 			}
 		}
@@ -284,13 +343,26 @@ export async function generateRuneIconCanvas(
 			const drawX = center - normalizedWidth / 2;
 			const drawY = center - normalizedHeight / 2;
 
-			ctx.drawImage(croppedEmojiCanvas, drawX, drawY, normalizedWidth, normalizedHeight);
+			drawIconWithOutline(
+				ctx,
+				croppedEmojiCanvas,
+				drawX,
+				drawY,
+				normalizedWidth,
+				normalizedHeight,
+				iconOutlinePx,
+				iconOutlineColor
+			);
 		} else {
 			// Fallback: draw emoji normally if bounding box detection failed
-			ctx.fillStyle = '#1e293b';
 			ctx.font = `${scaledIconSize * 0.7}px sans-serif`;
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
+			ctx.lineJoin = 'round';
+			ctx.strokeStyle = iconOutlineColor;
+			ctx.lineWidth = iconOutlinePx * 2;
+			ctx.strokeText(options.originIconEmoji, center, center);
+			ctx.fillStyle = '#1e293b';
 			ctx.fillText(options.originIconEmoji, center, center);
 		}
 	}
@@ -327,4 +399,3 @@ export async function generateRuneIcon(options: RuneIconOptions): Promise<string
 		return generateRuneIconSVG(options);
 	}
 }
-

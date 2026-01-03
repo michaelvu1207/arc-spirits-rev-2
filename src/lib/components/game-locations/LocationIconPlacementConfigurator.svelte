@@ -2,13 +2,18 @@
 	import { onMount } from 'svelte';
 	import {
 		createDefaultLocationIconConfig,
-		loadLocationIconPlacementConfig,
-		saveLocationIconPlacementConfig,
 		type IconSlot,
 		type LocationIconPlacementConfig,
+		type LocationRowBackgroundConfig,
 		type LocationRowPlacement
 	} from '$lib/generators/locations/locationIconPlacer';
+	import {
+		fetchLocationIconPlacementConfig,
+		upsertLocationIconPlacementConfig
+	} from '$lib/api/locationIconPlacementConfig';
 	import { loadImage } from '$lib/generators/shared/canvas';
+	import { ImageUploader } from '$lib/components/shared';
+	import { getPublicUrl } from '$lib/utils/storage';
 
 	interface SampleLocation {
 		id: string;
@@ -30,7 +35,9 @@
 
 	let selectedSampleId = $state<string>('');
 	let currentRowIndex = $state(0);
-	let currentSlotType = $state<'gain_slots' | 'trade_cost_slots' | 'trade_gain_slots'>('gain_slots');
+	type IconSlotType = 'gain_slots' | 'trade_cost_slots' | 'trade_gain_slots';
+	type EditorTarget = IconSlotType | 'gain_row_background' | 'trade_row_background';
+	let currentSlotType = $state<EditorTarget>('gain_slots');
 	let selectedSlotIndex: number | null = $state(null);
 
 	let jsonEditorOpen = $state(false);
@@ -42,6 +49,15 @@
 	let displayScale = $state(1);
 	let draggingSlot: number | null = $state(null);
 	let dragOffset = $state({ x: 0, y: 0 });
+	let draggingRowBackground = $state<'gain' | 'trade' | null>(null);
+	let draggingRowBackgroundIndex = $state<number | null>(null);
+	let rowBackgroundDragOffset = $state({ x: 0, y: 0 });
+
+	let gainRowBackgroundImage: HTMLImageElement | null = $state(null);
+	let tradeRowBackgroundImage: HTMLImageElement | null = $state(null);
+
+	let lastGainRowBackgroundPath: string | null = null;
+	let lastTradeRowBackgroundPath: string | null = null;
 
 	const sampleUrl = $derived.by(() => {
 		const explicit = sampleLocations.find((l) => l.id === selectedSampleId);
@@ -49,19 +65,76 @@
 		return sampleLocations.find((l) => l.backgroundUrl)?.backgroundUrl ?? null;
 	});
 
+	function isIconSlotType(value: EditorTarget): value is IconSlotType {
+		return value === 'gain_slots' || value === 'trade_cost_slots' || value === 'trade_gain_slots';
+	}
+
 	let currentSlots = $derived.by(() => {
+		if (!isIconSlotType(currentSlotType)) return [];
 		const row = config.rows[currentRowIndex];
 		return row ? (row[currentSlotType] ?? []) : [];
 	});
 
 	onMount(() => {
-		config = loadLocationIconPlacementConfig();
+		void (async () => {
+			config = await fetchLocationIconPlacementConfig();
+		})();
 		selectedSampleId = sampleLocations[0]?.id ?? '';
 	});
 
 	$effect(() => {
 		if (isOpen) {
 			loadSampleImage();
+		}
+	});
+
+	$effect(() => {
+		if (!isOpen) return;
+
+		const gainPath = config.gain_row_background?.path ?? null;
+		if (gainPath !== lastGainRowBackgroundPath) {
+			lastGainRowBackgroundPath = gainPath;
+			const url = getPublicUrl('game_assets', gainPath, false);
+			if (!url) {
+				gainRowBackgroundImage = null;
+				drawCanvas();
+			} else {
+				gainRowBackgroundImage = null;
+				drawCanvas();
+				loadImage(url)
+					.then((img) => {
+						gainRowBackgroundImage = img;
+						drawCanvas();
+					})
+					.catch((err) => {
+						console.warn('Failed to load gain row background image:', err);
+						gainRowBackgroundImage = null;
+						drawCanvas();
+					});
+			}
+		}
+
+		const tradePath = config.trade_row_background?.path ?? null;
+		if (tradePath !== lastTradeRowBackgroundPath) {
+			lastTradeRowBackgroundPath = tradePath;
+			const url = getPublicUrl('game_assets', tradePath, false);
+			if (!url) {
+				tradeRowBackgroundImage = null;
+				drawCanvas();
+			} else {
+				tradeRowBackgroundImage = null;
+				drawCanvas();
+				loadImage(url)
+					.then((img) => {
+						tradeRowBackgroundImage = img;
+						drawCanvas();
+					})
+					.catch((err) => {
+						console.warn('Failed to load trade row background image:', err);
+						tradeRowBackgroundImage = null;
+						drawCanvas();
+					});
+			}
 		}
 	});
 
@@ -93,8 +166,8 @@
 		displayScale = Math.min(1, maxWidth / sampleImage.width);
 	}
 
-	function slotColors() {
-		switch (currentSlotType) {
+	function slotColors(slotType: IconSlotType) {
+		switch (slotType) {
 			case 'trade_cost_slots':
 				return ['#f97316', '#fb7185', '#f59e0b', '#fca5a5', '#fdba74'];
 			case 'trade_gain_slots':
@@ -102,6 +175,88 @@
 			case 'gain_slots':
 			default:
 				return ['#60a5fa', '#a78bfa', '#38bdf8', '#93c5fd', '#818cf8'];
+		}
+	}
+
+	function drawIconSlots(slots: IconSlot[], colors: string[], selectedIndex: number | null) {
+		if (!canvasEl || !sampleImage) return;
+		const ctx = canvasEl.getContext('2d');
+		if (!ctx) return;
+
+		const size = (config._icon_size || 80) * displayScale;
+
+		slots.forEach((slot, i) => {
+			const color = colors[i % colors.length];
+			const x = slot.x * displayScale;
+			const y = slot.y * displayScale;
+
+			ctx.strokeStyle = color;
+			ctx.lineWidth = selectedIndex === i ? 4 : 2;
+			ctx.strokeRect(x, y, size, size);
+
+			ctx.fillStyle = color;
+			ctx.font = `bold ${14 * displayScale}px Arial`;
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(String(i + 1), x + size / 2, y + size / 2);
+		});
+	}
+
+	function defaultRowAnchor(kind: 'gain' | 'trade', rowIndex: number): IconSlot {
+		const y = 40 + rowIndex * 140;
+		return { x: 40, y };
+	}
+
+	function anchorFor(kind: 'gain' | 'trade', rowIndex: number): IconSlot {
+		const row = ensureRow(rowIndex);
+		const slots = kind === 'gain' ? row.gain_slots : row.trade_cost_slots;
+		return slots?.[0] ?? defaultRowAnchor(kind, rowIndex);
+	}
+
+	function rowAnchorDelta(kind: 'gain' | 'trade', rowIndex: number) {
+		const ref = anchorFor(kind, 0);
+		const current = anchorFor(kind, rowIndex);
+		return { dx: current.x - ref.x, dy: current.y - ref.y };
+	}
+
+	function getRowBackgroundDisplayPosition(kind: 'gain' | 'trade', rowIndex: number): { x: number; y: number } {
+		const cfg = kind === 'gain' ? config.gain_row_background : config.trade_row_background;
+		const { dx, dy } = rowAnchorDelta(kind, rowIndex);
+		return { x: (cfg.x ?? 0) + dx, y: (cfg.y ?? 0) + dy };
+	}
+
+	function setRowBackgroundDisplayPosition(kind: 'gain' | 'trade', rowIndex: number, patch: Partial<{ x: number; y: number }>) {
+		const cfg = kind === 'gain' ? config.gain_row_background : config.trade_row_background;
+		const { dx, dy } = rowAnchorDelta(kind, rowIndex);
+		const next: Partial<LocationRowBackgroundConfig> = {};
+
+		if (typeof patch.x === 'number' && Number.isFinite(patch.x)) next.x = Math.max(0, Math.round(patch.x - dx));
+		if (typeof patch.y === 'number' && Number.isFinite(patch.y)) next.y = Math.max(0, Math.round(patch.y - dy));
+
+		updateRowBackground(kind, { ...cfg, ...next });
+	}
+
+	function drawRowBackgrounds(kind: 'gain' | 'trade', img: HTMLImageElement | null, cfg: LocationRowBackgroundConfig) {
+		if (!canvasEl || !sampleImage || !img) return;
+		const ctx = canvasEl.getContext('2d');
+		if (!ctx) return;
+
+		const scale = cfg.scale ?? 1;
+		const w = img.width * scale;
+		const h = img.height * scale;
+
+		for (let rowIndex = 0; rowIndex < config.rows.length; rowIndex++) {
+			const { x, y } = getRowBackgroundDisplayPosition(kind, rowIndex);
+			ctx.drawImage(img, x * displayScale, y * displayScale, w * displayScale, h * displayScale);
+
+			if (
+				(currentSlotType === 'gain_row_background' && kind === 'gain' && rowIndex === currentRowIndex) ||
+				(currentSlotType === 'trade_row_background' && kind === 'trade' && rowIndex === currentRowIndex)
+			) {
+				ctx.strokeStyle = '#eab308';
+				ctx.lineWidth = 3;
+				ctx.strokeRect(x * displayScale, y * displayScale, w * displayScale, h * displayScale);
+			}
 		}
 	}
 
@@ -118,24 +273,29 @@
 
 		ctx.drawImage(sampleImage, 0, 0, scaledWidth, scaledHeight);
 
-		const size = (config._icon_size || 80) * displayScale;
-		const colors = slotColors();
+		if (currentSlotType === 'gain_slots' || currentSlotType === 'gain_row_background') {
+			drawRowBackgrounds('gain', gainRowBackgroundImage, config.gain_row_background);
+		} else if (
+			currentSlotType === 'trade_cost_slots' ||
+			currentSlotType === 'trade_gain_slots' ||
+			currentSlotType === 'trade_row_background'
+		) {
+			drawRowBackgrounds('trade', tradeRowBackgroundImage, config.trade_row_background);
+		}
 
-		currentSlots.forEach((slot, i) => {
-			const color = colors[i % colors.length];
-			const x = slot.x * displayScale;
-			const y = slot.y * displayScale;
+		if (currentSlotType === 'gain_row_background') {
+			drawIconSlots(ensureRow(currentRowIndex).gain_slots ?? [], slotColors('gain_slots'), null);
+			return;
+		}
 
-			ctx.strokeStyle = color;
-			ctx.lineWidth = selectedSlotIndex === i ? 4 : 2;
-			ctx.strokeRect(x, y, size, size);
+		if (currentSlotType === 'trade_row_background') {
+			const row = ensureRow(currentRowIndex);
+			drawIconSlots(row.trade_cost_slots ?? [], slotColors('trade_cost_slots'), null);
+			drawIconSlots(row.trade_gain_slots ?? [], slotColors('trade_gain_slots'), null);
+			return;
+		}
 
-			ctx.fillStyle = color;
-			ctx.font = `bold ${14 * displayScale}px Arial`;
-			ctx.textAlign = 'center';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(String(i + 1), x + size / 2, y + size / 2);
-		});
+		drawIconSlots(currentSlots, slotColors(currentSlotType), selectedSlotIndex);
 	}
 
 	function handleCanvasClick(event: MouseEvent) {
@@ -144,6 +304,55 @@
 		const rect = canvasEl.getBoundingClientRect();
 		const realX = (event.clientX - rect.left) / displayScale;
 		const realY = (event.clientY - rect.top) / displayScale;
+
+		if (currentSlotType === 'gain_row_background') {
+			selectedSlotIndex = null;
+			draggingSlot = null;
+
+			const img = gainRowBackgroundImage;
+			if (!img) return;
+			const bg = config.gain_row_background;
+			const w = img.width * (bg.scale ?? 1);
+			const h = img.height * (bg.scale ?? 1);
+			const pos = getRowBackgroundDisplayPosition('gain', currentRowIndex);
+			if (realX >= pos.x && realX <= pos.x + w && realY >= pos.y && realY <= pos.y + h) {
+				draggingRowBackground = 'gain';
+				draggingRowBackgroundIndex = currentRowIndex;
+				rowBackgroundDragOffset = { x: realX - pos.x, y: realY - pos.y };
+				drawCanvas();
+				return;
+			}
+
+			draggingRowBackground = null;
+			draggingRowBackgroundIndex = null;
+			drawCanvas();
+			return;
+		}
+
+		if (currentSlotType === 'trade_row_background') {
+			selectedSlotIndex = null;
+			draggingSlot = null;
+
+			const img = tradeRowBackgroundImage;
+			if (!img) return;
+			const bg = config.trade_row_background;
+			const w = img.width * (bg.scale ?? 1);
+			const h = img.height * (bg.scale ?? 1);
+			const pos = getRowBackgroundDisplayPosition('trade', currentRowIndex);
+			if (realX >= pos.x && realX <= pos.x + w && realY >= pos.y && realY <= pos.y + h) {
+				draggingRowBackground = 'trade';
+				draggingRowBackgroundIndex = currentRowIndex;
+				rowBackgroundDragOffset = { x: realX - pos.x, y: realY - pos.y };
+				drawCanvas();
+				return;
+			}
+
+			draggingRowBackground = null;
+			draggingRowBackgroundIndex = null;
+			drawCanvas();
+			return;
+		}
+
 		const size = config._icon_size || 80;
 
 		for (let i = 0; i < currentSlots.length; i++) {
@@ -159,10 +368,39 @@
 
 		selectedSlotIndex = null;
 		draggingSlot = null;
+		draggingRowBackground = null;
+		draggingRowBackgroundIndex = null;
 		drawCanvas();
 	}
 
 	function handleCanvasDrag(event: MouseEvent) {
+		if (draggingRowBackground !== null && sampleImage && canvasEl) {
+			const rect = canvasEl.getBoundingClientRect();
+			const realX = (event.clientX - rect.left) / displayScale;
+			const realY = (event.clientY - rect.top) / displayScale;
+
+			const displayPos = {
+				x: Math.max(0, Math.round(realX - rowBackgroundDragOffset.x)),
+				y: Math.max(0, Math.round(realY - rowBackgroundDragOffset.y))
+			};
+
+			const rowIndex = draggingRowBackgroundIndex ?? currentRowIndex;
+			const { dx, dy } = rowAnchorDelta(draggingRowBackground, rowIndex);
+			const nextPos = {
+				x: Math.max(0, Math.round(displayPos.x - dx)),
+				y: Math.max(0, Math.round(displayPos.y - dy))
+			};
+
+			if (draggingRowBackground === 'gain') {
+				config = { ...config, gain_row_background: { ...config.gain_row_background, ...nextPos } };
+			} else {
+				config = { ...config, trade_row_background: { ...config.trade_row_background, ...nextPos } };
+			}
+
+			drawCanvas();
+			return;
+		}
+
 		if (draggingSlot === null || !sampleImage || !canvasEl) return;
 
 		const rect = canvasEl.getBoundingClientRect();
@@ -177,11 +415,14 @@
 
 	function handleCanvasRelease() {
 		draggingSlot = null;
+		draggingRowBackground = null;
+		draggingRowBackgroundIndex = null;
 	}
 
 	function handleCanvasRightClick(event: MouseEvent) {
 		event.preventDefault();
 		if (!sampleImage || !canvasEl) return;
+		if (!isIconSlotType(currentSlotType)) return;
 
 		const rect = canvasEl.getBoundingClientRect();
 		const realX = Math.round((event.clientX - rect.left) / displayScale);
@@ -205,6 +446,9 @@
 		config = { ...config, rows: [...config.rows, ensureRow(nextIndex)] };
 		currentRowIndex = nextIndex;
 		selectedSlotIndex = null;
+		draggingSlot = null;
+		draggingRowBackground = null;
+		draggingRowBackgroundIndex = null;
 		drawCanvas();
 	}
 
@@ -215,6 +459,9 @@
 		config = { ...config, rows: nextRows };
 		currentRowIndex = Math.max(0, Math.min(currentRowIndex, config.rows.length - 1));
 		selectedSlotIndex = null;
+		draggingSlot = null;
+		draggingRowBackground = null;
+		draggingRowBackgroundIndex = null;
 		drawCanvas();
 	}
 
@@ -229,12 +476,14 @@
 	}
 
 	function addSlot(position?: { x: number; y: number }) {
+		if (!isIconSlotType(currentSlotType)) return;
+		const slotType = currentSlotType;
 		const row = ensureRow(currentRowIndex);
-		const slots = row[currentSlotType] ?? [];
+		const slots = row[slotType] ?? [];
 		const offset = slots.length * 30;
 		const newSlot: IconSlot = position ?? { x: 40 + offset, y: 40 + offset };
 
-		const nextRow: LocationRowPlacement = { ...row, [currentSlotType]: [...slots, newSlot] } as any;
+		const nextRow: LocationRowPlacement = { ...row, [slotType]: [...slots, newSlot] };
 		const nextRows = [...config.rows];
 		nextRows[currentRowIndex] = nextRow;
 		config = { ...config, rows: nextRows };
@@ -245,11 +494,13 @@
 
 	function removeSelectedSlot() {
 		if (selectedSlotIndex === null) return;
+		if (!isIconSlotType(currentSlotType)) return;
+		const slotType = currentSlotType;
 		const row = ensureRow(currentRowIndex);
-		const slots = [...(row[currentSlotType] ?? [])];
+		const slots = [...(row[slotType] ?? [])];
 		slots.splice(selectedSlotIndex, 1);
 
-		const nextRow: LocationRowPlacement = { ...row, [currentSlotType]: slots } as any;
+		const nextRow: LocationRowPlacement = { ...row, [slotType]: slots };
 		const nextRows = [...config.rows];
 		nextRows[currentRowIndex] = nextRow;
 		config = { ...config, rows: nextRows };
@@ -259,11 +510,13 @@
 	}
 
 	function updateSlotPosition(index: number, pos: { x: number; y: number }) {
+		if (!isIconSlotType(currentSlotType)) return;
+		const slotType = currentSlotType;
 		const row = ensureRow(currentRowIndex);
-		const slots = [...(row[currentSlotType] ?? [])];
+		const slots = [...(row[slotType] ?? [])];
 		slots[index] = { ...slots[index], ...pos };
 
-		const nextRow: LocationRowPlacement = { ...row, [currentSlotType]: slots } as any;
+		const nextRow: LocationRowPlacement = { ...row, [slotType]: slots };
 		const nextRows = [...config.rows];
 		nextRows[currentRowIndex] = nextRow;
 		config = { ...config, rows: nextRows };
@@ -275,14 +528,29 @@
 		drawCanvas();
 	}
 
+	function updateRowBackground(kind: 'gain' | 'trade', patch: Partial<LocationRowBackgroundConfig>) {
+		if (kind === 'gain') {
+			config = { ...config, gain_row_background: { ...config.gain_row_background, ...patch } };
+		} else {
+			config = { ...config, trade_row_background: { ...config.trade_row_background, ...patch } };
+		}
+		drawCanvas();
+	}
+
 	function handleSave() {
-		saveLocationIconPlacementConfig(config);
-		onSave(config);
+		void (async () => {
+			const saved = await upsertLocationIconPlacementConfig(config);
+			config = saved;
+			onSave(saved);
+		})();
 	}
 
 	function handleGenerate() {
-		saveLocationIconPlacementConfig(config);
-		onGenerateAll();
+		void (async () => {
+			const saved = await upsertLocationIconPlacementConfig(config);
+			config = saved;
+			onGenerateAll();
+		})();
 	}
 
 	function openJsonEditor() {
@@ -298,11 +566,36 @@
 
 	function applyJsonConfig() {
 		try {
-			const parsed = JSON.parse(jsonText) as LocationIconPlacementConfig;
+			const defaults = createDefaultLocationIconConfig();
+			const parsed = JSON.parse(jsonText) as Partial<LocationIconPlacementConfig>;
 			if (!parsed || typeof parsed._icon_size !== 'number' || !Array.isArray(parsed.rows)) {
 				throw new Error('Invalid config shape');
 			}
-			config = parsed;
+
+			function sanitizeRowBackground(input: unknown, fallback: LocationRowBackgroundConfig): LocationRowBackgroundConfig {
+				if (!input || typeof input !== 'object') return { ...fallback };
+				const obj = input as Record<string, unknown>;
+
+				const path = typeof obj.path === 'string' ? obj.path : null;
+				const x = typeof obj.x === 'number' && Number.isFinite(obj.x) ? obj.x : fallback.x;
+				const y = typeof obj.y === 'number' && Number.isFinite(obj.y) ? obj.y : fallback.y;
+				const scaleRaw = typeof obj.scale === 'number' && Number.isFinite(obj.scale) ? obj.scale : fallback.scale;
+				const scale = Math.max(0, scaleRaw);
+
+				return { path, x, y, scale };
+			}
+
+			const rows = [...parsed.rows] as LocationRowPlacement[];
+			if (rows.length === 0) {
+				rows.push(defaults.rows[0]);
+			}
+
+			config = {
+				_icon_size: parsed._icon_size,
+				rows,
+				gain_row_background: sanitizeRowBackground(parsed.gain_row_background, defaults.gain_row_background),
+				trade_row_background: sanitizeRowBackground(parsed.trade_row_background, defaults.trade_row_background)
+			};
 			jsonError = '';
 			jsonEditorOpen = false;
 			drawCanvas();
@@ -349,178 +642,319 @@
 
 			<div class="modal__body">
 				<div class="config-layout">
-					<div class="controls-panel">
-						<div class="control-group">
-							<label class="control-label">Sample Location</label>
-							<select class="control-select" bind:value={selectedSampleId} onchange={loadSampleImage}>
-								{#each sampleLocations as loc (loc.id)}
-									<option value={loc.id}>{loc.name}</option>
-								{/each}
-							</select>
-						</div>
-
-						<div class="control-group">
-							<label class="control-label">Row</label>
-							<div class="row-controls">
+						<div class="controls-panel">
+							<div class="control-group">
+								<label class="control-label" for="sample-location-select">Sample Location</label>
 								<select
+									id="sample-location-select"
 									class="control-select"
-									value={String(currentRowIndex)}
-									onchange={(e) => {
-										currentRowIndex = Number((e.currentTarget as HTMLSelectElement).value);
-										selectedSlotIndex = null;
-										drawCanvas();
-									}}
+									bind:value={selectedSampleId}
+									onchange={loadSampleImage}
 								>
-									{#each config.rows as _, idx (idx)}
-										<option value={String(idx)}>Reward row {idx + 1}</option>
+									{#each sampleLocations as loc (loc.id)}
+										<option value={loc.id}>{loc.name}</option>
 									{/each}
 								</select>
-								<button type="button" class="btn btn--sm" onclick={addRow}>+ Row</button>
-								<button
-									type="button"
-									class="btn btn--sm btn--danger"
-									onclick={() => removeRow(currentRowIndex)}
-									disabled={config.rows.length <= 1}
-								>
-									− Row
-								</button>
 							</div>
-						</div>
 
-						<div class="control-group">
-							<label class="control-label">Slot Type</label>
-							<div class="slot-type-buttons">
-								<button
-									type="button"
-									class={`slot-type-btn ${currentSlotType === 'gain_slots' ? 'active' : ''}`}
-									onclick={() => {
-										currentSlotType = 'gain_slots';
-										selectedSlotIndex = null;
-										drawCanvas();
-									}}
-								>
-									Gain
-								</button>
-								<button
-									type="button"
-									class={`slot-type-btn ${currentSlotType === 'trade_cost_slots' ? 'active' : ''}`}
-									onclick={() => {
-										currentSlotType = 'trade_cost_slots';
-										selectedSlotIndex = null;
-										drawCanvas();
-									}}
-								>
-									Trade: Spend
-								</button>
-								<button
-									type="button"
-									class={`slot-type-btn ${currentSlotType === 'trade_gain_slots' ? 'active' : ''}`}
-									onclick={() => {
-										currentSlotType = 'trade_gain_slots';
-										selectedSlotIndex = null;
-										drawCanvas();
-									}}
-								>
-									Trade: Gain
-								</button>
-							</div>
-						</div>
-
-						<div class="control-group">
-							<label class="control-label">Slots ({currentSlots.length})</label>
-							<div class="slot-buttons">
-								<button type="button" class="btn btn--sm" onclick={() => addSlot()}>
-									Add Slot
-								</button>
-								<button
-									type="button"
-									class="btn btn--sm btn--danger"
-									onclick={removeSelectedSlot}
-									disabled={selectedSlotIndex === null}
-								>
-									Remove Selected
-								</button>
-							</div>
-						</div>
-
-						<div class="slot-list">
-							{#each currentSlots as slot, i (i)}
-								<button
-									type="button"
-									class={`slot-item ${selectedSlotIndex === i ? 'selected' : ''}`}
-									onclick={() => {
-										selectedSlotIndex = i;
-										drawCanvas();
-									}}
-								>
-									Slot {i + 1}: ({slot.x}, {slot.y})
-								</button>
-							{/each}
-						</div>
-
-						<div class="control-group">
-							<label class="control-label">Icon Size</label>
-							<input
-								class="control-input"
-								type="number"
-								value={config._icon_size}
-								onchange={(e) => handleSizeChange(Number((e.currentTarget as HTMLInputElement).value))}
-							/>
-						</div>
-
-						{#if selectedSlotIndex !== null && currentSlots[selectedSlotIndex]}
 							<div class="control-group">
-								<label class="control-label">Selected Position</label>
-								<div class="position-inputs">
-									<label class="position-input">
-										<span>X:</span>
-										<input
-											type="number"
-											value={currentSlots[selectedSlotIndex].x}
-											onchange={(e) =>
-												updateSlotPosition(selectedSlotIndex!, {
-													x: Number((e.currentTarget as HTMLInputElement).value),
-													y: currentSlots[selectedSlotIndex!].y
-												})}
-										/>
-									</label>
-									<label class="position-input">
-										<span>Y:</span>
-										<input
-											type="number"
-											value={currentSlots[selectedSlotIndex].y}
-											onchange={(e) =>
-												updateSlotPosition(selectedSlotIndex!, {
-													x: currentSlots[selectedSlotIndex!].x,
-													y: Number((e.currentTarget as HTMLInputElement).value)
-												})}
-										/>
-									</label>
+								<label class="control-label" for="location-placement-row">Row</label>
+								<div class="row-controls">
+									<select
+										id="location-placement-row"
+										class="control-select"
+										value={String(currentRowIndex)}
+										onchange={(e) => {
+											currentRowIndex = Number((e.currentTarget as HTMLSelectElement).value);
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										{#each config.rows as _, idx (idx)}
+											<option value={String(idx)}>Reward row {idx + 1}</option>
+										{/each}
+									</select>
+									<button type="button" class="btn btn--sm" onclick={addRow}>+ Row</button>
+									<button
+										type="button"
+										class="btn btn--sm btn--danger"
+										onclick={() => removeRow(currentRowIndex)}
+										disabled={config.rows.length <= 1}
+									>
+										− Row
+									</button>
 								</div>
 							</div>
-						{/if}
 
-						<div class="control-group">
-							<label class="control-label">Copy From Row</label>
-							<div class="copy-controls">
-								<select class="control-select" id="copy-row-source">
-									{#each config.rows as _, idx (idx)}
-										<option value={String(idx)}>Reward row {idx + 1}</option>
-									{/each}
-								</select>
-								<button
-									type="button"
-									class="btn btn--sm"
-									onclick={() => {
-										const select = document.getElementById('copy-row-source') as HTMLSelectElement | null;
-										if (!select) return;
-										copyFromRow(Number(select.value));
-									}}
-								>
-									Copy Here
-								</button>
+							<div class="control-group">
+								<div class="control-label">Row Backgrounds</div>
+								<div class="row-backgrounds">
+									<div class="row-backgrounds__item">
+										<div class="row-backgrounds__title">Gain Reward</div>
+										<ImageUploader
+											bind:value={config.gain_row_background.path}
+											folder="game_locations/reward_row_backgrounds/gain"
+											maxSizeMB={25}
+											cropTransparent={false}
+											onerror={(err) => alert(`Upload failed: ${err}`)}
+										/>
+									</div>
+									<div class="row-backgrounds__item">
+										<div class="row-backgrounds__title">Trade</div>
+										<ImageUploader
+											bind:value={config.trade_row_background.path}
+											folder="game_locations/reward_row_backgrounds/trade"
+											maxSizeMB={25}
+											cropTransparent={false}
+											onerror={(err) => alert(`Upload failed: ${err}`)}
+										/>
+									</div>
+								</div>
 							</div>
-						</div>
+
+							<div class="control-group">
+								<div class="control-label">Slot Type</div>
+								<div class="slot-type-buttons">
+									<button
+										type="button"
+										class={`slot-type-btn ${currentSlotType === 'gain_slots' ? 'active' : ''}`}
+										onclick={() => {
+											currentSlotType = 'gain_slots';
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										Gain
+									</button>
+									<button
+										type="button"
+										class={`slot-type-btn ${currentSlotType === 'trade_cost_slots' ? 'active' : ''}`}
+										onclick={() => {
+											currentSlotType = 'trade_cost_slots';
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										Trade: Spend
+									</button>
+									<button
+										type="button"
+										class={`slot-type-btn ${currentSlotType === 'trade_gain_slots' ? 'active' : ''}`}
+										onclick={() => {
+											currentSlotType = 'trade_gain_slots';
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										Trade: Gain
+									</button>
+									<button
+										type="button"
+										class={`slot-type-btn ${currentSlotType === 'gain_row_background' ? 'active' : ''}`}
+										onclick={() => {
+											currentSlotType = 'gain_row_background';
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										Row BG: Gain
+									</button>
+									<button
+										type="button"
+										class={`slot-type-btn ${currentSlotType === 'trade_row_background' ? 'active' : ''}`}
+										onclick={() => {
+											currentSlotType = 'trade_row_background';
+											selectedSlotIndex = null;
+											draggingSlot = null;
+											draggingRowBackground = null;
+											draggingRowBackgroundIndex = null;
+											drawCanvas();
+										}}
+									>
+										Row BG: Trade
+									</button>
+								</div>
+							</div>
+
+							{#if isIconSlotType(currentSlotType)}
+								<div class="control-group">
+									<div class="control-label">Slots ({currentSlots.length})</div>
+									<div class="slot-buttons">
+										<button type="button" class="btn btn--sm" onclick={() => addSlot()}>
+											Add Slot
+										</button>
+										<button
+											type="button"
+											class="btn btn--sm btn--danger"
+											onclick={removeSelectedSlot}
+											disabled={selectedSlotIndex === null}
+										>
+											Remove Selected
+										</button>
+									</div>
+								</div>
+
+								<div class="slot-list">
+									{#each currentSlots as slot, i (i)}
+										<button
+											type="button"
+											class={`slot-item ${selectedSlotIndex === i ? 'selected' : ''}`}
+											onclick={() => {
+												selectedSlotIndex = i;
+												drawCanvas();
+											}}
+										>
+											Slot {i + 1}: ({slot.x}, {slot.y})
+										</button>
+									{/each}
+								</div>
+							{/if}
+
+							<div class="control-group">
+								<label class="control-label" for="location-icon-size">Icon Size</label>
+								<input
+									id="location-icon-size"
+									class="control-input"
+									type="number"
+									value={config._icon_size}
+									onchange={(e) => handleSizeChange(Number((e.currentTarget as HTMLInputElement).value))}
+								/>
+							</div>
+
+							{#if currentSlotType === 'gain_row_background'}
+								{@const bg = config.gain_row_background}
+								{@const pos = getRowBackgroundDisplayPosition('gain', currentRowIndex)}
+								<div class="control-group">
+									<div class="control-label">Gain Row Background Placement</div>
+									<div class="position-inputs">
+										<label class="position-input">
+											<span>X:</span>
+											<input
+												type="number"
+												value={pos.x}
+												onchange={(e) =>
+													setRowBackgroundDisplayPosition('gain', currentRowIndex, {
+														x: Number((e.currentTarget as HTMLInputElement).value)
+													})}
+											/>
+										</label>
+										<label class="position-input">
+											<span>Y:</span>
+											<input
+												type="number"
+												value={pos.y}
+												onchange={(e) =>
+													setRowBackgroundDisplayPosition('gain', currentRowIndex, {
+														y: Number((e.currentTarget as HTMLInputElement).value)
+													})}
+											/>
+										</label>
+										<label class="position-input">
+											<span>Scale:</span>
+											<input
+												type="number"
+												step="0.01"
+												value={bg.scale}
+												onchange={(e) =>
+													updateRowBackground('gain', {
+														scale: Math.max(0, Number((e.currentTarget as HTMLInputElement).value))
+													})}
+											/>
+										</label>
+									</div>
+									<p class="control-hint">Drag the yellow outline on the canvas to move.</p>
+								</div>
+							{:else if currentSlotType === 'trade_row_background'}
+								{@const bg = config.trade_row_background}
+								{@const pos = getRowBackgroundDisplayPosition('trade', currentRowIndex)}
+								<div class="control-group">
+									<div class="control-label">Trade Row Background Placement</div>
+									<div class="position-inputs">
+										<label class="position-input">
+											<span>X:</span>
+											<input
+												type="number"
+												value={pos.x}
+												onchange={(e) =>
+													setRowBackgroundDisplayPosition('trade', currentRowIndex, {
+														x: Number((e.currentTarget as HTMLInputElement).value)
+													})}
+											/>
+										</label>
+										<label class="position-input">
+											<span>Y:</span>
+											<input
+												type="number"
+												value={pos.y}
+												onchange={(e) =>
+													setRowBackgroundDisplayPosition('trade', currentRowIndex, {
+														y: Number((e.currentTarget as HTMLInputElement).value)
+													})}
+											/>
+										</label>
+										<label class="position-input">
+											<span>Scale:</span>
+											<input
+												type="number"
+												step="0.01"
+												value={bg.scale}
+												onchange={(e) =>
+													updateRowBackground('trade', {
+														scale: Math.max(0, Number((e.currentTarget as HTMLInputElement).value))
+													})}
+											/>
+										</label>
+									</div>
+									<p class="control-hint">Drag the yellow outline on the canvas to move.</p>
+								</div>
+							{/if}
+
+							{#if isIconSlotType(currentSlotType) && selectedSlotIndex !== null && currentSlots[selectedSlotIndex]}
+								<div class="control-group">
+									<div class="control-label">Selected Position</div>
+									<div class="position-inputs">
+										<label class="position-input">
+											<span>X:</span>
+											<input
+												type="number"
+												value={currentSlots[selectedSlotIndex].x}
+												onchange={(e) =>
+													updateSlotPosition(selectedSlotIndex!, {
+														x: Number((e.currentTarget as HTMLInputElement).value),
+														y: currentSlots[selectedSlotIndex!].y
+													})}
+											/>
+										</label>
+										<label class="position-input">
+											<span>Y:</span>
+											<input
+												type="number"
+												value={currentSlots[selectedSlotIndex].y}
+												onchange={(e) =>
+													updateSlotPosition(selectedSlotIndex!, {
+														x: currentSlots[selectedSlotIndex!].x,
+														y: Number((e.currentTarget as HTMLInputElement).value)
+													})}
+											/>
+										</label>
+									</div>
+								</div>
+							{/if}
 
 						<div class="control-group">
 							<button
@@ -561,22 +995,24 @@
 						</div>
 					</div>
 
-					<div class="preview-panel">
-						{#if sampleImage}
-							<canvas
-								bind:this={canvasEl}
-								class="preview-canvas"
+						<div class="preview-panel">
+							{#if sampleImage}
+								<canvas
+									bind:this={canvasEl}
+									class="preview-canvas"
 								onmousedown={handleCanvasClick}
 								onmousemove={handleCanvasDrag}
 								onmouseup={handleCanvasRelease}
 								onmouseleave={handleCanvasRelease}
-								oncontextmenu={handleCanvasRightClick}
-							></canvas>
-							<p class="preview-hint">Left-click to select/drag slots. Right-click to add.</p>
-						{:else}
-							<div class="preview-placeholder">
-								<p>No sample location background available.</p>
-								<p class="preview-hint">Upload a background image to at least one location to configure placement.</p>
+									oncontextmenu={handleCanvasRightClick}
+								></canvas>
+								<p class="preview-hint">
+									Left-click to select/drag. Right-click to add icon slots (icon mode).
+								</p>
+							{:else}
+								<div class="preview-placeholder">
+									<p>No sample location background available.</p>
+									<p class="preview-hint">Upload a background image to at least one location to configure placement.</p>
 							</div>
 						{/if}
 					</div>
@@ -705,6 +1141,32 @@
 		align-items: center;
 	}
 
+	.row-controls .control-select {
+		flex: 1;
+	}
+
+	.row-backgrounds {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 1rem;
+	}
+
+	.row-backgrounds__item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.row-backgrounds__title {
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: #e2e8f0;
+	}
+
+	.row-backgrounds :global(.image-uploader__dropzone) {
+		min-height: 140px;
+	}
+
 	.slot-type-buttons {
 		display: grid;
 		grid-template-columns: 1fr;
@@ -770,6 +1232,7 @@
 	.position-inputs {
 		display: flex;
 		gap: 0.5rem;
+		flex-wrap: wrap;
 	}
 
 	.position-input {
@@ -793,10 +1256,10 @@
 		color: #f8fafc;
 	}
 
-	.copy-controls {
-		display: flex;
-		gap: 0.5rem;
-		align-items: center;
+	.control-hint {
+		margin: 0;
+		font-size: 0.85rem;
+		color: rgba(148, 163, 184, 0.85);
 	}
 
 	.preview-panel {

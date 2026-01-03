@@ -38,26 +38,26 @@ describe('artifactService', () => {
         });
     });
 
-    describe('getOriginRunes', () => {
-        it('should filter runes by origin_id', () => {
-            const runes: RuneRow[] = [
-                { id: '1', name: 'Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null },
-                { id: '2', name: 'Water Rune', origin_id: 'origin2', class_id: null, created_at: '', updated_at: null, icon_path: null },
-                { id: '3', name: 'Another Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null }
-            ];
-            const result = artifactService.getOriginRunes('origin1', runes);
-            expect(result).toHaveLength(2);
-            expect(result.map(r => r.id)).toContain('1');
-            expect(result.map(r => r.id)).toContain('3');
-        });
+	    describe('getOriginRunes', () => {
+	        it('should filter runes by origin_id', () => {
+	            const runes: RuneRow[] = [
+	                { id: '1', name: 'Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null, icon_background_path: null },
+	                { id: '2', name: 'Water Rune', origin_id: 'origin2', class_id: null, created_at: '', updated_at: null, icon_path: null, icon_background_path: null },
+	                { id: '3', name: 'Another Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null, icon_background_path: null }
+	            ];
+	            const result = artifactService.getOriginRunes('origin1', runes);
+	            expect(result).toHaveLength(2);
+	            expect(result.map(r => r.id)).toContain('1');
+	            expect(result.map(r => r.id)).toContain('3');
+	        });
 
-        it('should return empty array if no runes match', () => {
-            const runes: RuneRow[] = [
-                { id: '1', name: 'Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null }
-            ];
-            const result = artifactService.getOriginRunes('origin3', runes);
-            expect(result).toHaveLength(0);
-        });
-    });
+	        it('should return empty array if no runes match', () => {
+	            const runes: RuneRow[] = [
+	                { id: '1', name: 'Fire Rune', origin_id: 'origin1', class_id: null, created_at: '', updated_at: null, icon_path: null, icon_background_path: null }
+	            ];
+	            const result = artifactService.getOriginRunes('origin3', runes);
+	            expect(result).toHaveLength(0);
+	        });
+	    });
 
 });

@@ -1,8 +1,12 @@
 import type { ArtifactRow, OriginRow, RuneRow, ArtifactTagRow, GuardianRow } from '$lib/types/gameData';
 import { generateRuneIconCanvas } from '$lib/utils/runeIconGenerator';
 import { supabase } from '$lib/api/supabaseClient';
-import { createCanvas, getContext, loadImage, canvasToBlob, roundRect } from '../shared/canvas';
+import { createCanvas, getContext, loadImage, canvasToBlob, roundRect, loadOpsilonFont } from '../shared/canvas';
 
+/**
+ * V17 Diagonal Sidebar Layout - Canvas Implementation
+ * Matches the Svelte component ArtifactCardV17.svelte
+ */
 export async function generateArtifactCardPNG(
 	artifact: ArtifactRow,
 	origins: OriginRow[],
@@ -14,56 +18,60 @@ export async function generateArtifactCardPNG(
 		throw new Error('Artifact missing ID or name');
 	}
 
-	// Match frontend dimensions: 300px × 225px
+	// Load Opsilon font
+	await loadOpsilonFont();
+
+	// Card dimensions: 300px x 225px at 4x resolution
+	const scale = 4;
 	const width = 300;
 	const height = 225;
 
-	// Create canvas
-	const canvas = createCanvas(width, height);
+	// Create canvas at 4x resolution
+	const canvas = createCanvas(width * scale, height * scale);
 	const ctx = getContext(canvas);
+	ctx.scale(scale, scale);
 
-	// Get card border color (matching frontend logic)
-	let borderColor = '#ffffff'; // Default white
-	if (artifact.guardian_id) {
-		borderColor = '#ef4444'; // Red for guardian artifacts
-	} else if (artifact.tag_ids && artifact.tag_ids.length > 0 && artifact.tag_ids[0]) {
-		const firstTag = tags.find((t) => t.id === artifact.tag_ids![0]);
-		if (firstTag?.color) borderColor = firstTag.color;
-	}
+	// Colors matching V17
+	const colors = {
+		cardBg: '#1a1520',
+		mainAreaBg1: '#2a2035',
+		mainAreaBg2: '#1a1520',
+		sidebarBg1: '#3a2a40',
+		sidebarBg2: '#2a1a30',
+		gold: '#c4a060',
+		goldLight: 'rgba(196, 160, 96, 0.6)',
+		goldDim: 'rgba(196, 160, 96, 0.4)',
+		textPrimary: '#e8d4b8',
+		textSecondary: '#a8a0b0',
+		textMuted: '#908898'
+	};
 
-	// Get guardian name for tag
+	// Get guardian name
 	const guardian = guardians.find((g) => g.id === artifact.guardian_id);
-	
-	let originTagText = 'Artifact';
-	if (artifact.guardian_id) {
-		originTagText = guardian?.name || 'Unknown Guardian';
-	}
+	const guardianName = guardian?.name || null;
 
-	// Helper to get rune details (matching frontend logic)
-	const getRuneDetails = (runeId: string) => {
+	// Get tag names
+	const tagNames = (artifact.tag_ids || [])
+		.map((id) => tags.find((t) => t.id === id)?.name)
+		.filter(Boolean) as string[];
+
+	// Helper to get rune icon URL
+	const getRuneIconUrl = async (runeId: string): Promise<string | null> => {
 		const rune = runes.find((r) => r.id === runeId);
 		if (!rune) return null;
 		const origin = origins.find((o) => o.id === rune.origin_id);
 		if (!origin) return null;
-		
-		// If rune has a saved icon_path, use that first
+
+		// If rune has a saved icon_path, use that
 		if (rune.icon_path) {
 			const { data } = supabase.storage.from('game_assets').getPublicUrl(rune.icon_path);
-			if (data?.publicUrl) {
-				return {
-					name: rune.name,
-					originName: origin.name,
-					savedIconUrl: data.publicUrl, // Use saved PNG
-					iconUrl: null,
-					iconEmoji: null
-				};
-			}
+			if (data?.publicUrl) return data.publicUrl;
 		}
-		
-		// Otherwise, generate from origin icon (fallback)
+
+		// Otherwise try to generate from origin icon
 		let iconUrl = null;
 		let iconEmoji = null;
-		
+
 		if (origin.icon_png) {
 			const path = origin.icon_png.startsWith('origin_icons/') ? origin.icon_png : `origin_icons/${origin.icon_png}`;
 			const { data } = supabase.storage.from('game_assets').getPublicUrl(path);
@@ -72,279 +80,272 @@ export async function generateArtifactCardPNG(
 			iconEmoji = origin.icon_emoji;
 		}
 
-		return {
-			name: rune.name,
-			originName: origin.name,
-			savedIconUrl: null,
-			iconUrl,
-			iconEmoji
-		};
+			// Load rune background
+			let runeBackgroundUrl: string | null = null;
+			try {
+				const candidates = [
+					rune.icon_background_path ?? null,
+					'rune_backgrounds/background.png'
+				].filter((path): path is string => !!path);
+
+				for (const candidate of candidates) {
+					const normalized = candidate.startsWith('game_assets/') ? candidate.slice('game_assets/'.length) : candidate;
+					const { data } = supabase.storage.from('game_assets').getPublicUrl(normalized);
+					if (!data?.publicUrl) continue;
+					const response = await fetch(data.publicUrl, { method: 'HEAD' });
+					if (response.ok) {
+						runeBackgroundUrl = data.publicUrl;
+						break;
+					}
+				}
+			} catch {
+				// Background not available
+			}
+
+		try {
+			return await generateRuneIconCanvas({
+				originIconUrl: iconUrl,
+				originIconEmoji: iconEmoji,
+				backgroundUrl: runeBackgroundUrl,
+				size: 192 // 48px * 4x scale
+			});
+		} catch {
+			return null;
+		}
 	};
 
-	// Load rune background URL (if available)
-	let runeBackgroundUrl: string | null = null;
-	try {
-		const { data } = supabase.storage.from('game_assets').getPublicUrl('rune_backgrounds/background.png');
-		if (data?.publicUrl) {
-			// Verify the file exists by checking if we can fetch it
-			const response = await fetch(data.publicUrl, { method: 'HEAD' });
-			if (response.ok) {
-				runeBackgroundUrl = data.publicUrl;
+	// Collect recipe icon URLs
+	const recipeIcons: string[] = [];
+	if (artifact.recipe_box && artifact.recipe_box.length > 0) {
+		for (const item of artifact.recipe_box) {
+			for (let i = 0; i < item.quantity; i++) {
+				const iconUrl = await getRuneIconUrl(item.rune_id);
+				if (iconUrl) recipeIcons.push(iconUrl);
 			}
 		}
-	} catch (err) {
-		// Background not available, will use hexagon fallback
-		console.warn('Rune background not available, using hexagon fallback');
 	}
 
-	// Fill entire canvas with solid background for JPG export (no transparency)
-	ctx.fillStyle = '#0f172a';
-	ctx.fillRect(0, 0, width, height);
+	// === Draw Card ===
 
-	// Draw card background with gradient
-	const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-	bgGradient.addColorStop(0, 'rgba(30, 41, 59, 0.95)');
-	bgGradient.addColorStop(1, 'rgba(15, 23, 42, 0.95)');
-
-	// Draw rounded rectangle background
-	ctx.fillStyle = bgGradient;
-	roundRect(ctx, 0, 0, width, height, 16);
+	// Card background
+	ctx.fillStyle = colors.cardBg;
+	roundRect(ctx, 0, 0, width, height, 6);
 	ctx.fill();
 
-	// Draw border (3px solid)
-	ctx.strokeStyle = borderColor;
-	ctx.lineWidth = 3;
-	roundRect(ctx, 0, 0, width, height, 16);
-	ctx.stroke();
+	// Main area with diagonal clip (covers left ~80% of card)
+	ctx.save();
+	ctx.beginPath();
+	ctx.moveTo(0, 0);
+	ctx.lineTo(width * 0.85, 0);
+	ctx.lineTo(width * 0.65, height);
+	ctx.lineTo(0, height);
+	ctx.closePath();
+	ctx.clip();
 
-	// Draw header gradient (padding: 1rem 1rem 0rem 1rem = 16px top/sides, 0 bottom)
-	const headerGradient = ctx.createLinearGradient(0, 0, 0, 60);
-	headerGradient.addColorStop(0, 'rgba(255,255,255,0.05)');
-	headerGradient.addColorStop(1, 'rgba(255,255,255,0)');
-	ctx.fillStyle = headerGradient;
-	ctx.fillRect(0, 0, width, 60);
+	// Main area gradient background
+	const mainGradient = ctx.createLinearGradient(0, 0, width, height);
+	mainGradient.addColorStop(0, colors.mainAreaBg1);
+	mainGradient.addColorStop(1, colors.mainAreaBg2);
+	ctx.fillStyle = mainGradient;
+	ctx.fillRect(0, 0, width, height);
 
-	// Draw artifact name (font-size: 1.25rem = 20px, margin: 0 0 0.25rem 0 = 4px bottom)
-	// Name color should be #fff, not borderColor
-	ctx.fillStyle = '#fff';
-	ctx.font = '800 20px Arial, sans-serif';
+	// Diagonal accent (subtle gold gradient on right edge of main area)
+	const accentGradient = ctx.createLinearGradient(width * 0.6, 0, width * 0.85, height);
+	accentGradient.addColorStop(0, 'transparent');
+	accentGradient.addColorStop(0.4, 'transparent');
+	accentGradient.addColorStop(1, 'rgba(180, 140, 100, 0.1)');
+	ctx.fillStyle = accentGradient;
+	ctx.fillRect(0, 0, width, height);
+
+	ctx.restore();
+
+	// === Draw Content ===
+
+	const padding = 12;
+	const contentMaxX = width - 93; // padding-right: 93px
+
+	// Header row: Sigil + Name
+	ctx.fillStyle = colors.gold;
+	ctx.font = '24px Opsilon, serif';
 	ctx.textAlign = 'left';
 	ctx.textBaseline = 'top';
-	ctx.shadowColor = 'rgba(0,0,0,0.8)';
+	ctx.shadowColor = 'rgba(196, 160, 96, 0.5)';
+	ctx.shadowBlur = 8;
+	ctx.fillText('◆', padding, padding);
 	ctx.shadowBlur = 0;
-	ctx.shadowOffsetX = 2;
-	ctx.shadowOffsetY = 2;
-	ctx.fillText(artifact.name, 16, 16); // padding-left: 1rem = 16px, padding-top: 1rem = 16px
-	ctx.shadowBlur = 0;
-	ctx.shadowOffsetX = 0;
-	ctx.shadowOffsetY = 0;
 
-	// Draw benefit text (padding: 0rem 1rem = 0 top/bottom, 16px sides, font-size: 1.1rem = 17.6px)
-	ctx.fillStyle = 'rgba(255,255,255,0.9)';
-	ctx.font = '500 17.6px Arial, sans-serif';
+	ctx.fillStyle = colors.textPrimary;
+	ctx.font = '700 22px Opsilon, serif';
+	const nameX = padding + 32; // gap: 8px + sigil width
+	ctx.fillText(artifact.name, nameX, padding);
+
+	// Slant divider (skewed line below name)
+	const dividerY = padding + 32; // margin-bottom: 8px after title
+	ctx.save();
+	ctx.translate(padding, dividerY);
+	ctx.transform(1, 0, -0.105, 1, 0, 0); // skewX(-6deg)
+	const dividerGradient = ctx.createLinearGradient(0, 0, contentMaxX * 0.8, 0);
+	dividerGradient.addColorStop(0, colors.gold);
+	dividerGradient.addColorStop(1, 'transparent');
+	ctx.fillStyle = dividerGradient;
+	ctx.fillRect(0, 0, contentMaxX * 0.8, 4); // height: 4px
+	ctx.restore();
+
+	// Benefit text
+	ctx.fillStyle = colors.textSecondary;
+	ctx.font = '13px Opsilon, serif';
 	ctx.textAlign = 'left';
 	ctx.textBaseline = 'top';
-	ctx.shadowColor = 'rgba(0,0,0,0.5)';
-	ctx.shadowBlur = 0;
-	ctx.shadowOffsetX = 1;
-	ctx.shadowOffsetY = 1;
-	
-	// Word wrap benefit text (max-width accounts for padding: 1rem = 16px on each side)
+
 	const benefitText = artifact.benefit || '';
-	const maxWidth = width - 32; // 16px padding on each side
+	const benefitStartY = dividerY + 14; // margin-bottom: 10px
+	const maxBenefitWidth = contentMaxX - padding;
 	const words = benefitText.split(' ');
 	const lines: string[] = [];
 	let currentLine = '';
-	
+
 	for (const word of words) {
 		const testLine = currentLine ? `${currentLine} ${word}` : word;
 		const metrics = ctx.measureText(testLine);
-		if (metrics.width > maxWidth && currentLine) {
+		if (metrics.width > maxBenefitWidth && currentLine) {
 			lines.push(currentLine);
 			currentLine = word;
 		} else {
 			currentLine = testLine;
 		}
 	}
-	if (currentLine) {
-		lines.push(currentLine);
-	}
-	
-	const lineHeight = 24.64; // 17.6px * 1.4 (line-height)
-	const startY = 60; // After header (which has padding-top: 1rem = 16px, but no padding-bottom)
+	if (currentLine) lines.push(currentLine);
+
+	const lineHeight = 18.2; // 13px * 1.4
 	lines.forEach((line, i) => {
-		ctx.fillText(line, 16, startY + i * lineHeight); // padding-left: 1rem = 16px
+		ctx.fillText(line, padding, benefitStartY + i * lineHeight);
 	});
-	ctx.shadowBlur = 0;
-	ctx.shadowOffsetX = 0;
-	ctx.shadowOffsetY = 0;
 
-	// Draw footer gradient
-	const footerGradient = ctx.createLinearGradient(0, height - 60, 0, height);
-	footerGradient.addColorStop(0, 'rgba(0,0,0,0.2)');
-	footerGradient.addColorStop(1, 'rgba(0,0,0,0)');
-	ctx.fillStyle = footerGradient;
-	ctx.fillRect(0, height - 60, width, 60);
+	// Bottom info section
+	const bottomY = height - padding - 14;
 
-	// Draw tags (left side) - footer padding: 0.75rem 1rem = 12px top, 16px sides
-	// Tags container: left: 1rem (16px), bottom: 0.75rem (12px)
-	// Tag gap: 0.35rem = 5.6px
-	const tagGap = 5.6; // 0.35rem
-	let tagX = 16; // left: 1rem = 16px
-	const tagY = height - 12 - 18; // bottom: 0.75rem = 12px, tag height ~18px (font-size 10.4px + padding)
-
-	// Origin tag (font-size: 0.65rem = 10.4px, padding: 0.15rem 0.5rem = 2.4px top/bottom, 8px left/right)
-	ctx.fillStyle = '#334155';
-	ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-	ctx.lineWidth = 2;
-	
-	// Measure text to calculate tag width
-	ctx.font = '700 10.4px Arial, sans-serif';
-	ctx.textAlign = 'left';
-	const originTagTextMetrics = ctx.measureText(originTagText.toUpperCase());
-	const originTagWidth = originTagTextMetrics.width + 16; // padding: 0.5rem = 8px on each side
-	const originTagHeight = 10.4 + 4.8; // font-size + padding top/bottom (0.15rem * 2 = 2.4px * 2)
-	
-	// Draw box shadow for origin tag (2px 2px 0px rgba(0,0,0,0.3)) - draw shadow first
-	ctx.fillStyle = 'rgba(0,0,0,0.3)';
-	roundRect(ctx, tagX + 2, tagY + 2, originTagWidth, originTagHeight, 6);
-	ctx.fill();
-	
-	// Draw the tag on top
-	ctx.fillStyle = '#334155';
-	roundRect(ctx, tagX, tagY, originTagWidth, originTagHeight, 6);
-	ctx.fill();
-	ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-	ctx.lineWidth = 2;
-	roundRect(ctx, tagX, tagY, originTagWidth, originTagHeight, 6);
+	// Draw separator line
+	ctx.strokeStyle = 'rgba(180, 140, 100, 0.2)';
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	ctx.moveTo(padding, bottomY - 9);
+	ctx.lineTo(contentMaxX, bottomY - 9);
 	ctx.stroke();
-	
-	ctx.fillStyle = '#fff';
-	ctx.textAlign = 'left';
+
+	ctx.font = '13px Opsilon, serif';
 	ctx.textBaseline = 'top';
-	ctx.fillText(originTagText.toUpperCase(), tagX + 8, tagY + 2.4); // padding-left: 0.5rem = 8px, padding-top: 0.15rem = 2.4px
-	tagX += originTagWidth + tagGap;
 
-	// Guardian tag (if applicable) - same styling as other tags
-	if (artifact.guardian_id) {
-		ctx.font = '600 10.4px Arial, sans-serif';
-		const guardianTextMetrics = ctx.measureText('Guardian');
-		const guardianTagWidth = guardianTextMetrics.width + 12.8; // padding: 0.4rem = 6.4px on each side
-		const guardianTagHeight = 10.4 + 3.2; // font-size + padding top/bottom (0.1rem * 2 = 1.6px * 2)
-		
-		ctx.fillStyle = 'rgba(255,255,255,0.1)';
-		ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-		ctx.lineWidth = 1;
-		roundRect(ctx, tagX, tagY, guardianTagWidth, guardianTagHeight, 4);
-		ctx.fill();
-		ctx.stroke();
-		
-		ctx.fillStyle = 'rgba(255,255,255,0.8)';
-		ctx.fillText('Guardian', tagX + 6.4, tagY + 1.6); // padding-left: 0.4rem = 6.4px, padding-top: 0.1rem = 1.6px
-		tagX += guardianTagWidth + tagGap;
+	if (guardianName) {
+		ctx.fillStyle = colors.gold;
+		ctx.font = '600 13px Opsilon, serif';
+		ctx.fillText(`⚔ ${guardianName}`, padding, bottomY);
 	}
 
-	// Other tags (font-size: 0.65rem = 10.4px, padding: 0.1rem 0.4rem = 1.6px top/bottom, 6.4px left/right)
-	if (artifact.tags && artifact.tags.length > 0) {
-		ctx.font = '600 10.4px Arial, sans-serif';
-		for (const tag of artifact.tags) {
-			const tagTextMetrics = ctx.measureText(tag);
-			const tagWidth = tagTextMetrics.width + 12.8; // padding: 0.4rem = 6.4px on each side
-			const tagHeight = 10.4 + 3.2; // font-size + padding top/bottom
-			
-			ctx.fillStyle = 'rgba(255,255,255,0.1)';
-			ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-			ctx.lineWidth = 1;
-			roundRect(ctx, tagX, tagY, tagWidth, tagHeight, 4);
-			ctx.fill();
-			ctx.stroke();
-			
-			ctx.fillStyle = 'rgba(255,255,255,0.8)';
-			ctx.fillText(tag, tagX + 6.4, tagY + 1.6); // padding-left: 0.4rem = 6.4px, padding-top: 0.1rem = 1.6px
-			tagX += tagWidth + tagGap;
-		}
+	if (tagNames.length > 0) {
+		ctx.fillStyle = colors.textMuted;
+		ctx.font = '13px Opsilon, serif';
+		ctx.textAlign = 'right';
+		ctx.fillText(tagNames.join(' • '), contentMaxX, bottomY);
+		ctx.textAlign = 'left';
 	}
 
-	// Draw recipe box (right side)
-	if (artifact.recipe_box && artifact.recipe_box.length > 0) {
-		const runeIcons: string[] = [];
-		for (const item of artifact.recipe_box) {
-			const rune = getRuneDetails(item.rune_id);
-			if (rune) {
-				try {
-					let iconDataUrl: string;
-					
-					// If rune has a saved PNG, use it directly
-					if (rune.savedIconUrl) {
-						iconDataUrl = rune.savedIconUrl;
-					} else {
-						// Otherwise, generate icon dynamically (fallback)
-						iconDataUrl = await generateRuneIconCanvas({
-							originIconUrl: rune.iconUrl || null,
-							originIconEmoji: rune.iconEmoji || null,
-							backgroundUrl: runeBackgroundUrl,
-							size: 30
-						});
-					}
-					
-					for (let i = 0; i < item.quantity; i++) {
-						runeIcons.push(iconDataUrl);
-					}
-				} catch (error) {
-					console.warn(`Failed to load/generate rune icon for ${rune.name}:`, error);
-					// Fallback: create a simple circle placeholder
-					const fallbackCanvas = document.createElement('canvas');
-					fallbackCanvas.width = 30;
-					fallbackCanvas.height = 30;
-					const fallbackCtx = fallbackCanvas.getContext('2d');
-					if (fallbackCtx) {
-						fallbackCtx.fillStyle = '#94a3b8';
-						fallbackCtx.beginPath();
-						fallbackCtx.arc(15, 15, 12, 0, Math.PI * 2);
-						fallbackCtx.fill();
-						runeIcons.push(fallbackCanvas.toDataURL('image/png'));
-					}
-				}
-			}
-		}
+	// === Draw Diagonal Sidebar ===
 
-		if (runeIcons.length > 0) {
-			// Recipe box: padding: 0.4rem = 6.4px, gap: 0.5rem = 8px, right: 1rem = 16px, bottom: 0.75rem = 12px
-			// Rune icons: 30px each, gap 8px between them
-			const runeIconSize = 30;
-			const runeGap = 8; // 0.5rem
-			const recipeBoxPadding = 6.4; // 0.4rem
-			const recipeBoxWidth = runeIcons.length * runeIconSize + (runeIcons.length - 1) * runeGap + recipeBoxPadding * 2;
-			const recipeBoxHeight = runeIconSize + recipeBoxPadding * 2;
-			const recipeBoxX = width - 16 - recipeBoxWidth; // right: 1rem = 16px
-			const recipeBoxY = height - 12 - recipeBoxHeight; // bottom: 0.75rem = 12px
+	const sidebarWidth = 59;
+	const sidebarX = width - sidebarWidth;
 
-			// Draw recipe box background with box shadow (3px 3px 0px rgba(0,0,0,0.3))
-			ctx.fillStyle = 'rgba(0,0,0,0.3)';
-			roundRect(ctx, recipeBoxX + 3, recipeBoxY + 3, recipeBoxWidth, recipeBoxHeight, 10);
+	// Sidebar background with skew
+	ctx.save();
+	ctx.beginPath();
+	// Create skewed parallelogram shape
+	const skewOffset = Math.tan(8 * Math.PI / 180) * height; // 8 degrees
+	ctx.moveTo(sidebarX + sidebarWidth * 0.3 + skewOffset, 0);
+	ctx.lineTo(width, 0);
+	ctx.lineTo(width, height);
+	ctx.lineTo(sidebarX + sidebarWidth * 0.3 - skewOffset, height);
+	ctx.closePath();
+	ctx.clip();
+
+	const sidebarGradient = ctx.createLinearGradient(0, 0, 0, height);
+	sidebarGradient.addColorStop(0, colors.sidebarBg1);
+	sidebarGradient.addColorStop(1, colors.sidebarBg2);
+	ctx.fillStyle = sidebarGradient;
+	ctx.fillRect(sidebarX, 0, sidebarWidth, height);
+
+	// Sidebar gold border (left edge)
+	ctx.strokeStyle = colors.gold;
+	ctx.lineWidth = 2;
+	ctx.beginPath();
+	ctx.moveTo(sidebarX + sidebarWidth * 0.3 + skewOffset, 0);
+	ctx.lineTo(sidebarX + sidebarWidth * 0.3 - skewOffset, height);
+	ctx.stroke();
+
+	ctx.restore();
+
+	// Draw rune stack (staggered left, starting from top)
+	if (recipeIcons.length > 0) {
+		const runeSize = 48;
+		const runeGap = 6;
+		const startY = 9 + runeSize / 2; // margin-top: 9px
+		const centerX = sidebarX + sidebarWidth / 2; // margin-left: 0px
+
+		for (let i = 0; i < recipeIcons.length; i++) {
+			const offsetX = i * -9; // -9px offset per rune
+			const x = centerX + offsetX;
+			const y = startY + i * (runeSize + runeGap);
+			const radius = runeSize / 2;
+
+			// Rune slot background (circle)
+			ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+			ctx.beginPath();
+			ctx.arc(x, y, radius, 0, Math.PI * 2);
 			ctx.fill();
-			
-			// Draw recipe box background
-			ctx.fillStyle = 'rgba(0,0,0,0.6)';
-			ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+
+			// Rune slot border (circle)
+			ctx.strokeStyle = colors.goldLight;
 			ctx.lineWidth = 2;
-			roundRect(ctx, recipeBoxX, recipeBoxY, recipeBoxWidth, recipeBoxHeight, 10);
-			ctx.fill();
+			ctx.beginPath();
+			ctx.arc(x, y, radius, 0, Math.PI * 2);
 			ctx.stroke();
 
-			// Draw rune icons (works with both data URLs and regular URLs)
-			for (let i = 0; i < runeIcons.length; i++) {
-				try {
-					const img = await loadImage(runeIcons[i]);
-					ctx.drawImage(img, recipeBoxX + recipeBoxPadding + i * (runeIconSize + runeGap), recipeBoxY + recipeBoxPadding, runeIconSize, runeIconSize);
-				} catch (err) {
-					console.warn(`Failed to load rune icon ${i}:`, err);
-				}
+			// Draw rune icon (clipped to circle)
+			try {
+				const img = await loadImage(recipeIcons[i]);
+				ctx.save();
+				ctx.beginPath();
+				ctx.arc(x, y, radius - 2, 0, Math.PI * 2);
+				ctx.clip();
+				ctx.drawImage(img, x - radius + 2, y - radius + 2, runeSize - 4, runeSize - 4);
+				ctx.restore();
+			} catch {
+				// Fallback if image fails
+				ctx.fillStyle = colors.goldDim;
+				ctx.font = '18px Opsilon, serif';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'middle';
+				ctx.fillText('✧', x, y);
 			}
 		}
+	} else {
+		// Empty slot placeholder
+		ctx.fillStyle = colors.goldDim;
+		ctx.font = '18px Opsilon, serif';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText('✧', sidebarX + sidebarWidth / 2, height / 2);
 	}
 
-	// Convert canvas to JPG blob (0.92 quality for good balance of size/quality)
+	// Card border radius clip
+	ctx.globalCompositeOperation = 'destination-in';
+	ctx.fillStyle = '#000';
+	roundRect(ctx, 0, 0, width, height, 6);
+	ctx.fill();
+	ctx.globalCompositeOperation = 'source-over';
+
+	// Card shadow (outer glow)
+	// Note: Canvas doesn't support box-shadow the same way, but we've drawn the card
+
+	// Convert canvas to JPEG
 	return canvasToBlob(canvas, 'image/jpeg', 0.92);
 }
 
@@ -354,8 +355,7 @@ export async function generateArtifactCardSVG(
 	origins: OriginRow[],
 	runes: RuneRow[],
 	tags: ArtifactTagRow[] = [],
-	guardians: Pick<GuardianRow, 'id' | 'name'>[] = [],
-	
+	guardians: Pick<GuardianRow, 'id' | 'name'>[] = []
 ): Promise<string> {
 	// Just return empty string - we're using PNG generation directly now
 	return '';

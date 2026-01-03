@@ -153,6 +153,7 @@
 		gap: 0.75rem;
 		padding: 1rem 1.25rem 0.75rem;
 		align-items: flex-start;
+		flex-shrink: 0;
 	}
 
 	.modal__title-area {
@@ -186,6 +187,8 @@
 	}
 
 	.modal__body {
+		flex: 1;
+		min-height: 0;
 		padding: 0 1.25rem 1.25rem;
 		overflow-y: auto;
 		display: flex;
@@ -196,6 +199,7 @@
 	}
 
 	.modal__footer {
+		flex-shrink: 0;
 		padding: 0.75rem 1.25rem 1.25rem;
 		display: flex;
 		gap: 0.6rem;

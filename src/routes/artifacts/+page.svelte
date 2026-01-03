@@ -14,6 +14,7 @@
 	import ArtifactEditorDrawer from '$lib/components/artifacts/ArtifactEditorDrawer.svelte';
 	import TagManager from '$lib/components/artifacts/TagManager.svelte';
 	import ArtifactCardGallery from '$lib/components/artifacts/ArtifactCardGallery.svelte';
+	import ArtifactCardEditor from '$lib/components/artifacts/ArtifactCardEditor.svelte';
 	import { ArtifactsListView, ArtifactsTableView, ArtifactsGridView } from '$lib/components/artifacts';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { Button } from '$lib/components/ui';
@@ -48,6 +49,7 @@
 	let isEditorOpen = $state(false);
 	let isTagManagerOpen = $state(false);
 	let isGalleryOpen = $state(false);
+	let isCardEditorOpen = $state(false);
 	let editingArtifact = $state<Partial<ArtifactRow>>({});
 	let loading = $state(true);
 
@@ -619,6 +621,7 @@
 	{#snippet headerActions()}
 		<Button variant="primary" onclick={openCreate}>Create Artifact</Button>
 		<Button onclick={() => (isTagManagerOpen = true)}>Manage Tags</Button>
+		<Button onclick={() => (isCardEditorOpen = true)}>Card Editor</Button>
 	{/snippet}
 
 	{#snippet tabActions()}
@@ -996,7 +999,9 @@
 		on:close={() => (isTagManagerOpen = false)}
 	/>
 
-	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} />
+	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} {origins} {runes} {tags} {guardians} />
+
+<ArtifactCardEditor bind:isOpen={isCardEditorOpen} />
 
 <ConfirmDialog
 	bind:open={confirmOpen}

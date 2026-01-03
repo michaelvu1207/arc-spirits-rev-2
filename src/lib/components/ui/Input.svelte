@@ -10,6 +10,7 @@
 		max?: number;
 		step?: number;
 		oninput?: (e: Event) => void;
+		onkeydown?: (e: KeyboardEvent) => void;
 		onblur?: (e: FocusEvent) => void;
 		onfocus?: (e: FocusEvent) => void;
 	}
@@ -25,6 +26,7 @@
 		max,
 		step,
 		oninput,
+		onkeydown,
 		onblur,
 		onfocus
 	}: Props = $props();
@@ -43,6 +45,7 @@
 	bind:value
 	class={className}
 	{oninput}
+	{onkeydown}
 	{onblur}
 	{onfocus}
 	aria-invalid={error}

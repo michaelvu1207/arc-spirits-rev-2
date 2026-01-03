@@ -18,7 +18,9 @@
 				{ href: '/hex-spirits', label: 'Hex Spirits', icon: '⚔️' },
 				{ href: '/guardians', label: 'Guardians', icon: '🕯️' },
 				{ href: '/arcane-abyss', label: 'Arcane Abyss', icon: '🌀' },
+				{ href: '/travelers', label: 'Travelers', icon: '🧭' },
 				{ href: '/game-locations', label: 'Game Locations', icon: '📍' },
+				{ href: '/spirit-world', label: 'Spirit World', icon: '🗺️' },
 				{ href: '/icons', label: 'Icons', icon: '🖍️' }
 			]
 		},
