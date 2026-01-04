@@ -211,6 +211,7 @@ export type IconPoolSourceType = 'origin' | 'class' | 'rune' | 'dice_side' | 'up
 export type IconPoolRow = {
 	id: string;
 	name: string;
+	description?: string | null;
 	source_type: IconPoolSourceType;
 	source_id: string | null;
 	source_table: string | null; // 'origins' | 'classes' | 'runes' | 'dice_sides' | null (for uploaded)

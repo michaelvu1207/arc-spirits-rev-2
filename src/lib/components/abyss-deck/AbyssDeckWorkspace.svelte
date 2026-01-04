@@ -61,6 +61,7 @@
 		monsterPreviewComponent?: any;
 		monsterPreviewVariants?: number[];
 		defaultShowCardPreviews?: boolean;
+		showMonsters?: boolean;
 		showEvents?: boolean;
 		showSubtext?: boolean;
 		showDescription?: boolean;
@@ -99,6 +100,7 @@
 		monsterPreviewComponent = MonsterCardPreview,
 		monsterPreviewVariants = [],
 		defaultShowCardPreviews = true,
+		showMonsters = true,
 		showEvents = true,
 		showSubtext = false,
 		showDescription = false,
@@ -201,7 +203,7 @@
 	let savingOrder = $state(false);
 
 	$effect(() => {
-		const canonical = buildCanonicalOrder(monsters, events, showEvents);
+		const canonical = buildCanonicalOrder(showMonsters ? monsters : [], events, showEvents);
 
 		if (deckOrder.length === 0) {
 			if (canonical.length > 0) {
@@ -590,6 +592,7 @@
 	}
 
 	function openNewMonster() {
+		if (!showMonsters) return;
 		editorType = 'monster';
 		editingId = null;
 		monsterFormData = {
@@ -629,6 +632,7 @@
 	}
 
 	function openEdit(type: 'monster' | 'event', id: string) {
+		if (type === 'monster' && !showMonsters) return;
 		if (type === 'event' && !showEvents) return;
 
 		if (inlineEffectOpenId) {
@@ -683,12 +687,14 @@
 	}
 
 	function requestDelete(type: 'monster' | 'event', id: string) {
+		if (type === 'monster' && !showMonsters) return;
 		if (type === 'event' && !showEvents) return;
 		deleteTarget = { type, id, label: getGroupLabel(type, id) };
 		showDeleteConfirm = true;
 	}
 
 	async function duplicateMonster(id: string) {
+		if (!showMonsters) return;
 		const monster = monsterById.get(id);
 		if (!monster) return;
 
@@ -823,8 +829,60 @@
 	}
 
 	function resetOrder() {
-		deckOrder = buildCanonicalOrder(monsters, events, showEvents);
+		deckOrder = buildCanonicalOrder(showMonsters ? monsters : [], events, showEvents);
 		orderChanged = false;
+	}
+
+	function resetMonsterOrderByState() {
+		if (!showMonsters) return;
+		const current = deckOrder.length > 0 ? deckOrder : buildCanonicalOrder(showMonsters ? monsters : [], events, showEvents);
+		if (current.length === 0) return;
+
+		const stateRank = new Map<string, number>([
+			['tainted', 0],
+			['corrupt', 1],
+			['fallen', 2],
+			['arcane', 3],
+			['inactive', 4]
+		]);
+
+		const originalMonsterIndex = new Map<string, number>();
+		for (let i = 0; i < current.length; i++) {
+			const item = current[i];
+			if (item.type === 'monster') {
+				originalMonsterIndex.set(item.id, i);
+			}
+		}
+
+		const monstersOnly = current.filter((item) => item.type === 'monster');
+		const eventsOnly = current.filter((item) => item.type === 'event');
+
+		const sortedMonsters = [...monstersOnly].sort((a, b) => {
+			const monsterA = monsterById.get(a.id);
+			const monsterB = monsterById.get(b.id);
+
+			const stateA = monsterA ? (inlineStateEdits[monsterA.id] ?? normalizeStateKey(monsterA.state)) : null;
+			const stateB = monsterB ? (inlineStateEdits[monsterB.id] ?? normalizeStateKey(monsterB.state)) : null;
+
+			const rankA = stateA ? (stateRank.get(stateA) ?? 999) : 999;
+			const rankB = stateB ? (stateRank.get(stateB) ?? 999) : 999;
+			if (rankA !== rankB) return rankA - rankB;
+
+			const idxA = originalMonsterIndex.get(a.id) ?? 0;
+			const idxB = originalMonsterIndex.get(b.id) ?? 0;
+			if (idxA !== idxB) return idxA - idxB;
+
+			const nameA = monsterA?.name ?? '';
+			const nameB = monsterB?.name ?? '';
+			return nameA.localeCompare(nameB);
+		});
+
+		const nextOrder = [...sortedMonsters, ...eventsOnly];
+		if (isSameOrder(current, nextOrder)) return;
+
+		deckOrder = nextOrder;
+		orderChanged = true;
+		void saveDeckOrder();
 	}
 
 	async function saveDeckOrder() {
@@ -841,6 +899,7 @@
 	}
 
 	async function saveMonster() {
+		if (!showMonsters) return;
 		if (!monsterFormData.name.trim()) {
 			alert(`${monsterLabel} name is required.`);
 			return;
@@ -903,6 +962,7 @@
 		return deckOrder
 			.map((item, orderIndex) => ({ item, orderIndex }))
 			.filter(({ item }) => {
+				if (!showMonsters && item.type === 'monster') return false;
 				if (!showEvents && item.type === 'event') return false;
 				if (typeFilter !== 'all' && item.type !== typeFilter) return false;
 				if (!query) return true;
@@ -1023,8 +1083,20 @@
 	});
 
 	$effect(() => {
+		if (!showMonsters && editorType === 'monster') {
+			closeEditor();
+		}
+	});
+
+	$effect(() => {
 		if (!showEvents && editorType === 'event') {
 			closeEditor();
+		}
+	});
+
+	$effect(() => {
+		if (!showMonsters && typeFilter === 'monster') {
+			typeFilter = 'all';
 		}
 	});
 
@@ -1060,7 +1132,16 @@
 	<section class="deck">
 		<header class="deck-toolbar">
 			<div class="toolbar-left">
-				<Button variant="primary" onclick={openNewMonster}>+ {monsterLabel}</Button>
+				{#if showMonsters}
+					<Button variant="primary" onclick={openNewMonster}>+ {monsterLabel}</Button>
+					<Button
+						variant="secondary"
+						onclick={resetMonsterOrderByState}
+						disabled={savingOrder || deckOrder.length === 0}
+					>
+						Reset Monster Order
+					</Button>
+				{/if}
 				{#if showEvents}
 					<Button variant="primary" onclick={openNewEvent}>+ Event</Button>
 				{/if}
@@ -1090,7 +1171,9 @@
 				/>
 				<select class="select" bind:value={typeFilter}>
 					<option value="all">All</option>
-					<option value="monster">{monsterLabelPlural}</option>
+					{#if showMonsters}
+						<option value="monster">{monsterLabelPlural}</option>
+					{/if}
 					{#if showEvents}
 						<option value="event">Events</option>
 					{/if}

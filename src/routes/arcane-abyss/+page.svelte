@@ -1,30 +1,28 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { MonsterRow, EventRow, SpecialEffectRow, RewardRow, GameLocationRow } from '$lib/types/gameData';
+	import type { SpecialEffectRow, RewardRow, GameLocationRow } from '$lib/types/gameData';
 	import { publicAssetUrl, processAndUploadImage } from '$lib/utils/storage';
 	import { getErrorMessage } from '$lib/utils';
-	import { generateMonsterCardPNG, generateEventCardPNG } from '$lib/generators/cards';
+	import { generateMonsterCardPNG } from '$lib/generators/cards';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { Button, FormField, Input, Textarea } from '$lib/components/ui';
 	import { MonsterCardGallery } from '$lib/components/monsters';
-	import type { Monster, Event, ResolvedRewardRow } from '$lib/components/abyss-deck';
+	import type { Monster, ResolvedRewardRow } from '$lib/components/abyss-deck';
 	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 	import type {
 		DeckOrderItem,
-		MonsterFormData as AbyssMonsterFormData,
-		EventFormData as AbyssEventFormData
+		MonsterFormData as AbyssMonsterFormData
 	} from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 
 	// Card gallery types
 	type CardItem = {
-		type: 'monster' | 'event';
 		id: string;
 		name: string;
 		order_num: number;
 		card_image_path: string | null;
-		data: Monster | Event;
+		data: Monster;
 	};
 
 	// Tab state
@@ -37,7 +35,6 @@
 
 	// Data state
 	let monsters = $state<Monster[]>([]);
-	let events = $state<Event[]>([]);
 	let allCards = $state<CardItem[]>([]);
 	let filteredCards = $state<CardItem[]>([]);
 	let loading = $state(true);
@@ -50,7 +47,6 @@
 
 	// Gallery state
 	let searchQuery = $state('');
-	let typeFilter = $state<'all' | 'monster' | 'event'>('all');
 	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive'>('all');
 	let classificationFilter = $state<'all' | 'monster' | 'abyss_guardian' | 'boss'>('all');
 	let statusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
@@ -82,7 +78,7 @@
 		try {
 			await loadAllIcons();
 			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadInvadeLocations()]);
-			await Promise.all([loadMonsters(), loadEvents()]);
+			await loadMonsters();
 			updateFilteredCards();
 		} catch (err) {
 			error = getErrorMessage(err);
@@ -150,34 +146,11 @@
 
 		allCards = [
 			...monsters.map(m => ({
-				type: 'monster' as const,
 				id: m.id,
 				name: m.name,
 				order_num: m.order_num ?? 999,
 				card_image_path: m.card_image_path,
 				data: m
-			}))
-		];
-	}
-
-	async function loadEvents() {
-		const { data, error: err } = await supabase.from('events').select('*').order('order_num');
-		if (err) throw new Error(err.message);
-
-		events = (data ?? []).map((event) => ({
-			...event,
-			art_url: getEventImageUrl(event.image_path, event.updated_at)
-		}));
-
-		allCards = [
-			...allCards,
-			...events.map(e => ({
-				type: 'event' as const,
-				id: e.id,
-				name: e.title,
-				order_num: e.order_num ?? 999,
-				card_image_path: e.card_image_path,
-				data: e
 			}))
 		];
 	}
@@ -197,18 +170,18 @@
 		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
-	function getEventImageUrl(imagePath: string | null | undefined, updatedAt?: string | null): string | null {
-		if (!imagePath) return null;
-		const path = imagePath.startsWith('events/') ? imagePath : `events/${imagePath}`;
-		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
-	}
-
 	function getStateColor(state: string | null | undefined): string {
 		switch (state) {
-			case 'tainted': return '#c084fc';
-			case 'corrupt': return '#6b21a8';
-			case 'fallen': return '#065f46';
-			case 'boss': return '#ef4444';
+			case 'tainted':
+				return '#c084fc';
+			case 'corrupt':
+				return '#6b21a8';
+			case 'fallen':
+				return '#065f46';
+			case 'arcane':
+				return '#0ea5e9';
+			case 'inactive':
+				return '#64748b';
 			default: return '#94a3b8';
 		}
 	}
@@ -224,10 +197,6 @@
 			.map((item, order_num) => (item.type === 'monster' ? { id: item.id, order_num } : null))
 			.filter((x): x is { id: string; order_num: number } => x !== null);
 
-		const eventUpdates = order
-			.map((item, order_num) => (item.type === 'event' ? { id: item.id, order_num } : null))
-			.filter((x): x is { id: string; order_num: number } => x !== null);
-
 		if (monsterUpdates.length > 0) {
 			for (const update of monsterUpdates) {
 				const { error: err } = await supabase
@@ -238,17 +207,7 @@
 			}
 		}
 
-		if (eventUpdates.length > 0) {
-			for (const update of eventUpdates) {
-				const { error: err } = await supabase
-					.from('events')
-					.update({ order_num: update.order_num })
-					.eq('id', update.id);
-				if (err) throw err;
-			}
-		}
-
-		await Promise.all([loadMonsters(), loadEvents()]);
+		await loadMonsters();
 		updateFilteredCards();
 	}
 
@@ -322,59 +281,10 @@
 		return monsterId;
 	}
 
-	async function handleWorkspaceEventSave(formData: AbyssEventFormData, id: string | null): Promise<string> {
-		if (!formData.name.trim() || !formData.title.trim()) {
-			throw new Error('Event name and title are required.');
-		}
-
-		if (id) {
-			const { error: err } = await supabase
-				.from('events')
-				.update({
-					name: formData.name,
-					title: formData.title,
-					description: formData.description,
-					image_path: formData.image_path,
-					order_num: formData.order_num,
-					updated_at: new Date().toISOString()
-				})
-				.eq('id', id);
-			if (err) throw err;
-
-			await loadEvents();
-			updateFilteredCards();
-			return id;
-		}
-
-		const { data, error: err } = await supabase
-			.from('events')
-			.insert({
-				name: formData.name,
-				title: formData.title,
-				description: formData.description,
-				image_path: formData.image_path,
-				order_num: formData.order_num
-			})
-			.select('id')
-			.single();
-		if (err) throw err;
-
-		await loadEvents();
-		updateFilteredCards();
-		return data.id;
-	}
-
 	async function handleWorkspaceMonsterDelete(id: string) {
 		const { error: err } = await supabase.from('monsters').delete().eq('id', id);
 		if (err) throw err;
 		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
-		updateFilteredCards();
-	}
-
-	async function handleWorkspaceEventDelete(id: string) {
-		const { error: err } = await supabase.from('events').delete().eq('id', id);
-		if (err) throw err;
-		await loadEvents();
 		updateFilteredCards();
 	}
 
@@ -467,15 +377,9 @@
 
 	function updateFilteredCards() {
 		filteredCards = allCards.filter(card => {
-			if (typeFilter !== 'all' && card.type !== typeFilter) return false;
-			if (stateFilter !== 'all' && card.type === 'monster') {
-				const monster = card.data as Monster;
-				if (monster.state !== stateFilter) return false;
-			}
-			if (classificationFilter !== 'all' && card.type === 'monster') {
-				const monster = card.data as Monster;
-				if ((monster.monster_classification ?? 'monster') !== classificationFilter) return false;
-			}
+			if (stateFilter !== 'all') if (card.data.state !== stateFilter) return false;
+			if (classificationFilter !== 'all')
+				if ((card.data.monster_classification ?? 'monster') !== classificationFilter) return false;
 			if (statusFilter === 'generated' && !card.card_image_path) return false;
 			if (statusFilter === 'not-generated' && card.card_image_path) return false;
 			if (searchQuery.trim() && !card.name.toLowerCase().includes(searchQuery.toLowerCase())) {
@@ -511,26 +415,16 @@
 		progressMessage = `Generating card for ${card.name}...`;
 
 		try {
-			let blob: Blob;
-			let folder: string;
-
-			if (card.type === 'monster') {
-				const monster = card.data as Monster;
-				blob = await generateMonsterCardPNG(
-					monster,
-					monster.art_url,
-					monster.icon_url,
-					monster.resolved_reward_rows
-				);
-				folder = 'monster_cards';
-			} else {
-				const event = card.data as Event;
-				blob = await generateEventCardPNG(event, event.art_url);
-				folder = 'event_cards';
-			}
+			const monster = card.data;
+			const blob = await generateMonsterCardPNG(
+				monster,
+				monster.art_url,
+				monster.icon_url,
+				monster.resolved_reward_rows
+			);
 
 			const { data, error: uploadError } = await processAndUploadImage(blob, {
-				folder,
+				folder: 'monster_cards',
 				filename: card.id,
 				cropTransparent: true,
 				upsert: true
@@ -539,9 +433,8 @@
 			if (uploadError) throw uploadError;
 
 			const uploadedPath = data?.path ?? '';
-			const table = card.type === 'monster' ? 'monsters' : 'events';
 			const { error: updateError } = await supabase
-				.from(table)
+				.from('monsters')
 				.update({ card_image_path: uploadedPath })
 				.eq('id', card.id);
 
@@ -601,7 +494,7 @@
 
 <PageLayout
 	title="Arcane Abyss"
-	subtitle="Monsters, events, and card generation for the abyss deck"
+	subtitle="Monsters and card generation for the abyss deck"
 	{tabs}
 	{activeTab}
 	onTabChange={handleTabChange}
@@ -616,7 +509,7 @@
 
 	{#snippet tabActions()}
 		{#if activeTab === 'deck'}
-			<span class="count">{monsters.length} monsters, {events.length} events</span>
+			<span class="count">{monsters.length} monsters</span>
 		{:else if activeTab === 'special-effects'}
 			<span class="count">{specialEffects.length} effects</span>
 		{:else if activeTab === 'gallery'}
@@ -631,16 +524,15 @@
 	{:else if activeTab === 'deck'}
 		<AbyssDeckWorkspace
 			{monsters}
-			{events}
+			events={[]}
 			locations={invadeLocations}
 			{specialEffects}
 			{monsterSpecialEffects}
 			onMonsterSave={handleWorkspaceMonsterSave}
-			onEventSave={handleWorkspaceEventSave}
 			onMonsterDelete={handleWorkspaceMonsterDelete}
-			onEventDelete={handleWorkspaceEventDelete}
 			onSaveDeckOrder={saveDeckOrder}
 			defaultShowCardPreviews={false}
+			showEvents={false}
 		/>
 	{:else if activeTab === 'special-effects'}
 		<div class="effects-grid">
@@ -681,31 +573,21 @@
 						class="search-input"
 					/>
 
-					<select bind:value={typeFilter} class="filter-select">
-						<option value="all">All Types</option>
-						<option value="monster">Monsters</option>
-						<option value="event">Events</option>
+					<select bind:value={stateFilter} class="filter-select">
+						<option value="all">All States</option>
+						<option value="tainted">Tainted</option>
+						<option value="corrupt">Corrupt</option>
+						<option value="fallen">Fallen</option>
+						<option value="arcane">Arcane</option>
+						<option value="inactive">Inactive</option>
 					</select>
 
-					{#if typeFilter === 'monster' || typeFilter === 'all'}
-						<select bind:value={stateFilter} class="filter-select">
-							<option value="all">All States</option>
-							<option value="tainted">Tainted</option>
-							<option value="corrupt">Corrupt</option>
-							<option value="fallen">Fallen</option>
-							<option value="arcane">Arcane</option>
-							<option value="inactive">Inactive</option>
-						</select>
-					{/if}
-
-					{#if typeFilter === 'monster' || typeFilter === 'all'}
-						<select bind:value={classificationFilter} class="filter-select">
-							<option value="all">All Classifications</option>
-							<option value="monster">Monster</option>
-							<option value="abyss_guardian">Abyss Guardian</option>
-							<option value="boss">Boss</option>
-						</select>
-					{/if}
+					<select bind:value={classificationFilter} class="filter-select">
+						<option value="all">All Classifications</option>
+						<option value="monster">Monster</option>
+						<option value="abyss_guardian">Abyss Guardian</option>
+						<option value="boss">Boss</option>
+					</select>
 
 					<select bind:value={statusFilter} class="filter-select">
 						<option value="all">All Status</option>
@@ -745,7 +627,7 @@
 					{@const hasCardImage = !!card.card_image_path}
 					{@const cardImageUrl = getCardImageUrl(card)}
 
-					<div class="card-item" class:selected={isSelected} class:event={card.type === 'event'}>
+					<div class="card-item" class:selected={isSelected}>
 						<div class="card-checkbox">
 							<input
 								type="checkbox"
@@ -761,18 +643,13 @@
 								<div class="card-status generated">
 									<span class="status-icon">✓</span>
 								</div>
-							{:else if card.type === 'monster'}
-								{@const monster = card.data as Monster}
-								<div class="card-placeholder">
-									{#if monster.icon_url}
-										<img src={monster.icon_url} alt={card.name} class="placeholder-icon" />
-									{:else if monster.icon}
-										<div class="placeholder-emoji">{monster.icon}</div>
-									{/if}
-									<span class="placeholder-text">{card.name}</span>
-								</div>
 							{:else}
-								<div class="card-placeholder event-placeholder">
+								<div class="card-placeholder">
+									{#if card.data.icon_url}
+										<img src={card.data.icon_url} alt={card.name} class="placeholder-icon" />
+									{:else if card.data.icon}
+										<div class="placeholder-emoji">{card.data.icon}</div>
+									{/if}
 									<span class="placeholder-text">{card.name}</span>
 								</div>
 							{/if}
@@ -787,14 +664,9 @@
 						<div class="card-info">
 							<div class="card-header">
 								<h3 class="card-name">{card.name}</h3>
-								{#if card.type === 'event'}
-									<span class="card-badge event-badge">Event</span>
-								{:else}
-									{@const monster = card.data as Monster}
-									<span class="card-badge state-badge" style="--state-color: {getStateColor(monster.state)}">
-										{monster.state}
-									</span>
-								{/if}
+								<span class="card-badge state-badge" style="--state-color: {getStateColor(card.data.state)}">
+									{card.data.state}
+								</span>
 							</div>
 
 							<div class="card-footer">
@@ -868,7 +740,7 @@
 	</div>
 {/if}
 
-<MonsterCardGallery bind:isOpen={showGalleryModal} {monsters} {events} />
+<MonsterCardGallery bind:isOpen={showGalleryModal} {monsters} events={[]} />
 
 <style>
 	.count {
@@ -984,14 +856,6 @@
 		background: rgba(168, 85, 247, 0.05);
 	}
 
-	.card-item.event {
-		border-color: rgba(59, 130, 246, 0.3);
-	}
-
-	.card-item.event:hover {
-		border-color: rgba(59, 130, 246, 0.6);
-	}
-
 	.card-checkbox {
 		position: absolute;
 		top: 0.5rem;
@@ -1046,10 +910,6 @@
 	.placeholder-text {
 		color: #64748b;
 		font-size: 0.7rem;
-	}
-
-	.event-placeholder {
-		background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.05));
 	}
 
 	.card-status {
@@ -1125,12 +985,6 @@
 		font-weight: 600;
 		text-transform: uppercase;
 		flex-shrink: 0;
-	}
-
-	.event-badge {
-		background: rgba(59, 130, 246, 0.2);
-		color: #60a5fa;
-		border: 1px solid rgba(59, 130, 246, 0.3);
 	}
 
 	.state-badge {

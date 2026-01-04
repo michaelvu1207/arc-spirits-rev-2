@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { GameLocationRewardRow, GameLocationRow, GameLocationRowCompositionRow, OriginRow } from '$lib/types/gameData';
+	import type {
+		GameLocationRewardRow,
+		GameLocationRow,
+		GameLocationRowCompositionRow,
+		IconPoolRow,
+		OriginRow
+	} from '$lib/types/gameData';
 	import { fetchGameLocationRows } from '$lib/api/gameLocationRows';
 	import { getErrorMessage } from '$lib/utils';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
@@ -9,14 +15,18 @@
 	import { PageLayout, Modal, type Tab } from '$lib/components/layout';
 	import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
 	import { LocationPlacerModal, LocationRewardRowsEditor } from '$lib/components/game-locations';
-	import { Button, FormField, Input, Select } from '$lib/components/ui';
+	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 
-	const tabs: Tab[] = [{ id: 'locations', label: 'Locations', icon: '📍' }];
+	const tabs: Tab[] = [
+		{ id: 'locations', label: 'Locations', icon: '📍' },
+		{ id: 'guide', label: 'Locations Guide', icon: '📖' }
+	];
 	let activeTab = $state('locations');
 
 	type OriginOption = Pick<OriginRow, 'id' | 'name'>;
 	type Location = GameLocationRow;
 
+	let iconPool = $state<IconPoolRow[]>([]);
 	let locations = $state<Location[]>([]);
 	let origins = $state<OriginOption[]>([]);
 	let loading = $state(true);
@@ -48,6 +58,7 @@
 	let locationRowsError = $state<string | null>(null);
 
 	const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
+	const iconById = $derived.by(() => new Map(iconPool.map((icon) => [icon.id, icon])));
 
 	const filteredLocations = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
@@ -60,11 +71,125 @@
 
 	onMount(loadData);
 
+	function handleTabChange(tabId: string) {
+		activeTab = tabId;
+	}
+
+	let guideSearchQuery = $state('');
+	let guideSaveError = $state<string | null>(null);
+	let guideSaving = $state(false);
+	let guideDraftDescriptions = $state<Record<string, string>>({});
+
+	const usedIconIds = $derived.by(() => {
+		const ids = new Set<string>();
+		for (const loc of locations) {
+			for (const row of loc.reward_rows ?? []) {
+				if (row.type === 'gain') {
+					for (const id of row.gain_icon_ids ?? []) ids.add(id);
+					continue;
+				}
+				if (row.type === 'trade') {
+					for (const id of row.cost_icon_ids ?? []) ids.add(id);
+					for (const id of row.gain_icon_ids ?? []) ids.add(id);
+				}
+			}
+		}
+		return Array.from(ids);
+	});
+
+	const usedIcons = $derived.by(() => {
+		const icons: IconPoolRow[] = [];
+		for (const id of usedIconIds) {
+			const icon = iconById.get(id);
+			if (icon) icons.push(icon);
+		}
+		icons.sort((a, b) => a.name.localeCompare(b.name));
+		return icons;
+	});
+
+	const missingUsedIconIds = $derived.by(() => usedIconIds.filter((id) => !iconById.get(id)));
+
+	function isGuideDirty(icon: IconPoolRow): boolean {
+		const draft = guideDraftDescriptions[icon.id];
+		if (draft === undefined) return false;
+		return draft.trim() !== (icon.description ?? '').trim();
+	}
+
+	const dirtyGuideIds = $derived.by(() => {
+		const ids: string[] = [];
+		for (const icon of usedIcons) {
+			if (isGuideDirty(icon)) ids.push(icon.id);
+		}
+		return ids;
+	});
+
+	const filteredGuideIcons = $derived.by(() => {
+		const term = guideSearchQuery.trim().toLowerCase();
+		if (!term) return usedIcons;
+		return usedIcons.filter((icon) => {
+			if (icon.name.toLowerCase().includes(term)) return true;
+			if ((icon.description ?? '').toLowerCase().includes(term)) return true;
+			return false;
+		});
+	});
+
+	const subtitleText = $derived.by(() => {
+		if (activeTab === 'guide') return `${usedIcons.length} icons`;
+		return `${filteredLocations.length} locations`;
+	});
+
+	function updateDraftDescription(iconId: string, next: string) {
+		guideDraftDescriptions = { ...guideDraftDescriptions, [iconId]: next };
+	}
+
+	function resetGuideDrafts() {
+		guideDraftDescriptions = {};
+		guideSaveError = null;
+	}
+
+	async function saveGuideDescriptions() {
+		const ids = [...dirtyGuideIds];
+		if (ids.length === 0) return;
+
+		guideSaving = true;
+		guideSaveError = null;
+		const nextDrafts = { ...guideDraftDescriptions };
+		const errors: string[] = [];
+
+		try {
+			for (const iconId of ids) {
+				const icon = iconById.get(iconId);
+				if (!icon) continue;
+				const draft = guideDraftDescriptions[iconId];
+				const nextText = typeof draft === 'string' ? draft.trim() : '';
+				const description = nextText.length > 0 ? nextText : null;
+
+				const { error: err } = await supabase.from('icon_pool').update({ description }).eq('id', iconId);
+				if (err) {
+					errors.push(`${icon.name}: ${err.message}`);
+					continue;
+				}
+
+				iconPool = iconPool.map((row) => (row.id === iconId ? { ...row, description } : row));
+				delete nextDrafts[iconId];
+			}
+		} catch (err) {
+			guideSaveError = getErrorMessage(err);
+		} finally {
+			guideSaving = false;
+			guideDraftDescriptions = nextDrafts;
+		}
+
+		if (errors.length > 0) {
+			guideSaveError = `Failed to save ${errors.length} icon(s):\n${errors.slice(0, 6).join('\n')}`;
+		}
+	}
+
 	async function loadData() {
 		loading = true;
 		error = null;
 		try {
-			await loadAllIcons();
+			iconPool = await loadAllIcons();
 			await Promise.all([loadOrigins(), loadLocations()]);
 		} catch (err) {
 			error = getErrorMessage(err);
@@ -253,148 +378,238 @@
 
 <PageLayout
 	title="Game Locations"
-	subtitle={`${filteredLocations.length} locations`}
+	subtitle={subtitleText}
 	{tabs}
 	{activeTab}
+	onTabChange={handleTabChange}
 >
 	{#snippet headerActions()}
-		<Button variant="primary" onclick={openCreate}>+ Location</Button>
-			<Button
-				variant="secondary"
-				onclick={() => (iconPlacerOpen = true)}
-				disabled={locations.length === 0}
-			>
+		{#if activeTab === 'locations'}
+			<Button variant="primary" onclick={openCreate}>+ Location</Button>
+			<Button variant="secondary" onclick={() => (iconPlacerOpen = true)} disabled={locations.length === 0}>
 				Icon Placer
 			</Button>
-		{/snippet}
-	{#snippet children()}
-		{#if error}
-			<div class="banner banner--error">{error}</div>
 		{/if}
+	{/snippet}
+	{#snippet children()}
+			{#if error}
+				<div class="banner banner--error">{error}</div>
+			{/if}
 
-			<FilterBar
-			bind:searchValue={searchQuery}
-			searchPlaceholder="Search locations…"
-			filters={[
-				{
-					key: 'origin_id',
-					label: 'Origin',
-					value: originFilter === 'all' ? null : originFilter,
-					options: origins.map((o) => ({ value: o.id, label: o.name }))
-				}
-			]}
-			onfilterchange={(key, value) => {
-				if (key === 'origin_id') originFilter = value ? String(value) : 'all';
-			}}
-		/>
+			{#if activeTab === 'locations'}
+				<FilterBar
+					bind:searchValue={searchQuery}
+					searchPlaceholder="Search locations…"
+					filters={[
+						{
+							key: 'origin_id',
+							label: 'Origin',
+							value: originFilter === 'all' ? null : originFilter,
+							options: origins.map((o) => ({ value: o.id, label: o.name }))
+						}
+					]}
+					onfilterchange={(key, value) => {
+						if (key === 'origin_id') originFilter = value ? String(value) : 'all';
+					}}
+				/>
 
-		{#if loading}
-			<div class="placeholder">
-				<p>Loading…</p>
-			</div>
-		{:else}
-			<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
-				{#snippet item({ item })}
-					{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
-						updatedAt: item.updated_at ?? undefined
-					})}
-					{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
-					<div class="location-card">
-						{#if previewUrl}
-							<div class="location-card__preview">
-								<img src={previewUrl} alt={`Preview for ${item.name}`} loading="lazy" />
-								{#if item.image_with_icons_path}
-									<span class="location-card__badge">With Icons</span>
-								{:else}
-									<span class="location-card__badge">Background</span>
+				{#if loading}
+					<div class="placeholder">
+						<p>Loading…</p>
+					</div>
+				{:else}
+					<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
+						{#snippet item({ item })}
+							{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
+								updatedAt: item.updated_at ?? undefined
+							})}
+							{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
+							<div class="location-card">
+								{#if previewUrl}
+									<div class="location-card__preview">
+										<img src={previewUrl} alt={`Preview for ${item.name}`} loading="lazy" />
+										{#if item.image_with_icons_path}
+											<span class="location-card__badge">With Icons</span>
+										{:else}
+											<span class="location-card__badge">Background</span>
+										{/if}
+									</div>
 								{/if}
-							</div>
-						{/if}
-						<header class="location-card__header">
-							<div class="location-card__title">
-								<h3>{item.name}</h3>
-								<p class="location-card__subtitle">
-									{#if item.origin_id}
-										Origin: {originNameById.get(item.origin_id) ?? 'Unknown'}
+								<header class="location-card__header">
+									<div class="location-card__title">
+										<h3>{item.name}</h3>
+										<p class="location-card__subtitle">
+											{#if item.origin_id}
+												Origin: {originNameById.get(item.origin_id) ?? 'Unknown'}
+											{:else}
+												Origin: None
+											{/if}
+										</p>
+									</div>
+									<div class="location-card__actions">
+										<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
+										<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
+									</div>
+								</header>
+
+								<div class="location-card__rewards">
+									{#if displayRows.length === 0}
+										<p class="location-card__empty-rewards">No rewards set</p>
 									{:else}
-										Origin: None
-									{/if}
-								</p>
-							</div>
-							<div class="location-card__actions">
-								<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
-								<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
-							</div>
-						</header>
+										{#each displayRows as row, idx (idx)}
+											<div
+												class="reward-row"
+												class:reward-row--trade={row.type === 'trade'}
+												class:reward-row--text={row.type === 'text'}
+											>
+												<span class="reward-row__label">
+													{row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain Reward'}
+												</span>
 
-							<div class="location-card__rewards">
-								{#if displayRows.length === 0}
-									<p class="location-card__empty-rewards">No rewards set</p>
-								{:else}
-									{#each displayRows as row, idx (idx)}
-										<div
-											class="reward-row"
-											class:reward-row--trade={row.type === 'trade'}
-											class:reward-row--text={row.type === 'text'}
-										>
-											<span class="reward-row__label">
-												{row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain Reward'}
-											</span>
-
-											{#if row.type === 'trade'}
-												<div class="reward-row__trade">
-													<div class="reward-row__icons">
-														{#each row.cost_icon_ids as iconId, iconIdx (iconIdx)}
-															{@const url = getIconPoolUrl(iconId)}
-															<div class="reward-row__icon">
-																{#if url}
-																	<img src={url} alt="Cost icon" />
-																{:else}
-																	<span class="reward-row__icon-placeholder">?</span>
-																{/if}
-															</div>
-														{/each}
+												{#if row.type === 'trade'}
+													<div class="reward-row__trade">
+														<div class="reward-row__icons">
+															{#each row.cost_icon_ids as iconId, iconIdx (iconIdx)}
+																{@const url = getIconPoolUrl(iconId)}
+																<div class="reward-row__icon">
+																	{#if url}
+																		<img src={url} alt="Cost icon" />
+																	{:else}
+																		<span class="reward-row__icon-placeholder">?</span>
+																	{/if}
+																</div>
+															{/each}
+														</div>
+														<span class="reward-row__arrow">→</span>
+														<div class="reward-row__icons">
+															{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
+																{@const url = getIconPoolUrl(iconId)}
+																<div class="reward-row__icon">
+																	{#if url}
+																		<img src={url} alt="Gain icon" />
+																	{:else}
+																		<span class="reward-row__icon-placeholder">?</span>
+																	{/if}
+																</div>
+															{/each}
+														</div>
 													</div>
-													<span class="reward-row__arrow">→</span>
+												{:else if row.type === 'gain'}
 													<div class="reward-row__icons">
 														{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
 															{@const url = getIconPoolUrl(iconId)}
 															<div class="reward-row__icon">
 																{#if url}
-																	<img src={url} alt="Gain icon" />
+																	<img src={url} alt="Reward icon" />
 																{:else}
 																	<span class="reward-row__icon-placeholder">?</span>
 																{/if}
 															</div>
 														{/each}
 													</div>
-												</div>
-											{:else if row.type === 'gain'}
-												<div class="reward-row__icons">
-													{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
-														{@const url = getIconPoolUrl(iconId)}
-														<div class="reward-row__icon">
-															{#if url}
-																<img src={url} alt="Reward icon" />
-															{:else}
-																<span class="reward-row__icon-placeholder">?</span>
-															{/if}
-														</div>
-													{/each}
-												</div>
-											{:else}
-												<div class="reward-row__text">{row.text}</div>
-											{/if}
-										</div>
-									{/each}
-								{/if}
+												{:else}
+													<div class="reward-row__text">{row.text}</div>
+												{/if}
+											</div>
+										{/each}
+									{/if}
+								</div>
 							</div>
+						{/snippet}
+					</DataGrid>
+				{/if}
+			{:else if activeTab === 'guide'}
+				<div class="locations-guide">
+					{#if guideSaveError}
+						<div class="banner banner--error">{guideSaveError}</div>
+					{/if}
+
+					<div class="locations-guide__toolbar">
+						<div class="locations-guide__search">
+							<div class="locations-guide__label">Search</div>
+							<Input bind:value={guideSearchQuery} placeholder="Search icons…" />
+						</div>
+
+						<div class="locations-guide__actions">
+							<span class="locations-guide__meta">{dirtyGuideIds.length} unsaved · {usedIcons.length} total</span>
+							<Button
+								variant="secondary"
+								onclick={resetGuideDrafts}
+								disabled={guideSaving || dirtyGuideIds.length === 0}
+							>
+								Reset
+							</Button>
+							<Button
+								variant="primary"
+								onclick={saveGuideDescriptions}
+								loading={guideSaving}
+								disabled={dirtyGuideIds.length === 0}
+							>
+								Save Changes
+							</Button>
+						</div>
 					</div>
-				{/snippet}
-			</DataGrid>
-		{/if}
-	{/snippet}
-</PageLayout>
+
+					{#if loading}
+						<div class="placeholder">
+							<p>Loading…</p>
+						</div>
+					{:else}
+						{#if missingUsedIconIds.length > 0}
+							<div class="banner banner--error">
+								Missing {missingUsedIconIds.length} icon(s) referenced by locations.
+							</div>
+						{/if}
+
+						{#if filteredGuideIcons.length === 0}
+							<div class="placeholder">
+								<p>No icons found.</p>
+							</div>
+						{:else}
+							<div class="locations-guide__grid">
+								{#each filteredGuideIcons as icon (icon.id)}
+									{@const url = getIconPoolUrl(icon)}
+									{@const draft = guideDraftDescriptions[icon.id] ?? icon.description ?? ''}
+									{@const dirty = isGuideDirty(icon)}
+									<div class="locations-guide__card">
+										<div class="locations-guide__card-header">
+											<div class="locations-guide__icon">
+												{#if url}
+													<img src={url} alt={icon.name} loading="lazy" />
+												{:else}
+													<span class="locations-guide__icon-missing">?</span>
+												{/if}
+											</div>
+											<div class="locations-guide__title">
+												<div class="locations-guide__name">{icon.name}</div>
+												<div class="locations-guide__sub">
+													<span class="locations-guide__source">{icon.source_type}</span>
+													{#if dirty}
+														<span class="locations-guide__dirty">Unsaved</span>
+													{/if}
+												</div>
+											</div>
+										</div>
+
+										<div class="locations-guide__field">
+											<div class="locations-guide__label">Description</div>
+											<Textarea
+												rows={3}
+												placeholder="What does this icon mean on the map?"
+												value={draft}
+												oninput={(e) =>
+													updateDraftDescription(icon.id, (e.currentTarget as HTMLTextAreaElement).value)}
+											/>
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					{/if}
+				</div>
+			{/if}
+		{/snippet}
+	</PageLayout>
 
 <style>
 	.banner {
@@ -676,6 +891,146 @@
 		margin: 0.25rem 0 0;
 		font-size: 0.8rem;
 		color: rgba(148, 163, 184, 0.75);
+	}
+
+	.locations-guide {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.locations-guide__toolbar {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		padding: 0.75rem;
+		border-radius: 12px;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(15, 23, 42, 0.5);
+	}
+
+	.locations-guide__search {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: min(420px, 100%);
+		flex: 1;
+	}
+
+	.locations-guide__actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.locations-guide__meta {
+		font-size: 0.8rem;
+		color: rgba(148, 163, 184, 0.8);
+	}
+
+	.locations-guide__grid {
+		display: grid;
+		gap: 1rem;
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+	}
+
+	.locations-guide__card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		padding: 0.9rem;
+		border-radius: 12px;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(15, 23, 42, 0.5);
+		box-shadow: 0 10px 20px rgba(2, 6, 23, 0.25);
+	}
+
+	.locations-guide__card-header {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-width: 0;
+	}
+
+	.locations-guide__icon {
+		width: 56px;
+		height: 56px;
+		border-radius: 12px;
+		overflow: hidden;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(2, 6, 23, 0.35);
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+	}
+
+	.locations-guide__icon img {
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+		display: block;
+	}
+
+	.locations-guide__icon-missing {
+		color: rgba(148, 163, 184, 0.85);
+		font-weight: 700;
+		font-size: 1.2rem;
+	}
+
+	.locations-guide__title {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		min-width: 0;
+	}
+
+	.locations-guide__name {
+		color: #f8fafc;
+		font-weight: 700;
+		font-size: 0.95rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.locations-guide__sub {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.locations-guide__source {
+		font-size: 0.72rem;
+		color: rgba(148, 163, 184, 0.85);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.locations-guide__dirty {
+		font-size: 0.72rem;
+		padding: 0.15rem 0.4rem;
+		border-radius: 999px;
+		border: 1px solid rgba(250, 204, 21, 0.45);
+		background: rgba(250, 204, 21, 0.12);
+		color: rgba(253, 230, 138, 0.95);
+		font-weight: 700;
+	}
+
+	.locations-guide__field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.locations-guide__label {
+		font-size: 0.75rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: rgba(148, 163, 184, 0.85);
 	}
 
 	@media (max-width: 1200px) {
