@@ -27,7 +27,8 @@
 		tainted: '#dc2626',
 		corrupt: '#991b1b',
 		fallen: '#7f1d1d',
-		arcane: '#0ea5e9'
+		arcane: '#0ea5e9',
+		inactive: '#64748b'
 	};
 
 	const classificationLabels: Record<string, string> = {

@@ -264,7 +264,7 @@ export type MonsterRow = {
 	name: string;
 	damage: number;
 	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
+	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 	monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 	icon: string | null;
 	image_path: string | null;

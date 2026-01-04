@@ -76,8 +76,7 @@ export interface LocationIconPlacementConfig {
 	/**
 	 * Row template slots.
 	 *
-	 * Only the first row is used as the global template for rendering row PNGs
-	 * (gain: 4 slots, trade cost: 2 slots, trade gain: 3 slots).
+	 * Only the first row is used as the global template for rendering row PNGs.
 	 */
 	rows: LocationRowPlacement[];
 	gain_row_background: LocationRowBackgroundConfig;
@@ -139,36 +138,46 @@ export function normalizeLocationIconPlacementConfig(input: unknown): LocationIc
 	const parsed = raw as Partial<LocationIconPlacementConfig>;
 	if (typeof parsed._icon_size !== 'number' || !Array.isArray(parsed.rows)) return defaults;
 
-	function sanitizeSlots(
-		input: unknown,
-		fallback: IconSlot[],
-		desiredLength: number,
-		defaultSize: number
-	): IconSlot[] {
-		if (!Array.isArray(input)) return fallback.slice(0, desiredLength);
-		const sanitized = input
-			.map((slot) => {
-				if (!slot || typeof slot !== 'object') return null;
-				const obj = slot as Record<string, unknown>;
-				const x = typeof obj.x === 'number' && Number.isFinite(obj.x) ? obj.x : null;
-				const y = typeof obj.y === 'number' && Number.isFinite(obj.y) ? obj.y : null;
-				if (x === null || y === null) return null;
-				const wRaw = typeof obj.w === 'number' && Number.isFinite(obj.w) ? obj.w : defaultSize;
-				const hRaw = typeof obj.h === 'number' && Number.isFinite(obj.h) ? obj.h : defaultSize;
-				const w = Math.max(0, wRaw);
-				const h = Math.max(0, hRaw);
-				const normalized: IconSlot = { x, y, w, h };
-				return normalized;
-			})
-			.filter((v): v is IconSlot => v !== null);
+	const MAX_ROW_SLOTS = 12;
 
-		// Ensure fixed length by filling from fallback
-		const base = [...sanitized];
-		for (let i = base.length; i < desiredLength; i++) {
-			const src = fallback[i] ?? fallback[fallback.length - 1] ?? { x: 0, y: 0, w: defaultSize, h: defaultSize };
-			base.push({ x: src.x, y: src.y, w: src.w ?? defaultSize, h: src.h ?? defaultSize });
+	function sanitizeSlot(input: unknown, fallback: IconSlot | undefined, defaultSize: number): IconSlot | null {
+		if (!input || typeof input !== 'object') {
+			if (!fallback) return null;
+			return { x: fallback.x, y: fallback.y, w: fallback.w ?? defaultSize, h: fallback.h ?? defaultSize };
 		}
-		return base.slice(0, desiredLength);
+
+		const obj = input as Record<string, unknown>;
+		const x = typeof obj.x === 'number' && Number.isFinite(obj.x)
+			? obj.x
+			: (fallback?.x ?? null);
+		const y = typeof obj.y === 'number' && Number.isFinite(obj.y)
+			? obj.y
+			: (fallback?.y ?? null);
+		if (x === null || y === null) return null;
+
+		const wRaw = typeof obj.w === 'number' && Number.isFinite(obj.w)
+			? obj.w
+			: (fallback?.w ?? defaultSize);
+		const hRaw = typeof obj.h === 'number' && Number.isFinite(obj.h)
+			? obj.h
+			: (fallback?.h ?? defaultSize);
+
+		return { x, y, w: Math.max(0, wRaw), h: Math.max(0, hRaw) };
+	}
+
+	function sanitizeSlots(input: unknown, fallback: IconSlot[], defaultSize: number): IconSlot[] {
+		if (!Array.isArray(input)) {
+			return fallback.map((s) => ({ x: s.x, y: s.y, w: s.w ?? defaultSize, h: s.h ?? defaultSize }));
+		}
+
+		const targetLength = Math.max(0, Math.min(input.length, MAX_ROW_SLOTS));
+		const slots: IconSlot[] = [];
+		for (let i = 0; i < targetLength; i++) {
+			const sanitized = sanitizeSlot(input[i], fallback[i] ?? fallback[fallback.length - 1], defaultSize);
+			if (!sanitized) continue;
+			slots.push(sanitized);
+		}
+		return slots;
 	}
 
 	function sanitizeRowBackground(input: unknown, fallback: LocationRowBackgroundConfig): LocationRowBackgroundConfig {
@@ -191,9 +200,9 @@ export function normalizeLocationIconPlacementConfig(input: unknown): LocationIc
 		: defaults._icon_size;
 	const rows: LocationRowPlacement[] = [
 		{
-			gain_slots: sanitizeSlots(firstRow?.gain_slots, defaults.rows[0].gain_slots, 4, defaultSize),
-			trade_cost_slots: sanitizeSlots(firstRow?.trade_cost_slots, defaults.rows[0].trade_cost_slots, 2, defaultSize),
-			trade_gain_slots: sanitizeSlots(firstRow?.trade_gain_slots, defaults.rows[0].trade_gain_slots, 3, defaultSize)
+			gain_slots: sanitizeSlots(firstRow?.gain_slots, defaults.rows[0].gain_slots, defaultSize),
+			trade_cost_slots: sanitizeSlots(firstRow?.trade_cost_slots, defaults.rows[0].trade_cost_slots, defaultSize),
+			trade_gain_slots: sanitizeSlots(firstRow?.trade_gain_slots, defaults.rows[0].trade_gain_slots, defaultSize)
 		}
 	];
 

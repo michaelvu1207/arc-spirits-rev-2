@@ -22,7 +22,7 @@
 		description: string | null;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
+		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 		monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 		icon: string | null;
 		image_path: string | null;
@@ -126,9 +126,51 @@
 	const INLINE_SPECIAL_EFFECT_MAX = 4;
 	let inlineEffectEdits = $state<Record<string, string[]>>({});
 	let inlineEffectOpenId = $state<string | null>(null);
+	let inlineStateEdits = $state<Record<string, MonsterState>>({});
+	const inlineAutosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	const specialEffectById = $derived.by(() => new Map(specialEffects.map((effect) => [effect.id, effect])));
 	const sortedSpecialEffects = $derived.by(() => [...specialEffects].sort((a, b) => a.name.localeCompare(b.name)));
+
+	function scheduleInlineAutosave(monsterId: string, delayMs = 0) {
+		const existing = inlineAutosaveTimers.get(monsterId);
+		if (existing) {
+			clearTimeout(existing);
+		}
+
+		inlineAutosaveTimers.set(
+			monsterId,
+			setTimeout(() => {
+				inlineAutosaveTimers.delete(monsterId);
+				void saveInlineEdits(monsterId);
+			}, delayMs)
+		);
+	}
+
+	function handleInlineStatsFocusOut(monsterId: string, e: FocusEvent) {
+		const current = e.currentTarget as HTMLElement | null;
+		const next = e.relatedTarget as Node | null;
+		if (current && next && current.contains(next)) return;
+		scheduleInlineAutosave(monsterId, 0);
+	}
+
+	function closeInlineEffectsPanel(monsterId: string) {
+		inlineEffectOpenId = null;
+		scheduleInlineAutosave(monsterId, 0);
+	}
+
+	function toggleInlineEffectsPanel(monsterId: string) {
+		if (inlineEffectOpenId === monsterId) {
+			closeInlineEffectsPanel(monsterId);
+			return;
+		}
+
+		const previous = inlineEffectOpenId;
+		inlineEffectOpenId = monsterId;
+		if (previous) {
+			scheduleInlineAutosave(previous, 0);
+		}
+	}
 
 	function keyToString(k: DeckOrderItem) {
 		return `${k.type}:${k.id}`;
@@ -344,6 +386,34 @@
 		};
 	}
 
+	function getInlineState(monster: Monster): MonsterState {
+		const edit = inlineStateEdits[monster.id];
+		if (edit) return edit;
+		switch (monster.state) {
+			case 'tainted':
+			case 'corrupt':
+			case 'fallen':
+			case 'arcane':
+			case 'inactive':
+				return monster.state;
+			default:
+				return 'tainted';
+		}
+	}
+
+	function coerceMonsterState(value: string, fallback: MonsterState): MonsterState {
+		switch (value) {
+			case 'tainted':
+			case 'corrupt':
+			case 'fallen':
+			case 'arcane':
+			case 'inactive':
+				return value;
+			default:
+				return fallback;
+		}
+	}
+
 	function normalizeInlineEffectIds(ids: string[]): string[] {
 		const unique = Array.from(
 			new Set(
@@ -425,6 +495,22 @@
 		}
 	}
 
+	function setInlineState(monster: Monster, rawValue: string) {
+		const base = coerceMonsterState(monster.state, 'tainted');
+		const next = coerceMonsterState(rawValue, base);
+		const edits = { ...inlineStateEdits };
+		if (next === base) {
+			delete edits[monster.id];
+		} else {
+			edits[monster.id] = next;
+		}
+		inlineStateEdits = edits;
+
+		if (inlineStatsError[monster.id]) {
+			inlineStatsError = { ...inlineStatsError, [monster.id]: null };
+		}
+	}
+
 	async function saveInlineEdits(monsterId: string) {
 		if (inlineStatsSaving[monsterId]) return;
 		const monster = monsterById.get(monsterId);
@@ -432,7 +518,8 @@
 
 		const statsEdit = inlineStatsEdits[monsterId];
 		const effectsEdit = inlineEffectEdits[monsterId];
-		if (!statsEdit && !effectsEdit) return;
+		const stateEdit = inlineStateEdits[monsterId];
+		if (!statsEdit && !effectsEdit && !stateEdit) return;
 
 		inlineStatsSaving = { ...inlineStatsSaving, [monsterId]: true };
 		inlineStatsError = { ...inlineStatsError, [monsterId]: null };
@@ -442,6 +529,7 @@
 				...formData,
 				damage: statsEdit?.damage ?? formData.damage,
 				barrier: statsEdit?.barrier ?? formData.barrier,
+				state: stateEdit ?? formData.state,
 				special_effect_ids: effectsEdit ?? formData.special_effect_ids
 			};
 			await onMonsterSave(merged, monsterId);
@@ -453,6 +541,10 @@
 			const nextEffects = { ...inlineEffectEdits };
 			delete nextEffects[monsterId];
 			inlineEffectEdits = nextEffects;
+
+			const nextState = { ...inlineStateEdits };
+			delete nextState[monsterId];
+			inlineStateEdits = nextState;
 		} catch (err) {
 			inlineStatsError = { ...inlineStatsError, [monsterId]: getErrorMessage(err) };
 		} finally {
@@ -538,12 +630,32 @@
 
 	function openEdit(type: 'monster' | 'event', id: string) {
 		if (type === 'event' && !showEvents) return;
+
+		if (inlineEffectOpenId) {
+			const openId = inlineEffectOpenId;
+			inlineEffectOpenId = null;
+			scheduleInlineAutosave(openId, 0);
+		}
+
 		if (type === 'monster') {
 			const monster = monsterById.get(id);
 			if (!monster) return;
+			if (inlineStatsEdits[id] || inlineEffectEdits[id] || inlineStateEdits[id]) {
+				scheduleInlineAutosave(id, 0);
+			}
 			editorType = type;
 			editingId = id;
-			monsterFormData = monsterToFormData(monster);
+			const baseForm = monsterToFormData(monster);
+			const statsEdit = inlineStatsEdits[id];
+			const effectsEdit = inlineEffectEdits[id];
+			const stateEdit = inlineStateEdits[id];
+			monsterFormData = {
+				...baseForm,
+				damage: statsEdit?.damage ?? baseForm.damage,
+				barrier: statsEdit?.barrier ?? baseForm.barrier,
+				state: stateEdit ?? baseForm.state,
+				special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
+			};
 			onSelectMonster?.(monster);
 			editorOpen = true;
 		} else {
@@ -799,8 +911,7 @@
 			});
 	});
 
-	type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'arcane';
-	type MonsterStateGroup = MonsterState;
+	type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 	type DeckSection = {
 		key: string;
 		label: string;
@@ -808,23 +919,16 @@
 		groups: { item: DeckOrderItem; orderIndex: number }[];
 	};
 
-	const monsterStateGroupOrder: MonsterStateGroup[] = ['tainted', 'corrupt', 'fallen', 'arcane'];
+	const monsterStateGroupOrder: MonsterState[] = ['tainted', 'corrupt', 'fallen', 'arcane', 'inactive'];
+	const monsterStateGroupOrderSet = new Set<string>(monsterStateGroupOrder);
 
-	function getMonsterStateGroup(state: string | null | undefined): MonsterStateGroup | null {
-		switch (state) {
-			case 'tainted':
-			case 'corrupt':
-			case 'fallen':
-			case 'arcane':
-				return state;
-			case 'boss':
-				return 'fallen';
-			default:
-				return null;
-		}
+	function normalizeStateKey(state: string | null | undefined): string | null {
+		if (typeof state !== 'string') return null;
+		const normalized = state.trim().toLowerCase();
+		return normalized ? normalized : null;
 	}
 
-	function getMonsterStateLabel(state: MonsterStateGroup): string {
+	function getMonsterStateLabel(state: string): string {
 		switch (state) {
 			case 'tainted':
 				return 'Tainted';
@@ -834,10 +938,14 @@
 				return 'Fallen';
 			case 'arcane':
 				return 'Arcane';
+			case 'inactive':
+				return 'Inactive';
+			default:
+				return state.charAt(0).toUpperCase() + state.slice(1);
 		}
 	}
 
-	function getMonsterStateAccentColor(state: MonsterStateGroup): string {
+	function getMonsterStateAccentColor(state: string): string {
 		switch (state) {
 			case 'tainted':
 				return '#c084fc';
@@ -847,6 +955,10 @@
 				return '#065f46';
 			case 'arcane':
 				return '#0ea5e9';
+			case 'inactive':
+				return '#64748b';
+			default:
+				return '#94a3b8';
 		}
 	}
 
@@ -860,30 +972,40 @@
 		const sections: DeckSection[] = [];
 
 		if (typeFilter !== 'event') {
-			for (const state of monsterStateGroupOrder) {
-				const stateGroups = monsters.filter((g) => {
-					const monster = monsterById.get(g.item.id);
-					return getMonsterStateGroup(monster?.state) === state;
-				});
+			const effectiveStateByMonsterId = new Map<string, string | null>();
+			const extraStates = new Set<string>();
+
+			for (const g of monsters) {
+				const monster = monsterById.get(g.item.id);
+				const effective = monster ? (inlineStateEdits[monster.id] ?? normalizeStateKey(monster.state)) : null;
+				effectiveStateByMonsterId.set(g.item.id, effective);
+				if (effective && !monsterStateGroupOrderSet.has(effective)) {
+					extraStates.add(effective);
+				}
+			}
+
+			const extraStateOrder = [...extraStates].sort((a, b) => a.localeCompare(b));
+
+			if (monsters.length > 0) {
+				for (const state of monsterStateGroupOrder) {
+					const stateGroups = monsters.filter((g) => effectiveStateByMonsterId.get(g.item.id) === state);
+					sections.push({
+						key: `state:${state}`,
+						label: getMonsterStateLabel(state),
+						accentColor: getMonsterStateAccentColor(state),
+						groups: stateGroups
+					});
+				}
+			}
+
+			for (const state of extraStateOrder) {
+				const stateGroups = monsters.filter((g) => effectiveStateByMonsterId.get(g.item.id) === state);
 				if (stateGroups.length === 0) continue;
 				sections.push({
 					key: `state:${state}`,
 					label: getMonsterStateLabel(state),
 					accentColor: getMonsterStateAccentColor(state),
 					groups: stateGroups
-				});
-			}
-
-			const other = monsters.filter((g) => {
-				const monster = monsterById.get(g.item.id);
-				return getMonsterStateGroup(monster?.state) === null;
-			});
-			if (other.length > 0) {
-				sections.push({
-					key: 'state:other',
-					label: 'Other',
-					accentColor: '#94a3b8',
-					groups: other
 				});
 			}
 		}
@@ -1026,11 +1148,15 @@
 										<div class="group-actions">
 											{#if !showCardPreviews && showStats && item.type === 'monster' && monster}
 												{@const inlineStats = getInlineStats(monster)}
-												{@const isDirty = inlineStatsEdits[monster.id] !== undefined}
 												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
 												{@const saveError = inlineStatsError[monster.id]}
 
-												<div class="inline-stats" class:error={Boolean(saveError)} title={saveError ?? ''}>
+												<div
+													class="inline-stats"
+													class:error={Boolean(saveError)}
+													title={saveError ?? ''}
+													onfocusout={(e) => handleInlineStatsFocusOut(monster.id, e)}
+												>
 													<label class="inline-stat">
 														<span>DMG</span>
 														<input
@@ -1059,15 +1185,35 @@
 															onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
 														/>
 													</label>
-													{#if isDirty}
-														<button class="btn" onclick={() => void saveInlineEdits(monster.id)} disabled={isSaving}>
-															{isSaving ? 'Saving…' : 'Save'}
-														</button>
+													{#if isSaving}
+														<span class="inline-stat-status">Saving…</span>
 													{/if}
 													{#if saveError}
 														<span class="inline-stat-error">!</span>
 													{/if}
 												</div>
+											{/if}
+											{#if !showCardPreviews && item.type === 'monster' && monster}
+												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
+												{@const saveError = inlineStatsError[monster.id]}
+												<label class="inline-state" class:error={Boolean(saveError)} title={saveError ?? ''}>
+													<span>State</span>
+													<select
+														value={getInlineState(monster)}
+														disabled={isSaving}
+														aria-label="State"
+														onchange={(e) => {
+															setInlineState(monster, (e.target as HTMLSelectElement).value);
+															scheduleInlineAutosave(monster.id, 0);
+														}}
+													>
+														<option value="tainted">Tainted</option>
+														<option value="corrupt">Corrupt</option>
+														<option value="fallen">Fallen</option>
+														<option value="arcane">Arcane</option>
+														<option value="inactive">Inactive</option>
+													</select>
+												</label>
 											{/if}
 											{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0}
 												{@const selectedEffects = getInlineEffectIds(monster.id)}
@@ -1075,7 +1221,7 @@
 												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
 												<button
 													class="btn"
-													onclick={() => (inlineEffectOpenId = inlineEffectOpenId === monster.id ? null : monster.id)}
+													onclick={() => toggleInlineEffectsPanel(monster.id)}
 													disabled={isSaving}
 												>
 													Effects{effectCount > 0 ? ` (${effectCount})` : ''}
@@ -1104,14 +1250,13 @@
 
 									{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0 && inlineEffectOpenId === monster.id}
 										{@const selectedEffects = getInlineEffectIds(monster.id)}
-										{@const isDirty = inlineEffectEdits[monster.id] !== undefined}
 										{@const isSaving = inlineStatsSaving[monster.id] ?? false}
 										<div class="inline-effects-panel">
 											<div class="inline-effects-panel__header">
 												<div class="inline-effects-panel__title">
 													Special Effects ({selectedEffects.length}/{INLINE_SPECIAL_EFFECT_MAX})
 												</div>
-												<button class="btn" onclick={() => (inlineEffectOpenId = null)} disabled={isSaving}>
+												<button class="btn" onclick={() => closeInlineEffectsPanel(monster.id)} disabled={isSaving}>
 													Close
 												</button>
 											</div>
@@ -1137,13 +1282,6 @@
 													</label>
 												{/each}
 											</div>
-											{#if isDirty}
-												<div class="inline-effects-panel__actions">
-													<button class="btn" onclick={() => void saveInlineEdits(monster.id)} disabled={isSaving}>
-														{isSaving ? 'Saving…' : 'Save'}
-													</button>
-												</div>
-											{/if}
 											{#if inlineStatsError[monster.id]}
 												<div class="inline-effects-panel__error">{inlineStatsError[monster.id]}</div>
 											{/if}
@@ -1271,7 +1409,8 @@
 										{ value: 'tainted', label: 'Tainted' },
 										{ value: 'corrupt', label: 'Corrupt' },
 										{ value: 'fallen', label: 'Fallen' },
-										{ value: 'arcane', label: 'Arcane' }
+										{ value: 'arcane', label: 'Arcane' },
+										{ value: 'inactive', label: 'Inactive' }
 									]}
 								/>
 						</FormField>
@@ -1667,6 +1806,54 @@
 		font-weight: 900;
 		color: #f87171;
 		padding: 0 0.15rem;
+	}
+
+	.inline-stat-status {
+		font-size: 0.7rem;
+		font-weight: 800;
+		color: rgba(226, 232, 240, 0.85);
+		white-space: nowrap;
+		padding: 0 0.15rem;
+	}
+
+	.inline-state {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.15rem 0.4rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		background: rgba(15, 23, 42, 0.4);
+		font-size: 0.65rem;
+		color: #94a3b8;
+		font-weight: 800;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.inline-state.error {
+		border-color: rgba(248, 113, 113, 0.55);
+	}
+
+	.inline-state select {
+		padding: 0.25rem 0.35rem;
+		border-radius: 8px;
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		background: rgba(2, 6, 23, 0.35);
+		color: #f8fafc;
+		font-size: 0.75rem;
+		font-weight: 800;
+	}
+
+	.inline-state select:focus {
+		outline: none;
+		border-color: rgba(168, 85, 247, 0.55);
+	}
+
+	.inline-state select:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 
 	.inline-effects-panel {

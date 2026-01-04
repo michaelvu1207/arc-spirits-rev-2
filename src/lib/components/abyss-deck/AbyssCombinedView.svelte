@@ -21,7 +21,7 @@
 		name: string;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'boss';
+		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive' | 'boss';
 		icon: string | null;
 		image_path: string | null;
 		order_num: number;
@@ -339,6 +339,8 @@
 			case 'tainted': return '#c084fc';
 			case 'corrupt': return '#6b21a8';
 			case 'fallen': return '#065f46';
+			case 'arcane': return '#0ea5e9';
+			case 'inactive': return '#64748b';
 			case 'boss': return '#ef4444';
 			default: return '#94a3b8';
 		}
@@ -607,6 +609,7 @@
 								{ value: 'corrupt', label: 'Corrupt' },
 								{ value: 'fallen', label: 'Fallen' },
 								{ value: 'arcane', label: 'Arcane' },
+								{ value: 'inactive', label: 'Inactive' },
 								{ value: 'boss', label: 'Boss' }
 							]}
 						/>

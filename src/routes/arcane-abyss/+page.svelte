@@ -51,7 +51,7 @@
 	// Gallery state
 	let searchQuery = $state('');
 	let typeFilter = $state<'all' | 'monster' | 'event'>('all');
-	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'arcane'>('all');
+	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive'>('all');
 	let classificationFilter = $state<'all' | 'monster' | 'abyss_guardian' | 'boss'>('all');
 	let statusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
 	let selectedCardIds = $state(new Set<string>());
@@ -694,6 +694,7 @@
 							<option value="corrupt">Corrupt</option>
 							<option value="fallen">Fallen</option>
 							<option value="arcane">Arcane</option>
+							<option value="inactive">Inactive</option>
 						</select>
 					{/if}
 

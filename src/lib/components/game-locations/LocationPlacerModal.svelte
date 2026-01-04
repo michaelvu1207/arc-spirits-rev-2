@@ -120,6 +120,7 @@
 	// Row template editor state
 	// =========================
 	type SlotKind = 'gain' | 'trade_cost' | 'trade_gain';
+	const MAX_ROW_SLOTS = 12;
 	let currentSlotKind = $state<SlotKind>('gain');
 
 	let rowBgSize = $state<{ w: number; h: number } | null>(null);
@@ -173,6 +174,41 @@
 			...config,
 			rows: [nextTemplate]
 		});
+	}
+
+	function addSlot(kind: SlotKind) {
+		const slots = [...getSlots(kind)];
+		const defaultSize = iconSize;
+		if (slots.length >= MAX_ROW_SLOTS) return;
+
+		if (slots.length === 0) {
+			setSlots(kind, [{ x: 24, y: 24, w: defaultSize, h: defaultSize }]);
+			return;
+		}
+
+		const last = slots[slots.length - 1];
+		const prev = slots.length >= 2 ? slots[slots.length - 2] : null;
+		const dx = prev ? last.x - prev.x : 0;
+		const dy = prev ? last.y - prev.y : 0;
+		const stepX = dx !== 0 ? dx : (last.w ?? defaultSize) + 12;
+		const stepY = dy !== 0 ? dy : 0;
+
+		setSlots(kind, [
+			...slots,
+			{
+				x: last.x + stepX,
+				y: last.y + stepY,
+				w: last.w ?? defaultSize,
+				h: last.h ?? defaultSize
+			}
+		]);
+	}
+
+	function removeSlot(kind: SlotKind) {
+		const slots = [...getSlots(kind)];
+		if (slots.length === 0) return;
+		slots.pop();
+		setSlots(kind, slots);
 	}
 
 	let draggingSlot = $state<{ kind: SlotKind; index: number; offsetX: number; offsetY: number } | null>(null);
@@ -255,6 +291,7 @@
 	async function saveTemplate() {
 		try {
 			config = await upsertLocationIconPlacementConfig(config);
+			window.dispatchEvent(new Event('location-icon-template-updated'));
 		} catch (err) {
 			alert(getErrorMessage(err));
 		}
@@ -285,13 +322,16 @@
 			return { type: 'text', text: String(row.text ?? '').trim() };
 		}
 		if (row.type === 'trade') {
+			const costMax = template.trade_cost_slots.length;
+			const gainMax = template.trade_gain_slots.length;
 			return {
 				type: 'trade',
-				cost_icon_ids: (row.cost_icon_ids ?? []).slice(0, 2),
-				gain_icon_ids: (row.gain_icon_ids ?? []).slice(0, 3)
+				cost_icon_ids: (row.cost_icon_ids ?? []).slice(0, costMax),
+				gain_icon_ids: (row.gain_icon_ids ?? []).slice(0, gainMax)
 			};
 		}
-		return { type: 'gain', gain_icon_ids: (row.gain_icon_ids ?? []).slice(0, 4) };
+		const gainMax = template.gain_slots.length;
+		return { type: 'gain', gain_icon_ids: (row.gain_icon_ids ?? []).slice(0, gainMax) };
 	}
 
 	async function renderRowPngForLocation(location: GameLocationRow, rowIndex: number) {
@@ -800,33 +840,50 @@
 
 					<h4 style="margin-top: 1rem;">Slot Set</h4>
 					<div class="row-template__slot-buttons">
-						<button
-							type="button"
-							class={`slot-btn ${currentSlotKind === 'gain' ? 'active' : ''}`}
-							onclick={() => (currentSlotKind = 'gain')}
-						>
-							Gain (4)
-						</button>
-						<button
-							type="button"
-							class={`slot-btn ${currentSlotKind === 'trade_cost' ? 'active' : ''}`}
-							onclick={() => (currentSlotKind = 'trade_cost')}
-						>
-							Trade Cost (2)
-						</button>
-						<button
-							type="button"
-							class={`slot-btn ${currentSlotKind === 'trade_gain' ? 'active' : ''}`}
-							onclick={() => (currentSlotKind = 'trade_gain')}
-						>
-							Trade Reward (3)
-						</button>
-					</div>
+							<button
+								type="button"
+								class={`slot-btn ${currentSlotKind === 'gain' ? 'active' : ''}`}
+								onclick={() => (currentSlotKind = 'gain')}
+							>
+								Gain ({template.gain_slots.length})
+							</button>
+							<button
+								type="button"
+								class={`slot-btn ${currentSlotKind === 'trade_cost' ? 'active' : ''}`}
+								onclick={() => (currentSlotKind = 'trade_cost')}
+							>
+								Trade Cost ({template.trade_cost_slots.length})
+							</button>
+							<button
+								type="button"
+								class={`slot-btn ${currentSlotKind === 'trade_gain' ? 'active' : ''}`}
+								onclick={() => (currentSlotKind = 'trade_gain')}
+							>
+								Trade Reward ({template.trade_gain_slots.length})
+							</button>
+						</div>
 
-					<div class="row-template__actions">
-						<Button variant="secondary" onclick={saveTemplate}>Save Template</Button>
-						<Button variant="primary" onclick={renderRowsForAllLocations} loading={batchRunning}>
-							Render Row PNGs (All Locations)
+						<div class="row-template__slot-actions">
+							<Button
+								variant="secondary"
+								onclick={() => addSlot(currentSlotKind)}
+								disabled={getSlots(currentSlotKind).length >= MAX_ROW_SLOTS}
+							>
+								+ Slot
+							</Button>
+							<Button
+								variant="secondary"
+								onclick={() => removeSlot(currentSlotKind)}
+								disabled={getSlots(currentSlotKind).length === 0}
+							>
+								- Slot
+							</Button>
+						</div>
+
+						<div class="row-template__actions">
+							<Button variant="secondary" onclick={saveTemplate}>Save Template</Button>
+							<Button variant="primary" onclick={renderRowsForAllLocations} loading={batchRunning}>
+								Render Row PNGs (All Locations)
 						</Button>
 					</div>
 
@@ -1036,6 +1093,13 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+
+	.row-template__slot-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin: 0.75rem 0 1rem;
 	}
 
 	.slot-btn {

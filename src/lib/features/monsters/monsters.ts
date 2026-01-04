@@ -8,7 +8,7 @@ export interface MonsterFormData {
 	name: string;
 	damage: number;
 	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
+	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 	monster_classification: MonsterClassification;
 	icon: string | null;
 	image_path: string | null;

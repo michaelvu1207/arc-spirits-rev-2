@@ -1184,7 +1184,7 @@ The monsters array contains both monster cards and event cards, distinguished by
 | \`id\` | string | UUID |
 | \`name\` | string | Display name (title for events) |
 | \`type\` | "monster" \\| "event" | Card type discriminator |
-| \`state\` | string | Monster state: "tainted", "corrupt", "fallen", "arcane", or "event" |
+| \`state\` | string | Monster state: "tainted", "corrupt", "fallen", "arcane", "inactive", or "event" |
 | \`barrier\` | number \\| null | Barrier value (null for events) |
 | \`damage\` | number \\| null | Damage value (null for events) |
 | \`order_num\` | number | Sort order (default: 999) |

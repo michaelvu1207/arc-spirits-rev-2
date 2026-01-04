@@ -1,9 +1,10 @@
-<script lang="ts">
-	import { onMount } from 'svelte';
-	import type { GameLocationRewardRow } from '$lib/types/gameData';
-	import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
-	import { IconPicker } from '$lib/components/shared';
-	import { Button, Select, Textarea } from '$lib/components/ui';
+	<script lang="ts">
+		import { onMount } from 'svelte';
+		import type { GameLocationRewardRow } from '$lib/types/gameData';
+		import { loadLocationIconPlacementConfig } from '$lib/generators/locations/locationIconPlacer';
+		import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
+		import { IconPicker } from '$lib/components/shared';
+		import { Button, Select, Textarea } from '$lib/components/ui';
 
 	interface Props {
 		rewardRows?: GameLocationRewardRow[];
@@ -19,18 +20,37 @@
 
 	let iconPoolLoaded = $state(false);
 	let picking = $state<{ rowIndex: number; list: 'gain' | 'cost' } | null>(null);
+	let slotLimits = $state({ gain: 4, trade_cost: 2, trade_gain: 3 });
 
-	onMount(async () => {
-		await loadIconPool();
-		iconPoolLoaded = true;
+	function refreshSlotLimits() {
+		const cfg = loadLocationIconPlacementConfig();
+		const tpl = cfg.rows?.[0];
+		slotLimits = {
+			gain: Math.max(0, tpl?.gain_slots?.length ?? 4),
+			trade_cost: Math.max(0, tpl?.trade_cost_slots?.length ?? 2),
+			trade_gain: Math.max(0, tpl?.trade_gain_slots?.length ?? 3)
+		};
+	}
+
+	onMount(() => {
+		refreshSlotLimits();
+		const handler = () => refreshSlotLimits();
+		window.addEventListener('location-icon-template-updated', handler);
+
+		void (async () => {
+			await loadIconPool();
+			iconPoolLoaded = true;
+		})();
+
+		return () => window.removeEventListener('location-icon-template-updated', handler);
 	});
 
 	function maxFor(row: GameLocationRewardRow, list: 'gain' | 'cost'): number {
 		if (row.type === 'text') return 0;
 		if (row.type === 'trade') {
-			return list === 'cost' ? 2 : 3;
+			return list === 'cost' ? slotLimits.trade_cost : slotLimits.trade_gain;
 		}
-		return 4;
+		return slotLimits.gain;
 	}
 
 	function addGainRow() {
