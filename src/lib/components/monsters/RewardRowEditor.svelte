@@ -17,6 +17,7 @@
 
 	const typeOptions = [
 		{ value: 'all_in_combat', label: 'On kill, all in combat gain' },
+		{ value: 'all_in_combat_pick_one', label: 'On kill, all in combat pick 1' },
 		{ value: 'all_losers', label: 'All in monster combat gain' }
 	];
 
@@ -66,7 +67,7 @@
 					{@const url = getIconPoolUrl(iconId)}
 					<div class="reward-row-editor__icon">
 						{#if url}
-							<img src={url} alt="Reward icon" />
+							<img src={url} alt="Reward icon" loading="lazy" decoding="async" />
 						{:else}
 							<span class="reward-row-editor__icon-placeholder">?</span>
 						{/if}

@@ -9,6 +9,7 @@
 		multiple?: boolean;
 		maxSelection?: number;
 		allowDuplicates?: boolean;
+		maxResults?: number;
 	}
 
 	let {
@@ -16,10 +17,13 @@
 		onselect,
 		multiple = true,
 		maxSelection = 5,
-		allowDuplicates = true
+		allowDuplicates = true,
+		maxResults = 450
 	}: Props = $props();
 
-	let icons = $state<IconPoolRow[]>([]);
+	type IconWithSearch = IconPoolRow & { name_lower: string };
+
+	let icons = $state<IconWithSearch[]>([]);
 	let loading = $state(true);
 	let searchQuery = $state('');
 	let sourceFilter = $state<string>('all');
@@ -36,19 +40,22 @@
 		}
 
 		// Filter by search query
-		if (searchQuery.trim()) {
+		const query = searchQuery.trim().toLowerCase();
+		if (query) {
 			result = result.filter((icon) =>
-				icon.name.toLowerCase().includes(searchQuery.toLowerCase())
+				icon.name_lower.includes(query)
 			);
 		}
 
 		return result;
 	});
 
+	const visibleIcons = $derived.by(() => filteredIcons.slice(0, maxResults));
 	const selectedSet = $derived(new Set(selected));
 
 	onMount(async () => {
-		icons = await loadAllIcons();
+		const loaded = await loadAllIcons();
+		icons = loaded.map((icon) => ({ ...icon, name_lower: icon.name.toLowerCase() }));
 		loading = false;
 	});
 
@@ -152,8 +159,13 @@
 	{:else if filteredIcons.length === 0}
 		<div class="icon-picker__empty">No icons found</div>
 	{:else}
+		{#if filteredIcons.length > maxResults}
+			<div class="icon-picker__notice">
+				Showing {maxResults} of {filteredIcons.length} icons. Use search/filters to narrow results.
+			</div>
+		{/if}
 		<div class="icon-picker__grid">
-			{#each filteredIcons as icon (icon.id)}
+			{#each visibleIcons as icon (icon.id)}
 				{@const url = getIconPoolUrl(icon)}
 				{@const selectionCount = selected.filter((s) => s === icon.id).length}
 				{@const isSelected = selectionCount > 0}
@@ -168,7 +180,7 @@
 					disabled={atLimit}
 				>
 					{#if url}
-						<img src={url} alt={icon.name} class="icon-picker__image" />
+						<img src={url} alt={icon.name} class="icon-picker__image" loading="lazy" decoding="async" />
 					{:else}
 						<span class="icon-picker__placeholder">?</span>
 					{/if}
@@ -250,6 +262,15 @@
 		text-align: center;
 		color: #94a3b8;
 		font-size: 0.875rem;
+	}
+
+	.icon-picker__notice {
+		padding: 0.5rem 0.75rem;
+		border-radius: 8px;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		background: rgba(15, 23, 42, 0.55);
+		color: rgba(226, 232, 240, 0.85);
+		font-size: 0.75rem;
 	}
 
 	.icon-picker__grid {

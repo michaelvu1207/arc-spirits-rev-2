@@ -182,6 +182,13 @@
 	let selectedClassForTable = $state('fighter');
 	let savingClass = $state<string | null>(null);
 	let saveMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+	let enforceAttackDiceTierRanges = $state(true);
+	let basicDiceMin = $state(1);
+	let basicDiceMax = $state(5);
+	let criticalDiceMin = $state(4);
+	let criticalDiceMax = $state(8);
+	let exaltedDiceMin = $state(7);
+	let exaltedDiceMax = $state(10);
 
 	// =====================
 	// SHOP ANALYSIS STATE
@@ -1207,7 +1214,9 @@
 	async function loadCurveData() {
 		try {
 			const diceData = await getDiceRecordsForAnalysis();
-			curveDice = diceData.map(diceRecordToDiceInfo);
+			curveDice = diceData
+				.map(diceRecordToDiceInfo)
+				.sort((a, b) => a.name.localeCompare(b.name));
 
 			const { data: classData, error: classError } = await supabase
 				.from('classes')
@@ -1237,7 +1246,7 @@
 				maxDice: 4,
 				runeMultiplier: undefined,
 				allowedDiceIds: curveDice
-					.filter((d) => d.name === 'Basic Attack' || d.name === 'Exalted Attack')
+					.filter((d) => d.name === 'Basic Attack' || d.name === 'Critical Attack' || d.name === 'Exalted Attack')
 					.map((d) => d.id),
 				colorThresholds: { ...CLASS_PRESETS.swordsman.colorThresholds }
 			}
@@ -1256,6 +1265,14 @@
 	}
 
 	function computeAllFits() {
+		function normalizeTierRange(minValue: number, maxValue: number): [number, number] {
+			const minNum = Number.isFinite(minValue) ? minValue : 1;
+			const maxNum = Number.isFinite(maxValue) ? maxValue : minNum;
+			const min = Math.trunc(Math.min(minNum, maxNum));
+			const max = Math.trunc(Math.max(minNum, maxNum));
+			return [min, max];
+		}
+
 		classResults = classConfigs
 			.filter((config) => config.enabled)
 			.map((config) => {
@@ -1270,7 +1287,13 @@
 					runeMultiplier: config.runeMultiplier,
 					monotonic,
 					diceAvailability,
-					colorThresholds: config.colorThresholds
+					colorThresholds: config.colorThresholds,
+					enforceAttackDiceTierRanges,
+					attackDiceTierRanges: {
+						basic: normalizeTierRange(basicDiceMin, basicDiceMax),
+						critical: normalizeTierRange(criticalDiceMin, criticalDiceMax),
+						exalted: normalizeTierRange(exaltedDiceMin, exaltedDiceMax)
+					}
 				};
 
 				const results = fitCurve(config.curveParams, constraints, curveDice);
@@ -2044,6 +2067,44 @@
 								<input type="checkbox" bind:checked={monotonic} />
 								<span>Enforce Monotonic (damage never decreases)</span>
 							</label>
+						</div>
+
+						<div class="control-section">
+							<label class="checkbox-label">
+								<input type="checkbox" bind:checked={enforceAttackDiceTierRanges} />
+								<span>Enforce attack dice breakpoint windows</span>
+							</label>
+							<p class="muted" style="margin-top: 0.35rem;">
+								Overlapping windows allow mixing Basic/Critical/Exalted dice on the same breakpoint.
+							</p>
+							<div class="config-grid">
+								<div class="config-row">
+									<label>
+										<span>Basic (min-max)</span>
+										<div class="range-inputs">
+											<input type="number" min="1" max="20" bind:value={basicDiceMin} />
+											<span>-</span>
+											<input type="number" min="1" max="20" bind:value={basicDiceMax} />
+										</div>
+									</label>
+									<label>
+										<span>Critical (min-max)</span>
+										<div class="range-inputs">
+											<input type="number" min="1" max="20" bind:value={criticalDiceMin} />
+											<span>-</span>
+											<input type="number" min="1" max="20" bind:value={criticalDiceMax} />
+										</div>
+									</label>
+									<label>
+										<span>Exalted (min-max)</span>
+										<div class="range-inputs">
+											<input type="number" min="1" max="20" bind:value={exaltedDiceMin} />
+											<span>-</span>
+											<input type="number" min="1" max="20" bind:value={exaltedDiceMax} />
+										</div>
+									</label>
+								</div>
+							</div>
 						</div>
 
 						<button class="btn btn--primary compute-btn" onclick={computeAllFits}>

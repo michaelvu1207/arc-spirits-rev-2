@@ -223,7 +223,13 @@ export type IconPoolRow = {
 };
 
 // Reward row types for monster cards
-export type RewardRowType = 'all_in_combat' | 'all_losers' | 'all_winners' | 'one_winner' | 'tournament';
+export type RewardRowType =
+	| 'all_in_combat'
+	| 'all_in_combat_pick_one'
+	| 'all_losers'
+	| 'all_winners'
+	| 'one_winner'
+	| 'tournament';
 
 export type RewardRow = {
 	type: RewardRowType;
@@ -246,6 +252,7 @@ export type GainRow = {
 // Display configuration for each reward row type
 export const REWARD_ROW_CONFIG: Record<RewardRowType, { label: string; color: string; bgColor: string; borderColor: string }> = {
 	all_in_combat: { label: 'ALL IN COMBAT GAIN', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.12)', borderColor: 'rgba(251, 191, 36, 0.4)' },
+	all_in_combat_pick_one: { label: 'ALL IN COMBAT PICK 1', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.12)', borderColor: 'rgba(251, 191, 36, 0.4)' },
 	all_losers: { label: 'ALL LOSERS GAIN', color: '#f87171', bgColor: 'rgba(248, 113, 113, 0.12)', borderColor: 'rgba(248, 113, 113, 0.4)' },
 	all_winners: { label: 'ALL WINNERS GAIN', color: '#4ade80', bgColor: 'rgba(74, 222, 128, 0.12)', borderColor: 'rgba(74, 222, 128, 0.4)' },
 	one_winner: { label: 'ONE WINNER GAINS', color: '#38bdf8', bgColor: 'rgba(56, 189, 248, 0.12)', borderColor: 'rgba(56, 189, 248, 0.4)' },
@@ -257,7 +264,7 @@ export type MonsterRow = {
 	name: string;
 	damage: number;
 	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen';
+	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
 	monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 	icon: string | null;
 	image_path: string | null;
@@ -312,6 +319,8 @@ export type TravelerQuestRow = {
 	reward_icon_ids: string[];
 	tags: string[];
 	order_num: number;
+	/** Number of copies of this quest to export. Defaults to 1. */
+	quantity: number;
 	card_image_path: string | null;
 	created_at: string | null;
 	updated_at: string | null;

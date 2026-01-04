@@ -5,6 +5,12 @@ export interface DiceInfo {
 	sides: number[];
 }
 
+export interface AttackDiceTierRanges {
+	basic: [number, number];
+	critical: [number, number];
+	exalted: [number, number];
+}
+
 export type CurveType = 'sigmoid' | 'linear' | 'custom';
 
 export interface CurveParams {
@@ -42,6 +48,8 @@ export interface FitConstraints {
 	monotonic: boolean;
 	diceAvailability: DiceAvailabilityMode;
 	colorThresholds: ColorThresholds;
+	enforceAttackDiceTierRanges?: boolean;
+	attackDiceTierRanges?: AttackDiceTierRanges;
 }
 
 export interface DiceCombination {

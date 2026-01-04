@@ -63,6 +63,18 @@ type TravelerRow = {
   quantity: number | null;
 };
 
+type TravelerQuestDbRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  reward_text: string | null;
+  reward_icon_ids: unknown | null;
+  tags: string[] | null;
+  order_num: number | null;
+  card_image_path: string | null;
+  quantity: number | null;
+};
+
 type EventRow = {
   id: string;
   name: string;
@@ -269,7 +281,7 @@ serve(async (req) => {
     const editionOriginIds = edition.origin_ids ?? [];
     const costDuplicates = edition.cost_duplicates ?? {};
 
-    const [originsRes, classesRes, tagsRes, guardiansRes, monstersRes, travelersRes, eventsRes, gameLocationsRes, spiritsRes, artifactsRes, runesRes, originsFullRes, callingOrbsRes, hexSpiritsBasicRes, customDiceRes, classesFullRes, diceSidesRes, tokensRes, specialCategoriesRes, allIconsRes, specialEffectsRes, monsterSpecialEffectsRes] = await Promise.all([
+    const [originsRes, classesRes, tagsRes, guardiansRes, monstersRes, travelersRes, travelerQuestsRes, eventsRes, gameLocationsRes, spiritsRes, artifactsRes, runesRes, originsFullRes, callingOrbsRes, hexSpiritsBasicRes, customDiceRes, classesFullRes, diceSidesRes, tokensRes, specialCategoriesRes, allIconsRes, specialEffectsRes, monsterSpecialEffectsRes] = await Promise.all([
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".origins`),
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".classes`),
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".artifact_tags`),
@@ -281,6 +293,9 @@ serve(async (req) => {
       ),
       client.queryObject<TravelerRow>(
         `select id, name, state, order_num, card_image_path, traveler_subtext, traveler_description, trade_rows, gain_rows, trade_left_icon_ids, trade_right_icon_ids, quantity from "${SCHEMA}".travelers order by order_num`
+      ),
+      client.queryObject<TravelerQuestDbRow>(
+        `select id, title, description, reward_text, reward_icon_ids, tags, order_num, card_image_path, quantity from "${SCHEMA}".traveler_quests order by order_num, title`
       ),
       client.queryObject<EventRow>(
         `select id, name, title, description, order_num, card_image_path from "${SCHEMA}".events`
@@ -847,6 +862,38 @@ serve(async (req) => {
       }));
     });
 
+    // Map traveler quests (artifact-style quest cards)
+    const traveler_quests = travelerQuestsRes.rows.flatMap((q) => {
+      const image_url = q.card_image_path
+        ? `${base}${encodeURI(q.card_image_path)}?quality=80`
+        : null;
+
+      const reward_icon_ids = Array.isArray(q.reward_icon_ids)
+        ? q.reward_icon_ids.filter((id): id is string => typeof id === "string")
+        : [];
+
+      const reward_icons = reward_icon_ids.map(resolveIcon);
+      const tags = Array.isArray(q.tags)
+        ? q.tags.filter((t): t is string => typeof t === "string")
+        : [];
+
+      const quantity = Math.max(1, Math.trunc(q.quantity ?? 1));
+      const baseOrderNum = q.order_num ?? 999;
+
+      return Array.from({ length: quantity }, (_, copyIndex) => ({
+        id: q.id,
+        title: q.title,
+        description: q.description ?? null,
+        order_num: baseOrderNum + copyIndex * 0.001,
+        image_url,
+        reward_text: q.reward_text ?? null,
+        reward_icons,
+        tags,
+        copy_index: copyIndex + 1,
+        total_copies: quantity,
+      }));
+    });
+
     // Map runes with origin/class names resolved
     const runes = runesRes.rows.map((r) => {
       const origin_name = r.origin_id ? originMap.get(r.origin_id) ?? null : null;
@@ -1008,6 +1055,7 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 | \`monsters\` | Monster[] | Array of monster and event cards (combined, sorted by order_num) |
 | \`game_locations\` | GameLocation[] | Array of game locations |
 | \`travelers\` | Traveler[] | Array of traveler cards |
+| \`traveler_quests\` | TravelerQuest[] | Array of traveler quest cards |
 | \`special_effects\` | SpecialEffect[] | Array of special effect definitions |
 | \`guardians\` | Guardian[] | Array of playable guardian characters |
 | \`runes\` | Rune[] | Array of rune tokens |
@@ -1136,7 +1184,7 @@ The monsters array contains both monster cards and event cards, distinguished by
 | \`id\` | string | UUID |
 | \`name\` | string | Display name (title for events) |
 | \`type\` | "monster" \\| "event" | Card type discriminator |
-| \`state\` | string | Monster state: "tainted", "corrupt", "fallen", "boss", or "event" |
+| \`state\` | string | Monster state: "tainted", "corrupt", "fallen", "arcane", or "event" |
 | \`barrier\` | number \\| null | Barrier value (null for events) |
 | \`damage\` | number \\| null | Damage value (null for events) |
 | \`order_num\` | number | Sort order (default: 999) |
@@ -1164,6 +1212,7 @@ The monsters array contains both monster cards and event cards, distinguished by
 ### RewardRowType
 
 - \`"all_in_combat"\` - All players in combat gain these rewards
+- \`"all_in_combat_pick_one"\` - All players in combat pick 1 of these rewards
 - \`"all_losers"\` - All losing players gain these rewards
 - \`"all_winners"\` - All winning players gain these rewards
 - \`"one_winner"\` - One winner gains these rewards
@@ -1229,6 +1278,25 @@ Traveler cards include resolved gain/trade icon groups, with \`/\` separators re
 ### TravelerGainRow
 
 Each entry is an array of icon groups (\`RewardIcon[][]\`), where each group is an OR option.
+
+---
+
+## TravelerQuest
+
+Traveler quest cards (artifact-style scroll cards).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`title\` | string | Quest title |
+| \`description\` | string \\| null | Quest description text |
+| \`order_num\` | number | Sort order (default: 999) |
+| \`image_url\` | string \\| null | Quest card image URL |
+| \`reward_text\` | string \\| null | Optional text reward row |
+| \`reward_icons\` | RewardIcon[] | Resolved reward icons |
+| \`tags\` | string[] | Optional tags |
+| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
+| \`total_copies\` | number | Total copies when quantity > 1 |
 
 ---
 
@@ -1402,6 +1470,7 @@ Some database fields are not exported as they are internal/admin-only:
       monsters,
       game_locations,
       travelers,
+      traveler_quests,
       special_effects,
       guardians,
       runes,

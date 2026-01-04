@@ -76,6 +76,9 @@
 						<span class="label-text">Quest</span>
 						<span class="label-ornament">~</span>
 					</div>
+					{#if quest.quantity > 1}
+						<div class="qty-badge">×{quest.quantity}</div>
+					{/if}
 				</div>
 
 				<!-- Title -->
@@ -297,9 +300,25 @@
 
 	/* Header */
 	.header-bar {
+		position: relative;
 		display: flex;
 		justify-content: center;
 		align-items: center;
+	}
+
+	.qty-badge {
+		position: absolute;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
+		font-size: 1rem;
+		font-weight: 800;
+		letter-spacing: 0.08em;
+		color: rgba(248, 250, 252, 0.9);
+		background: rgba(15, 23, 42, 0.45);
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		border-radius: 999px;
+		padding: 0.15rem 0.55rem;
 	}
 
 	.quest-label {

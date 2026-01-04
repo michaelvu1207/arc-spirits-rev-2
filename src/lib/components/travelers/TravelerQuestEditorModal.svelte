@@ -31,6 +31,11 @@
 		if (quest.description === undefined) quest.description = null;
 		if (!Array.isArray(quest.tags)) quest.tags = [];
 		if (quest.order_num === undefined || quest.order_num === null) quest.order_num = 0;
+		const rawQuantity = (quest as any).quantity;
+		const normalizedQuantity = Number.isFinite(Number(rawQuantity))
+			? Math.max(1, Math.trunc(Number(rawQuantity)))
+			: 1;
+		quest.quantity = normalizedQuantity;
 	}
 
 	function setRewardMode(mode: 'icons' | 'text') {
@@ -96,6 +101,7 @@
 		const rewardIconIds = quest.reward_icon_ids ?? [];
 		const tags = (quest.tags ?? []).map(normalizeTag).filter(Boolean);
 		quest.tags = Array.from(new Set(tags));
+		const quantity = Math.max(1, Math.trunc(Number((quest as any).quantity ?? 1)));
 
 		onsave?.({
 			...quest,
@@ -103,7 +109,8 @@
 			description: (quest.description ?? null) || null,
 			reward_text: rewardMode === 'text' && rewardText ? rewardText : null,
 			reward_icon_ids: rewardMode === 'text' ? [] : rewardIconIds,
-			order_num: quest.order_num ?? 0
+			order_num: quest.order_num ?? 0,
+			quantity
 		});
 		close();
 	}
@@ -154,6 +161,10 @@
 						<div class="tag-empty">No tags</div>
 					{/if}
 				</div>
+			</FormField>
+
+			<FormField label="Quantity" helperText="Copies to export (TTS)">
+				<Input type="number" min={1} step={1} bind:value={quest.quantity} />
 			</FormField>
 
 			<div class="reward-section">

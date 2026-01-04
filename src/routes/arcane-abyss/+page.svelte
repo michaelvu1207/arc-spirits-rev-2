@@ -51,7 +51,7 @@
 	// Gallery state
 	let searchQuery = $state('');
 	let typeFilter = $state<'all' | 'monster' | 'event'>('all');
-	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen'>('all');
+	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'arcane'>('all');
 	let classificationFilter = $state<'all' | 'monster' | 'abyss_guardian' | 'boss'>('all');
 	let statusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
 	let selectedCardIds = $state(new Set<string>());
@@ -640,6 +640,7 @@
 			onMonsterDelete={handleWorkspaceMonsterDelete}
 			onEventDelete={handleWorkspaceEventDelete}
 			onSaveDeckOrder={saveDeckOrder}
+			defaultShowCardPreviews={false}
 		/>
 	{:else if activeTab === 'special-effects'}
 		<div class="effects-grid">
@@ -692,6 +693,7 @@
 							<option value="tainted">Tainted</option>
 							<option value="corrupt">Corrupt</option>
 							<option value="fallen">Fallen</option>
+							<option value="arcane">Arcane</option>
 						</select>
 					{/if}
 

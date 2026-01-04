@@ -8,7 +8,7 @@ export interface MonsterFormData {
 	name: string;
 	damage: number;
 	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen';
+	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
 	monster_classification: MonsterClassification;
 	icon: string | null;
 	image_path: string | null;
@@ -140,7 +140,14 @@ export async function deleteMonsterRecord(id: string, client: Rev2Client = supab
 }
 
 function sanitizeRewardRow(row: RewardRow): RewardRow {
-	const validTypes: RewardRowType[] = ['all_in_combat', 'all_losers', 'all_winners', 'one_winner', 'tournament'];
+	const validTypes: RewardRowType[] = [
+		'all_in_combat',
+		'all_in_combat_pick_one',
+		'all_losers',
+		'all_winners',
+		'one_winner',
+		'tournament'
+	];
 	return {
 		type: validTypes.includes(row.type) ? row.type : 'all_in_combat',
 		icon_ids: Array.isArray(row.icon_ids) 

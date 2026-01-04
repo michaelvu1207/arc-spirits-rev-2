@@ -1,16 +1,15 @@
 <script lang="ts">
 	import type { SpecialEffectRow, TradeRow, GainRow } from '$lib/types/gameData';
-	import { getIconPoolUrl } from '$lib/utils/iconPool';
 	import { getErrorMessage } from '$lib/utils';
-	import { publicAssetUrl } from '$lib/utils/storage';
 	import { MonsterCardPreview, RewardRowsEditor } from '$lib/components/monsters';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
+	import LazyMount from '$lib/components/shared/LazyMount.svelte';
 	import Modal from '../layout/Modal.svelte';
 	import { ConfirmDialog, ImageUploader, SpecialEffectPicker } from '$lib/components/shared';
 	import GainRowsEditor from '$lib/components/shared/GainRowsEditor.svelte';
 	import TradeRowsEditor from '$lib/components/shared/TradeRowsEditor.svelte';
 	import EventCardPreview from './EventCardPreview.svelte';
-	import type { Event, Monster, ResolvedRewardRow } from './types';
+	import type { Event, Monster } from './types';
 
 	export type DeckOrderItem = {
 		type: 'monster' | 'event';
@@ -23,7 +22,7 @@
 		description: string | null;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen';
+		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane';
 		monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 		icon: string | null;
 		image_path: string | null;
@@ -61,6 +60,7 @@
 		monsterIcon?: string;
 		monsterPreviewComponent?: any;
 		monsterPreviewVariants?: number[];
+		defaultShowCardPreviews?: boolean;
 		showEvents?: boolean;
 		showSubtext?: boolean;
 		showDescription?: boolean;
@@ -98,6 +98,7 @@
 		monsterIcon = '👹',
 		monsterPreviewComponent = MonsterCardPreview,
 		monsterPreviewVariants = [],
+		defaultShowCardPreviews = true,
 		showEvents = true,
 		showSubtext = false,
 		showDescription = false,
@@ -115,6 +116,19 @@
 	}: Props = $props();
 
 	const monsterLabelLower = $derived.by(() => monsterLabel.toLowerCase());
+	let showCardPreviews = $state(defaultShowCardPreviews);
+
+	type InlineStats = { damage: number; barrier: number };
+	let inlineStatsEdits = $state<Record<string, InlineStats>>({});
+	let inlineStatsSaving = $state<Record<string, boolean>>({});
+	let inlineStatsError = $state<Record<string, string | null>>({});
+
+	const INLINE_SPECIAL_EFFECT_MAX = 4;
+	let inlineEffectEdits = $state<Record<string, string[]>>({});
+	let inlineEffectOpenId = $state<string | null>(null);
+
+	const specialEffectById = $derived.by(() => new Map(specialEffects.map((effect) => [effect.id, effect])));
+	const sortedSpecialEffects = $derived.by(() => [...specialEffects].sort((a, b) => a.name.localeCompare(b.name)));
 
 	function keyToString(k: DeckOrderItem) {
 		return `${k.type}:${k.id}`;
@@ -279,6 +293,173 @@
 		return safeRows.length > 0 ? safeRows : [createEmptyGainRow()];
 	}
 
+	function monsterToFormData(monster: Monster): MonsterFormData {
+		return {
+			name: monster.name,
+			subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
+			description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
+			damage: monster.damage ?? 0,
+			barrier: monster.barrier ?? 0,
+			state: monster.state,
+			monster_classification: monster.monster_classification ?? 'monster',
+			icon: monster.icon,
+			image_path: monster.image_path,
+			invade_location_id: monster.invade_location_id ?? null,
+			order_num: monster.order_num,
+			reward_rows: monster.reward_rows ?? [],
+			trade_rows: normalizeTradeRows(
+				(monster as { trade_rows?: TradeRow[] }).trade_rows,
+				(monster as { trade_left_icon_ids?: string[] }).trade_left_icon_ids,
+				(monster as { trade_right_icon_ids?: string[] }).trade_right_icon_ids
+			),
+			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
+			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
+			quantity: monster.quantity ?? 1
+		};
+	}
+
+	function parseNonNegativeInt(value: string, fallback: number): number {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) return fallback;
+		return Math.max(0, Math.round(parsed));
+	}
+
+	function coerceNonNegativeInt(value: unknown, fallback: number): number {
+		if (typeof value === 'number') {
+			return Number.isFinite(value) ? Math.max(0, Math.round(value)) : fallback;
+		}
+		if (typeof value === 'string') {
+			const trimmed = value.trim();
+			if (!trimmed) return fallback;
+			return parseNonNegativeInt(trimmed, fallback);
+		}
+		return fallback;
+	}
+
+	function getInlineStats(monster: Monster): InlineStats {
+		const edit = inlineStatsEdits[monster.id];
+		return {
+			damage: edit?.damage ?? (monster.damage ?? 0),
+			barrier: edit?.barrier ?? (monster.barrier ?? 0)
+		};
+	}
+
+	function normalizeInlineEffectIds(ids: string[]): string[] {
+		const unique = Array.from(
+			new Set(
+				ids
+					.filter((id): id is string => typeof id === 'string')
+					.map((id) => id.trim())
+					.filter(Boolean)
+			)
+		);
+
+		unique.sort((a, b) => {
+			const aName = specialEffectById.get(a)?.name ?? a;
+			const bName = specialEffectById.get(b)?.name ?? b;
+			return aName.localeCompare(bName);
+		});
+
+		return unique;
+	}
+
+	function arraysEqual(a: string[], b: string[]): boolean {
+		if (a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i++) {
+			if (a[i] !== b[i]) return false;
+		}
+		return true;
+	}
+
+	function getInlineEffectIds(monsterId: string): string[] {
+		return inlineEffectEdits[monsterId] ?? normalizeInlineEffectIds(monsterSpecialEffects[monsterId] ?? []);
+	}
+
+	function setInlineEffectIds(monsterId: string, nextIds: string[]) {
+		const base = normalizeInlineEffectIds(monsterSpecialEffects[monsterId] ?? []);
+		const next = normalizeInlineEffectIds(nextIds);
+
+		const edits = { ...inlineEffectEdits };
+		if (arraysEqual(base, next)) {
+			delete edits[monsterId];
+		} else {
+			edits[monsterId] = next;
+		}
+		inlineEffectEdits = edits;
+
+		if (inlineStatsError[monsterId]) {
+			inlineStatsError = { ...inlineStatsError, [monsterId]: null };
+		}
+	}
+
+	function toggleInlineEffect(monsterId: string, effectId: string) {
+		const current = getInlineEffectIds(monsterId);
+		const selected = new Set(current);
+		if (selected.has(effectId)) {
+			selected.delete(effectId);
+		} else {
+			if (selected.size >= INLINE_SPECIAL_EFFECT_MAX) return;
+			selected.add(effectId);
+		}
+
+		setInlineEffectIds(monsterId, Array.from(selected));
+	}
+
+	function setInlineStatValue(monster: Monster, field: keyof InlineStats, rawValue: string) {
+		const baseDamage = monster.damage ?? 0;
+		const baseBarrier = monster.barrier ?? 0;
+		const current = getInlineStats(monster);
+		const nextValue = parseNonNegativeInt(rawValue, current[field]);
+		const next: InlineStats = { ...current, [field]: nextValue };
+
+		const edits = { ...inlineStatsEdits };
+		if (next.damage === baseDamage && next.barrier === baseBarrier) {
+			delete edits[monster.id];
+		} else {
+			edits[monster.id] = next;
+		}
+		inlineStatsEdits = edits;
+
+		if (inlineStatsError[monster.id]) {
+			inlineStatsError = { ...inlineStatsError, [monster.id]: null };
+		}
+	}
+
+	async function saveInlineEdits(monsterId: string) {
+		if (inlineStatsSaving[monsterId]) return;
+		const monster = monsterById.get(monsterId);
+		if (!monster) return;
+
+		const statsEdit = inlineStatsEdits[monsterId];
+		const effectsEdit = inlineEffectEdits[monsterId];
+		if (!statsEdit && !effectsEdit) return;
+
+		inlineStatsSaving = { ...inlineStatsSaving, [monsterId]: true };
+		inlineStatsError = { ...inlineStatsError, [monsterId]: null };
+		try {
+			const formData = monsterToFormData(monster);
+			const merged: MonsterFormData = {
+				...formData,
+				damage: statsEdit?.damage ?? formData.damage,
+				barrier: statsEdit?.barrier ?? formData.barrier,
+				special_effect_ids: effectsEdit ?? formData.special_effect_ids
+			};
+			await onMonsterSave(merged, monsterId);
+
+			const nextStats = { ...inlineStatsEdits };
+			delete nextStats[monsterId];
+			inlineStatsEdits = nextStats;
+
+			const nextEffects = { ...inlineEffectEdits };
+			delete nextEffects[monsterId];
+			inlineEffectEdits = nextEffects;
+		} catch (err) {
+			inlineStatsError = { ...inlineStatsError, [monsterId]: getErrorMessage(err) };
+		} finally {
+			inlineStatsSaving = { ...inlineStatsSaving, [monsterId]: false };
+		}
+	}
+
 	let monsterFormData = $state<MonsterFormData>({
 		name: '',
 		subtext: null,
@@ -362,28 +543,7 @@
 			if (!monster) return;
 			editorType = type;
 			editingId = id;
-			monsterFormData = {
-				name: monster.name,
-				subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
-				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
-				damage: monster.damage,
-				barrier: monster.barrier,
-				state: monster.state,
-				monster_classification: monster.monster_classification ?? 'monster',
-				icon: monster.icon,
-				image_path: monster.image_path,
-				invade_location_id: monster.invade_location_id ?? null,
-				order_num: monster.order_num,
-				reward_rows: monster.reward_rows ?? [],
-				trade_rows: normalizeTradeRows(
-					(monster as { trade_rows?: TradeRow[] }).trade_rows,
-					(monster as { trade_left_icon_ids?: string[] }).trade_left_icon_ids,
-					(monster as { trade_right_icon_ids?: string[] }).trade_right_icon_ids
-				),
-				gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
-				special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-				quantity: monster.quantity ?? 1
-			};
+			monsterFormData = monsterToFormData(monster);
 			onSelectMonster?.(monster);
 			editorOpen = true;
 		} else {
@@ -575,14 +735,18 @@
 		}
 
 		try {
-			const id = await onMonsterSave(monsterFormData, editingId);
+			const sanitized: MonsterFormData = {
+				...monsterFormData,
+				damage: coerceNonNegativeInt(monsterFormData.damage, 0),
+				barrier: coerceNonNegativeInt(monsterFormData.barrier, 0)
+			};
+			const id = await onMonsterSave(sanitized, editingId);
 			if (!editingId) {
 				deckOrder = [...deckOrder, { type: 'monster', id }];
 			}
-			editorType = 'monster';
-			editingId = id;
 			orderChanged = true;
-			await saveDeckOrder();
+			void saveDeckOrder();
+			closeEditor();
 		} catch (err) {
 			alert(`Failed to save ${monsterLabelLower}: ${getErrorMessage(err)}`);
 		}
@@ -600,10 +764,9 @@
 			if (!editingId) {
 				deckOrder = [...deckOrder, { type: 'event', id }];
 			}
-			editorType = 'event';
-			editingId = id;
 			orderChanged = true;
-			await saveDeckOrder();
+			void saveDeckOrder();
+			closeEditor();
 		} catch (err) {
 			alert(`Failed to save event: ${getErrorMessage(err)}`);
 		}
@@ -636,7 +799,7 @@
 			});
 	});
 
-	type MonsterState = 'tainted' | 'corrupt' | 'fallen';
+	type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'arcane';
 	type MonsterStateGroup = MonsterState;
 	type DeckSection = {
 		key: string;
@@ -645,13 +808,14 @@
 		groups: { item: DeckOrderItem; orderIndex: number }[];
 	};
 
-	const monsterStateGroupOrder: MonsterStateGroup[] = ['tainted', 'corrupt', 'fallen'];
+	const monsterStateGroupOrder: MonsterStateGroup[] = ['tainted', 'corrupt', 'fallen', 'arcane'];
 
 	function getMonsterStateGroup(state: string | null | undefined): MonsterStateGroup | null {
 		switch (state) {
 			case 'tainted':
 			case 'corrupt':
 			case 'fallen':
+			case 'arcane':
 				return state;
 			case 'boss':
 				return 'fallen';
@@ -668,6 +832,8 @@
 				return 'Corrupt';
 			case 'fallen':
 				return 'Fallen';
+			case 'arcane':
+				return 'Arcane';
 		}
 	}
 
@@ -679,6 +845,8 @@
 				return '#6b21a8';
 			case 'fallen':
 				return '#065f46';
+			case 'arcane':
+				return '#0ea5e9';
 		}
 	}
 
@@ -693,9 +861,10 @@
 
 		if (typeFilter !== 'event') {
 			for (const state of monsterStateGroupOrder) {
-				const stateGroups = monsters.filter(
-					(g) => getMonsterStateGroup(monsterById.get(g.item.id)?.state) === state
-				);
+				const stateGroups = monsters.filter((g) => {
+					const monster = monsterById.get(g.item.id);
+					return getMonsterStateGroup(monster?.state) === state;
+				});
 				if (stateGroups.length === 0) continue;
 				sections.push({
 					key: `state:${state}`,
@@ -705,9 +874,10 @@
 				});
 			}
 
-			const other = monsters.filter(
-				(g) => getMonsterStateGroup(monsterById.get(g.item.id)?.state) === null
-			);
+			const other = monsters.filter((g) => {
+				const monster = monsterById.get(g.item.id);
+				return getMonsterStateGroup(monster?.state) === null;
+			});
 			if (other.length > 0) {
 				sections.push({
 					key: 'state:other',
@@ -728,136 +898,6 @@
 		}
 
 		return sections;
-	});
-
-	const normalizedImagePath = $derived.by(() => {
-		if (!showImageUpload) return null;
-		const path = monsterFormData.image_path?.trim();
-		if (!path) return null;
-		if (path.includes('/')) return path;
-		const folder = imageUploadFolder.replace(/\/$/, '');
-		return folder ? `${folder}/${path}` : path;
-	});
-
-	const previewArtUrl = $derived.by(() => {
-		if (!normalizedImagePath) return null;
-		return publicAssetUrl(normalizedImagePath, { updatedAt: Date.now() });
-	});
-
-	const selectedMonsterPreview = $derived.by(() => {
-		if (editorType !== 'monster') return null;
-		if (!editingId) {
-			const resolvedRewardRows: ResolvedRewardRow[] = showRewardRows
-				? (monsterFormData.reward_rows ?? []).map((row: any) => ({
-						...row,
-						icon_urls: (row.icon_ids ?? []).map((id: string) => getIconPoolUrl(id))
-					}))
-				: [];
-
-			const effects = showSpecialEffects
-				? monsterFormData.special_effect_ids
-						.map((id) => specialEffects.find((e) => e.id === id))
-						.filter((e): e is SpecialEffectRow => e !== undefined)
-				: [];
-
-			return {
-				id: 'new',
-				name: monsterFormData.name || `New ${monsterLabel}`,
-				traveler_subtext: monsterFormData.subtext ?? null,
-				traveler_description: monsterFormData.description ?? null,
-				damage: monsterFormData.damage,
-				barrier: monsterFormData.barrier,
-				state: monsterFormData.state,
-				monster_classification: monsterFormData.monster_classification,
-				icon: monsterFormData.icon,
-				image_path: monsterFormData.image_path,
-				invade_location_id: monsterFormData.invade_location_id,
-				order_num: monsterFormData.order_num,
-				card_image_path: null,
-				reward_rows: monsterFormData.reward_rows as any,
-				trade_rows: monsterFormData.trade_rows,
-				gain_rows: monsterFormData.gain_rows,
-				special_conditions: null,
-				quantity: monsterFormData.quantity,
-				created_at: null,
-				updated_at: null,
-				icon_url: null,
-				art_url: previewArtUrl,
-				resolved_reward_rows: resolvedRewardRows,
-				effects
-			} satisfies Monster;
-		}
-
-		const monster = monsterById.get(editingId);
-		if (!monster) return null;
-		const resolvedRewardRows: ResolvedRewardRow[] = showRewardRows
-			? (monsterFormData.reward_rows ?? []).map((row: any) => ({
-					...row,
-					icon_urls: (row.icon_ids ?? []).map((id: string) => getIconPoolUrl(id))
-				}))
-			: [];
-
-		const effects = showSpecialEffects
-			? monsterFormData.special_effect_ids
-					.map((id) => specialEffects.find((e) => e.id === id))
-					.filter((e): e is SpecialEffectRow => e !== undefined)
-			: [];
-
-		return {
-			...monster,
-			name: monsterFormData.name,
-			traveler_subtext: monsterFormData.subtext ?? null,
-			traveler_description: monsterFormData.description ?? null,
-			damage: monsterFormData.damage,
-			barrier: monsterFormData.barrier,
-			state: monsterFormData.state,
-			monster_classification: monsterFormData.monster_classification,
-			icon: monsterFormData.icon,
-			image_path: monsterFormData.image_path,
-			invade_location_id: monsterFormData.invade_location_id,
-			reward_rows: monsterFormData.reward_rows as any,
-			trade_rows: monsterFormData.trade_rows,
-			gain_rows: monsterFormData.gain_rows,
-			quantity: monsterFormData.quantity,
-			art_url: previewArtUrl ?? monster.art_url ?? null,
-			resolved_reward_rows: resolvedRewardRows,
-			effects
-		} satisfies Monster;
-	});
-
-	const selectedEventPreview = $derived.by(() => {
-		if (!showEvents) return null;
-		if (editorType !== 'event') return null;
-
-		const orderIndex = editingId ? deckOrder.findIndex((k) => k.type === 'event' && k.id === editingId) : deckOrder.length;
-		const safeOrderNum = Math.max(0, orderIndex);
-
-		if (!editingId) {
-			return {
-				id: 'new',
-				name: eventFormData.name || 'new_event',
-				title: eventFormData.title || 'New Event',
-				description: eventFormData.description,
-				image_path: eventFormData.image_path,
-				card_image_path: null,
-				order_num: safeOrderNum,
-				created_at: null,
-				updated_at: null,
-				art_url: null
-			} satisfies Event;
-		}
-
-		const event = eventById.get(editingId);
-		if (!event) return null;
-
-		return {
-			...event,
-			name: eventFormData.name,
-			title: eventFormData.title,
-			description: eventFormData.description,
-			image_path: eventFormData.image_path,
-			order_num: safeOrderNum
-		} satisfies Event;
 	});
 
 	$effect(() => {
@@ -882,7 +922,6 @@
 		monsterPreviewVariants && monsterPreviewVariants.length > 0 ? monsterPreviewVariants : []
 	);
 	const listPreviewVariant = $derived.by(() => previewVariants[0]);
-	const hasPreviewGrid = $derived.by(() => previewVariants.length > 1);
 	const MonsterPreviewComponent = $derived.by(() => monsterPreviewComponent);
 	const editorTitle = $derived.by(() => {
 		if (editorType === 'monster') {
@@ -915,6 +954,12 @@
 					<span class="badge">{totalGroups} entries</span>
 					<span class="badge">{totalPhysicalCards} cards</span>
 				</div>
+				<Button
+					variant="secondary"
+					onclick={() => (showCardPreviews = !showCardPreviews)}
+				>
+					{showCardPreviews ? 'Disable Preview' : 'Enable Preview'}
+				</Button>
 				<input
 					type="text"
 					class="search"
@@ -928,11 +973,13 @@
 						<option value="event">Events</option>
 					{/if}
 				</select>
-				<label class="scale">
-					<span>Scale</span>
-					<input type="range" min="35" max="120" step="5" bind:value={scalePercent} />
-					<span class="scale-val">{scalePercent}%</span>
-				</label>
+				{#if showCardPreviews}
+					<label class="scale">
+						<span>Scale</span>
+						<input type="range" min="35" max="120" step="5" bind:value={scalePercent} />
+						<span class="scale-val">{scalePercent}%</span>
+					</label>
+				{/if}
 			</div>
 		</header>
 
@@ -977,6 +1024,63 @@
 										</div>
 
 										<div class="group-actions">
+											{#if !showCardPreviews && showStats && item.type === 'monster' && monster}
+												{@const inlineStats = getInlineStats(monster)}
+												{@const isDirty = inlineStatsEdits[monster.id] !== undefined}
+												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
+												{@const saveError = inlineStatsError[monster.id]}
+
+												<div class="inline-stats" class:error={Boolean(saveError)} title={saveError ?? ''}>
+													<label class="inline-stat">
+														<span>DMG</span>
+														<input
+															type="number"
+															min="0"
+															step="1"
+															value={inlineStats.damage}
+															disabled={isSaving}
+															aria-label="Damage"
+															oninput={(e) =>
+																setInlineStatValue(monster, 'damage', (e.target as HTMLInputElement).value)}
+															onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
+														/>
+													</label>
+													<label class="inline-stat">
+														<span>BAR</span>
+														<input
+															type="number"
+															min="0"
+															step="1"
+															value={inlineStats.barrier}
+															disabled={isSaving}
+															aria-label="Barrier"
+															oninput={(e) =>
+																setInlineStatValue(monster, 'barrier', (e.target as HTMLInputElement).value)}
+															onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
+														/>
+													</label>
+													{#if isDirty}
+														<button class="btn" onclick={() => void saveInlineEdits(monster.id)} disabled={isSaving}>
+															{isSaving ? 'Saving…' : 'Save'}
+														</button>
+													{/if}
+													{#if saveError}
+														<span class="inline-stat-error">!</span>
+													{/if}
+												</div>
+											{/if}
+											{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0}
+												{@const selectedEffects = getInlineEffectIds(monster.id)}
+												{@const effectCount = selectedEffects.length}
+												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
+												<button
+													class="btn"
+													onclick={() => (inlineEffectOpenId = inlineEffectOpenId === monster.id ? null : monster.id)}
+													disabled={isSaving}
+												>
+													Effects{effectCount > 0 ? ` (${effectCount})` : ''}
+												</button>
+											{/if}
 											<button class="btn" onclick={() => openEdit(item.type, item.id)}>Edit</button>
 											{#if item.type === 'monster'}
 												<button class="btn" onclick={() => duplicateMonster(item.id)} disabled={duplicatingId === item.id}>
@@ -998,53 +1102,109 @@
 										</div>
 									</div>
 
-									<div class="group-copies">
-										{#if item.type === 'monster' && monster}
-											{#each Array.from({ length: copies }, (_, i) => i) as idx (idx)}
+									{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0 && inlineEffectOpenId === monster.id}
+										{@const selectedEffects = getInlineEffectIds(monster.id)}
+										{@const isDirty = inlineEffectEdits[monster.id] !== undefined}
+										{@const isSaving = inlineStatsSaving[monster.id] ?? false}
+										<div class="inline-effects-panel">
+											<div class="inline-effects-panel__header">
+												<div class="inline-effects-panel__title">
+													Special Effects ({selectedEffects.length}/{INLINE_SPECIAL_EFFECT_MAX})
+												</div>
+												<button class="btn" onclick={() => (inlineEffectOpenId = null)} disabled={isSaving}>
+													Close
+												</button>
+											</div>
+											<div class="inline-effects-panel__list" role="list">
+												{#each sortedSpecialEffects as effect (effect.id)}
+													{@const isSelected = selectedEffects.includes(effect.id)}
+													{@const atLimit = selectedEffects.length >= INLINE_SPECIAL_EFFECT_MAX && !isSelected}
+													<label
+														class="inline-effect-option"
+														class:disabled={isSaving || atLimit}
+														role="listitem"
+													>
+														<input
+															type="checkbox"
+															checked={isSelected}
+															disabled={isSaving || atLimit}
+															onchange={() => toggleInlineEffect(monster.id, effect.id)}
+														/>
+														{#if effect.icon}
+															<span class="inline-effect-icon">{effect.icon}</span>
+														{/if}
+														<span class="inline-effect-name">{effect.name}</span>
+													</label>
+												{/each}
+											</div>
+											{#if isDirty}
+												<div class="inline-effects-panel__actions">
+													<button class="btn" onclick={() => void saveInlineEdits(monster.id)} disabled={isSaving}>
+														{isSaving ? 'Saving…' : 'Save'}
+													</button>
+												</div>
+											{/if}
+											{#if inlineStatsError[monster.id]}
+												<div class="inline-effects-panel__error">{inlineStatsError[monster.id]}</div>
+											{/if}
+										</div>
+									{/if}
+
+									{#if showCardPreviews}
+										<div class="group-copies">
+											{#if item.type === 'monster' && monster}
+												{#each Array.from({ length: copies }, (_, i) => i) as idx (idx)}
+													<div
+														class="copy"
+														class:selected={isSelected}
+														style="--scale: {scale}; width: {600 * scale}px; height: {437 * scale}px;"
+														role="button"
+														tabindex="0"
+														onclick={() => openEdit('monster', item.id)}
+														onkeydown={(e) => e.key === 'Enter' && openEdit('monster', item.id)}
+													>
+														{#if copies > 1}
+															<div class="copy-badge">{idx + 1}/{copies}</div>
+														{/if}
+														<LazyMount style="width: 100%; height: 100%; display: block;" rootMargin="1200px 0px">
+															<div class="copy-inner">
+																{#if listPreviewVariant !== undefined}
+																	<MonsterPreviewComponent
+																		monster={monster}
+																		footerLabel={monsterLabel}
+																		variant={listPreviewVariant}
+																		renderMode="fast"
+																	/>
+																{:else}
+																	<MonsterPreviewComponent monster={monster} footerLabel={monsterLabel} renderMode="fast" />
+																{/if}
+															</div>
+															<div slot="placeholder" class="copy-placeholder" aria-hidden="true" />
+														</LazyMount>
+													</div>
+												{/each}
+											{:else if item.type === 'event' && event}
 												<div
 													class="copy"
 													class:selected={isSelected}
-													style="--scale: {scale}; width: {600 * scale}px; height: {437 * scale}px;"
+													style="--scale: {scale}; width: {600 * scale}px; height: {364 * scale}px;"
 													role="button"
 													tabindex="0"
-													onclick={() => openEdit('monster', item.id)}
-													onkeydown={(e) => e.key === 'Enter' && openEdit('monster', item.id)}
+													onclick={() => openEdit('event', item.id)}
+													onkeydown={(e) => e.key === 'Enter' && openEdit('event', item.id)}
 												>
-													{#if copies > 1}
-														<div class="copy-badge">{idx + 1}/{copies}</div>
-													{/if}
-													<div class="copy-inner">
-														{#if listPreviewVariant !== undefined}
-															<MonsterPreviewComponent
-																monster={monster}
-																footerLabel={monsterLabel}
-																variant={listPreviewVariant}
-																renderMode="fast"
-															/>
-														{:else}
-															<MonsterPreviewComponent monster={monster} footerLabel={monsterLabel} renderMode="fast" />
-														{/if}
-													</div>
+													<LazyMount style="width: 100%; height: 100%; display: block;" rootMargin="1200px 0px">
+														<div class="copy-inner">
+															<EventCardPreview event={{ ...event, order_num: orderIndex }} />
+														</div>
+														<div slot="placeholder" class="copy-placeholder" aria-hidden="true" />
+													</LazyMount>
 												</div>
-											{/each}
-										{:else if item.type === 'event' && event}
-											<div
-												class="copy"
-												class:selected={isSelected}
-												style="--scale: {scale}; width: {600 * scale}px; height: {364 * scale}px;"
-												role="button"
-												tabindex="0"
-												onclick={() => openEdit('event', item.id)}
-												onkeydown={(e) => e.key === 'Enter' && openEdit('event', item.id)}
-											>
-												<div class="copy-inner">
-													<EventCardPreview event={{ ...event, order_num: orderIndex }} />
-												</div>
-											</div>
-										{:else}
-											<div class="missing">Missing data</div>
-										{/if}
-									</div>
+											{:else}
+												<div class="missing">Missing data</div>
+											{/if}
+										</div>
+									{/if}
 								</div>
 							{/each}
 						</div>
@@ -1072,30 +1232,6 @@
 					</div>
 				</div>
 			{:else if editorType === 'monster'}
-				{#if selectedMonsterPreview}
-					{#if hasPreviewGrid}
-						<div class="editor-preview-grid">
-							{#each previewVariants as variant (variant)}
-								<div class="preview-cell" style="--scale: 0.35; width: {600 * 0.35}px; height: {437 * 0.35}px;">
-									<div class="copy-inner">
-										<MonsterPreviewComponent
-											monster={selectedMonsterPreview}
-											footerLabel={monsterLabel}
-											variant={variant}
-										/>
-									</div>
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<div class="editor-preview" style="--scale: 0.55; width: {600 * 0.55}px; height: {437 * 0.55}px;">
-							<div class="copy-inner">
-								<MonsterPreviewComponent monster={selectedMonsterPreview} footerLabel={monsterLabel} />
-							</div>
-						</div>
-					{/if}
-				{/if}
-
 				<form class="editor-form" onsubmit={(e) => (e.preventDefault(), void saveMonster())}>
 					<FormField label="Name" required>
 						<Input type="text" bind:value={monsterFormData.name} required />
@@ -1129,14 +1265,15 @@
 							<Input type="number" min={1} bind:value={monsterFormData.quantity} />
 						</FormField>
 						<FormField label="State">
-							<Select
-								bind:value={monsterFormData.state}
-								options={[
-									{ value: 'tainted', label: 'Tainted' },
-									{ value: 'corrupt', label: 'Corrupt' },
-									{ value: 'fallen', label: 'Fallen' }
-								]}
-							/>
+								<Select
+									bind:value={monsterFormData.state}
+									options={[
+										{ value: 'tainted', label: 'Tainted' },
+										{ value: 'corrupt', label: 'Corrupt' },
+										{ value: 'fallen', label: 'Fallen' },
+										{ value: 'arcane', label: 'Arcane' }
+									]}
+								/>
 						</FormField>
 					</div>
 
@@ -1219,14 +1356,6 @@
 					</div>
 				</form>
 			{:else if showEvents}
-				{#if selectedEventPreview}
-					<div class="editor-preview" style="--scale: 0.62; width: {600 * 0.62}px; height: {364 * 0.62}px;">
-						<div class="copy-inner">
-							<EventCardPreview event={selectedEventPreview} />
-						</div>
-					</div>
-				{/if}
-
 				<form class="editor-form" onsubmit={(e) => (e.preventDefault(), void saveEvent())}>
 					<FormField label="Name (Internal)" required>
 						<Input type="text" bind:value={eventFormData.name} required />
@@ -1486,6 +1615,147 @@
 		gap: 0.35rem;
 	}
 
+	.inline-stats {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.15rem 0.35rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		background: rgba(15, 23, 42, 0.4);
+	}
+
+	.inline-stats.error {
+		border-color: rgba(248, 113, 113, 0.55);
+	}
+
+	.inline-stat {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		font-size: 0.65rem;
+		color: #94a3b8;
+		font-weight: 800;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.inline-stat input {
+		width: 52px;
+		padding: 0.25rem 0.35rem;
+		border-radius: 8px;
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		background: rgba(2, 6, 23, 0.35);
+		color: #f8fafc;
+		font-size: 0.8rem;
+		font-weight: 800;
+		text-align: center;
+	}
+
+	.inline-stat input:focus {
+		outline: none;
+		border-color: rgba(168, 85, 247, 0.55);
+	}
+
+	.inline-stat input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	.inline-stat-error {
+		font-size: 0.75rem;
+		font-weight: 900;
+		color: #f87171;
+		padding: 0 0.15rem;
+	}
+
+	.inline-effects-panel {
+		margin-top: 0.25rem;
+		padding: 0.6rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		background: rgba(2, 6, 23, 0.28);
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.inline-effects-panel__header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.inline-effects-panel__title {
+		font-size: 0.75rem;
+		font-weight: 800;
+		color: rgba(226, 232, 240, 0.9);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.inline-effects-panel__list {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 0.35rem 0.5rem;
+		max-height: 220px;
+		overflow: auto;
+		padding-right: 0.25rem;
+	}
+
+	.inline-effect-option {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.35rem 0.5rem;
+		border-radius: 8px;
+		border: 1px solid rgba(148, 163, 184, 0.16);
+		background: rgba(15, 23, 42, 0.35);
+		color: #e2e8f0;
+		font-size: 0.85rem;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.inline-effect-option:hover:not(.disabled) {
+		border-color: rgba(96, 165, 250, 0.35);
+		background: rgba(30, 41, 59, 0.45);
+	}
+
+	.inline-effect-option.disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.inline-effect-option input {
+		accent-color: rgba(96, 165, 250, 0.9);
+	}
+
+	.inline-effect-icon {
+		font-size: 0.95rem;
+	}
+
+	.inline-effect-name {
+		font-weight: 650;
+	}
+
+	.inline-effects-panel__actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+	}
+
+	.inline-effects-panel__error {
+		padding: 0.4rem 0.5rem;
+		border-radius: 8px;
+		border: 1px solid rgba(248, 113, 113, 0.4);
+		background: rgba(248, 113, 113, 0.08);
+		color: #fecaca;
+		font-size: 0.8rem;
+	}
+
 	.btn {
 		padding: 0.25rem 0.5rem;
 		border-radius: 8px;
@@ -1546,6 +1816,14 @@
 	.copy-inner {
 		transform: scale(var(--scale));
 		transform-origin: top left;
+	}
+
+	.copy-placeholder {
+		width: 100%;
+		height: 100%;
+		border-radius: 10px;
+		background: rgba(15, 23, 42, 0.35);
+		border: 1px solid rgba(148, 163, 184, 0.1);
 	}
 
 	.copy-badge {

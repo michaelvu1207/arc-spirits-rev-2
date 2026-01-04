@@ -12,6 +12,7 @@
 			reward_icon_ids: ['icon-1', 'icon-2', 'icon-3'],
 			order_num: 0,
 			tags: [],
+			quantity: 1,
 			card_image_path: null,
 			created_at: null,
 			updated_at: null
@@ -24,6 +25,7 @@
 			reward_icon_ids: [],
 			order_num: 1,
 			tags: [],
+			quantity: 1,
 			card_image_path: null,
 			created_at: null,
 			updated_at: null
@@ -36,6 +38,7 @@
 			reward_icon_ids: ['icon-4', 'icon-5'],
 			order_num: 2,
 			tags: [],
+			quantity: 1,
 			card_image_path: null,
 			created_at: null,
 			updated_at: null
@@ -48,6 +51,7 @@
 			reward_icon_ids: ['icon-1', 'icon-3', 'icon-5', 'icon-2'],
 			order_num: 3,
 			tags: [],
+			quantity: 1,
 			card_image_path: null,
 			created_at: null,
 			updated_at: null

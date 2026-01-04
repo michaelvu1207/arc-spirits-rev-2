@@ -83,6 +83,26 @@
 	let savingQuest = $state(false);
 	let deletingQuestIds = $state(new Set<string>());
 
+	// Quest list UI preferences
+	let showQuestRenderedPreview = $state(false);
+	let hasLoadedQuestPreviewPreference = $state(false);
+
+	$effect(() => {
+		if (hasLoadedQuestPreviewPreference) return;
+		if (typeof window === 'undefined') return;
+		const saved = localStorage.getItem('traveler-quests-rendered-preview');
+		if (saved !== null) {
+			showQuestRenderedPreview = saved === 'true';
+		}
+		hasLoadedQuestPreviewPreference = true;
+	});
+
+	$effect(() => {
+		if (!hasLoadedQuestPreviewPreference) return;
+		if (typeof window === 'undefined') return;
+		localStorage.setItem('traveler-quests-rendered-preview', String(showQuestRenderedPreview));
+	});
+
 	const selectedCount = $derived(selectedCardIds.size);
 	const generatedCount = $derived(allCards.filter(c => c.card_image_path).length);
 	const totalCount = $derived(allCards.length);
@@ -198,59 +218,67 @@
 				.order('order_num')
 				.order('title');
 
-		if (err) {
-			questError = err.message;
-			travelerQuests = [];
-			return;
-		}
+			if (err) {
+				questError = err.message;
+				travelerQuests = [];
+				return;
+			}
 
-			travelerQuests = (data ?? []).map((row) => ({
-				...row,
-				reward_text: typeof (row as any).reward_text === 'string' ? (row as any).reward_text : null,
-				reward_icon_ids: Array.isArray((row as any).reward_icon_ids) ? (row as any).reward_icon_ids : [],
-				tags: Array.isArray((row as any).tags)
-					? (row as any).tags.filter((tag: unknown): tag is string => typeof tag === 'string')
-					: []
-			}));
-		}
+				travelerQuests = (data ?? []).map((row) => ({
+					...row,
+					reward_text: typeof (row as any).reward_text === 'string' ? (row as any).reward_text : null,
+					reward_icon_ids: Array.isArray((row as any).reward_icon_ids) ? (row as any).reward_icon_ids : [],
+					tags: Array.isArray((row as any).tags)
+						? (row as any).tags.filter((tag: unknown): tag is string => typeof tag === 'string')
+						: [],
+					quantity: Number.isFinite(Number((row as any).quantity))
+						? Math.max(1, Math.trunc(Number((row as any).quantity)))
+						: 1
+				}));
+			}
 
-		function openCreateQuest() {
-			questDraft = {
-				title: '',
-				description: null,
-				reward_text: null,
-				reward_icon_ids: [],
-				tags: [],
-				order_num: travelerQuests.length
-			};
-			questEditorOpen = true;
-		}
+			function openCreateQuest() {
+				questDraft = {
+					title: '',
+					description: null,
+					reward_text: null,
+					reward_icon_ids: [],
+					tags: [],
+					order_num: travelerQuests.length,
+					quantity: 1
+				};
+				questEditorOpen = true;
+			}
 
 	function openEditQuest(quest: TravelerQuestRow) {
 		questDraft = JSON.parse(JSON.stringify(quest));
 		questEditorOpen = true;
 	}
 
-		async function saveQuest(quest: Partial<TravelerQuestRow>) {
-			const title = (quest.title ?? '').trim();
-			if (!title) {
-				alert('Title is required.');
-				return;
-			}
+			async function saveQuest(quest: Partial<TravelerQuestRow>) {
+				const title = (quest.title ?? '').trim();
+				if (!title) {
+					alert('Title is required.');
+					return;
+				}
 
-			const rewardText = (quest.reward_text ?? '').trim();
-			const rewardIconIds = Array.isArray(quest.reward_icon_ids) ? quest.reward_icon_ids : [];
-			const tags = Array.isArray(quest.tags) ? quest.tags.filter((t): t is string => typeof t === 'string') : [];
+				const rewardText = (quest.reward_text ?? '').trim();
+				const rewardIconIds = Array.isArray(quest.reward_icon_ids) ? quest.reward_icon_ids : [];
+				const tags = Array.isArray(quest.tags) ? quest.tags.filter((t): t is string => typeof t === 'string') : [];
+				const quantity = Number.isFinite(Number((quest as any).quantity))
+					? Math.max(1, Math.trunc(Number((quest as any).quantity)))
+					: 1;
 
-			const payload = {
-				title,
-				description: (quest.description ?? null) || null,
-				reward_text: rewardText ? rewardText : null,
-				reward_icon_ids: rewardText ? [] : rewardIconIds,
-				tags,
-				order_num: quest.order_num ?? 0,
-				updated_at: new Date().toISOString()
-			};
+				const payload = {
+					title,
+					description: (quest.description ?? null) || null,
+					reward_text: rewardText ? rewardText : null,
+					reward_icon_ids: rewardText ? [] : rewardIconIds,
+					tags,
+					order_num: quest.order_num ?? 0,
+					quantity,
+					updated_at: new Date().toISOString()
+				};
 
 		savingQuest = true;
 		try {
@@ -928,16 +956,67 @@
 		/>
 	{:else if activeTab === 'quests'}
 		<section class="quests">
+			<div class="quests-toolbar">
+				<Button
+					variant="secondary"
+					size="sm"
+					onclick={() => (showQuestRenderedPreview = !showQuestRenderedPreview)}
+				>
+					{showQuestRenderedPreview ? 'Disable Preview' : 'Enable Preview'}
+				</Button>
+			</div>
+
 			{#if questError}
 				<div class="error-state">Error: {questError}</div>
 			{:else if travelerQuests.length === 0}
 				<div class="empty-state">No traveler quests yet. Click “+ Quest” to create one.</div>
 			{:else}
-				<TravelerQuestGrid
-					quests={travelerQuests}
-					on:edit={(e) => openEditQuest(e.detail)}
-					on:delete={(e) => deleteQuest(e.detail)}
-				/>
+				{#if showQuestRenderedPreview}
+					<TravelerQuestGrid
+						quests={travelerQuests}
+						on:edit={(e) => openEditQuest(e.detail)}
+						on:delete={(e) => deleteQuest(e.detail)}
+					/>
+				{:else}
+					<div class="quest-list" role="list">
+						{#each travelerQuests as quest (quest.id)}
+							{@const isDeleting = deletingQuestIds.has(quest.id)}
+							{@const rewardSummary =
+								quest.reward_text && quest.reward_text.trim()
+									? `Reward: ${quest.reward_text}`
+									: quest.reward_icon_ids && quest.reward_icon_ids.length > 0
+										? `Reward: ${quest.reward_icon_ids.length} icon${quest.reward_icon_ids.length === 1 ? '' : 's'}`
+										: 'Reward: none'}
+
+								<div class="quest-row" role="listitem">
+									<button type="button" class="quest-row__main" onclick={() => openEditQuest(quest)}>
+										<div class="quest-row__title-line">
+											<span class="quest-row__order">#{quest.order_num}</span>
+											{#if quest.quantity > 1}
+												<span class="quest-row__qty">×{quest.quantity}</span>
+											{/if}
+											<span class="quest-row__title">{quest.title}</span>
+										</div>
+										<div class="quest-row__meta">
+											<span class="quest-row__reward">{rewardSummary}</span>
+											{#if quest.tags && quest.tags.length > 0}
+											<span class="quest-row__tags">Tags: {quest.tags.join(', ')}</span>
+										{/if}
+									</div>
+								</button>
+
+								<div class="quest-row__actions">
+									<Button variant="secondary" size="sm" onclick={() => openEditQuest(quest)}>
+										Edit
+									</Button>
+									<Button variant="danger" size="sm" onclick={() => deleteQuest(quest)} loading={isDeleting}>
+										Delete
+									</Button>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			{/if}
 
 			<TravelerQuestEditorModal
@@ -1544,6 +1623,111 @@
 		background: rgba(201, 168, 108, 0.08);
 		color: rgba(232, 213, 181, 0.9);
 		font-size: 0.85rem;
+	}
+
+	.quests {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.quests-toolbar {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+	}
+
+	.quest-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.quest-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.6rem 0.8rem;
+		border-radius: 12px;
+		border: 1px solid rgba(148, 163, 184, 0.14);
+		background: rgba(15, 23, 42, 0.55);
+	}
+
+	.quest-row__main {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 0;
+		text-align: left;
+		border: none;
+		background: transparent;
+		color: inherit;
+		padding: 0;
+		cursor: pointer;
+	}
+
+	.quest-row__main:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.25);
+		border-radius: 10px;
+	}
+
+	.quest-row__title-line {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+
+	.quest-row__order {
+		font-size: 0.75rem;
+		color: #64748b;
+		font-weight: 600;
+		flex-shrink: 0;
+	}
+
+	.quest-row__qty {
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: rgba(226, 232, 240, 0.9);
+		background: rgba(30, 41, 59, 0.55);
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		border-radius: 999px;
+		padding: 0.05rem 0.4rem;
+		flex-shrink: 0;
+	}
+
+	.quest-row__title {
+		font-size: 0.9rem;
+		font-weight: 600;
+		color: #f8fafc;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.quest-row__meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		font-size: 0.75rem;
+		color: rgba(148, 163, 184, 0.9);
+	}
+
+	.quest-row__reward {
+		color: rgba(226, 232, 240, 0.8);
+	}
+
+	.quest-row__tags {
+		color: rgba(148, 163, 184, 0.9);
+	}
+
+	.quest-row__actions {
+		display: flex;
+		gap: 0.35rem;
+		align-items: center;
+		flex-shrink: 0;
 	}
 
 	/* Quest Gallery Styles */

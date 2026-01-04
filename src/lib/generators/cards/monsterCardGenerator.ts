@@ -171,7 +171,8 @@ export async function generateMonsterCardPNG(
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
 		corrupt: '#991b1b',
-		fallen: '#7f1d1d'
+		fallen: '#7f1d1d',
+		arcane: '#0ea5e9'
 	};
 
 	const classificationLabels: Record<string, string> = {
@@ -402,6 +403,7 @@ export async function generateMonsterCardPNG(
 	// Reward sections (kill + defeat)
 	const resolvedRows = (rewardRows ?? []) as ResolvedRewardRow[];
 	const killRewardRow = resolvedRows.find((row) => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean));
+	const killPickOneRewardRow = resolvedRows.find((row) => row.type === 'all_in_combat_pick_one' && row.icon_urls?.some(Boolean));
 	const defeatRewardRow = resolvedRows.find((row) => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
 
 	const rewardSections: { label: string; icons: string[] }[] = [];
@@ -409,6 +411,12 @@ export async function generateMonsterCardPNG(
 		rewardSections.push({
 			label: 'On kill, all in combat gain:',
 			icons: (killRewardRow.icon_urls ?? []).filter(Boolean) as string[]
+		});
+	}
+	if (killPickOneRewardRow) {
+		rewardSections.push({
+			label: 'On kill, all in combat pick 1:',
+			icons: (killPickOneRewardRow.icon_urls ?? []).filter(Boolean) as string[]
 		});
 	}
 	if (defeatRewardRow) {

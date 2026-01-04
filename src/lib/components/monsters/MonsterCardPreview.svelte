@@ -26,7 +26,8 @@
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
 		corrupt: '#991b1b',
-		fallen: '#7f1d1d'
+		fallen: '#7f1d1d',
+		arcane: '#0ea5e9'
 	};
 
 	const classificationLabels: Record<string, string> = {
@@ -45,6 +46,7 @@
 	$: classificationLabel = classificationLabels[classification] ?? 'Monster';
 	$: classificationColor = classificationColors[classification] ?? '#334155';
 	$: killRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean));
+	$: killPickOneRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat_pick_one' && row.icon_urls?.some(Boolean));
 	$: defeatRewardRow = (monster.resolved_reward_rows ?? []).find(row => row.type === 'all_losers' && row.icon_urls?.some(Boolean));
 </script>
 
@@ -60,7 +62,7 @@
 			<!-- Header -->
 			<div class="header-row">
 				{#if monster.icon_url}
-					<img src={monster.icon_url} alt="" class="monster-icon" />
+					<img src={monster.icon_url} alt="" class="monster-icon" loading="lazy" decoding="async" />
 				{:else if monster.icon}
 					<div class="monster-icon-emoji">{monster.icon}</div>
 				{/if}
@@ -91,7 +93,19 @@
 					<div class="reward-label">On kill, all in combat gain:</div>
 					<div class="reward-icons">
 						{#each killRewardRow.icon_urls.filter(Boolean) as iconUrl}
-							<img src={iconUrl} alt="" class="reward-icon" />
+							<img src={iconUrl} alt="" class="reward-icon" loading="lazy" decoding="async" />
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<!-- Kill Reward Row (Pick 1) -->
+			{#if killPickOneRewardRow}
+				<div class="reward-section">
+					<div class="reward-label">On kill, all in combat pick 1:</div>
+					<div class="reward-icons">
+						{#each killPickOneRewardRow.icon_urls.filter(Boolean) as iconUrl}
+							<img src={iconUrl} alt="" class="reward-icon" loading="lazy" decoding="async" />
 						{/each}
 					</div>
 				</div>
@@ -103,7 +117,7 @@
 					<div class="reward-label">All in monster combat gain:</div>
 					<div class="reward-icons">
 						{#each defeatRewardRow.icon_urls.filter(Boolean) as iconUrl}
-							<img src={iconUrl} alt="" class="reward-icon" />
+							<img src={iconUrl} alt="" class="reward-icon" loading="lazy" decoding="async" />
 						{/each}
 					</div>
 				</div>
@@ -129,7 +143,7 @@
 	<!-- Art Panel with Floating Stats -->
 	<div class="art-panel">
 		{#if monster.art_url}
-			<img src={monster.art_url} alt={monster.name} class="monster-art" />
+			<img src={monster.art_url} alt={monster.name} class="monster-art" loading="lazy" decoding="async" />
 		{:else}
 			<div class="no-art"></div>
 		{/if}

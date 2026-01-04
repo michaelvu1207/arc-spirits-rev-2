@@ -29,7 +29,7 @@
 	<!-- Art Panel (Right) -->
 	<div class="art-panel">
 		{#if event.art_url}
-			<img src={event.art_url} alt={event.name} class="event-art" />
+			<img src={event.art_url} alt={event.name} class="event-art" loading="lazy" decoding="async" />
 		{:else}
 			<div class="no-art">No artwork</div>
 		{/if}

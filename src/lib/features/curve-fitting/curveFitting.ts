@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { generateCurveValues } from './curveTypes';
 import { generateAllCombinations, filterCombinations } from './diceCombinations';
+import { DEFAULT_ATTACK_DICE_TIER_RANGES, getAttackDiceTier, isAttackDiceTierAllowedAtBreakpoint } from './diceTiers';
 
 /**
  * Get the color tier for a given trait based on thresholds
@@ -39,22 +40,38 @@ export function getAllowedDiceForTrait(
 ): string[] {
 	const { diceAvailability } = constraints;
 	const allDiceIds = allDice.map((d) => d.id);
+	const diceById = new Map(allDice.map((d) => [d.id, d]));
 
-	switch (diceAvailability.mode) {
-		case 'global':
-			return diceAvailability.globalAllowed ?? allDiceIds;
+	const baseAllowed = (() => {
+		switch (diceAvailability.mode) {
+			case 'global':
+				return diceAvailability.globalAllowed ?? allDiceIds;
 
-		case 'per-tier': {
-			const tier = getColorForTrait(trait, constraints);
-			return diceAvailability.tierDice?.[tier] ?? allDiceIds;
+			case 'per-tier': {
+				const tier = getColorForTrait(trait, constraints);
+				return diceAvailability.tierDice?.[tier] ?? allDiceIds;
+			}
+
+			case 'per-trait':
+				return diceAvailability.traitDice?.[trait] ?? allDiceIds;
+
+			default:
+				return allDiceIds;
 		}
+	})();
 
-		case 'per-trait':
-			return diceAvailability.traitDice?.[trait] ?? allDiceIds;
-
-		default:
-			return allDiceIds;
+	// Enforce breakpoint windows for Basic/Critical/Exalted attack dice.
+	if (constraints.enforceAttackDiceTierRanges === false) {
+		return baseAllowed;
 	}
+
+	const attackRanges = constraints.attackDiceTierRanges ?? DEFAULT_ATTACK_DICE_TIER_RANGES;
+	return baseAllowed.filter((id) => {
+		const die = diceById.get(id);
+		if (!die) return true;
+		const attackTier = getAttackDiceTier(die.name);
+		return isAttackDiceTierAllowedAtBreakpoint(attackTier, trait, attackRanges);
+	});
 }
 
 /**

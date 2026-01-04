@@ -133,6 +133,7 @@
 
 	let stateColor = $derived(stateColors[monster.state ?? 'tainted'] ?? '#dc2626');
 	let killRewardRow = $derived((monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat' && row.icon_urls?.some(Boolean)));
+	let killPickOneRewardRow = $derived((monster.resolved_reward_rows ?? []).find(row => row.type === 'all_in_combat_pick_one' && row.icon_urls?.some(Boolean)));
 	let defeatRewardRow = $derived((monster.resolved_reward_rows ?? []).find(row => row.type === 'all_losers' && row.icon_urls?.some(Boolean)));
 
 	// Export theme as JSON
@@ -452,6 +453,18 @@
 									<div class="reward-label">On kill, all in combat gain:</div>
 									<div class="reward-icons">
 										{#each killRewardRow.icon_urls.filter(Boolean) as iconUrl}
+											<img src={iconUrl} alt="" class="reward-icon" />
+										{/each}
+									</div>
+								</div>
+							{/if}
+
+							<!-- Kill Reward Row (Pick 1) -->
+							{#if killPickOneRewardRow}
+								<div class="reward-section">
+									<div class="reward-label">On kill, all in combat pick 1:</div>
+									<div class="reward-icons">
+										{#each killPickOneRewardRow.icon_urls.filter(Boolean) as iconUrl}
 											<img src={iconUrl} alt="" class="reward-icon" />
 										{/each}
 									</div>

@@ -21,7 +21,7 @@
 		name: string;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
+		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'boss';
 		icon: string | null;
 		image_path: string | null;
 		order_num: number;
@@ -606,6 +606,7 @@
 								{ value: 'tainted', label: 'Tainted' },
 								{ value: 'corrupt', label: 'Corrupt' },
 								{ value: 'fallen', label: 'Fallen' },
+								{ value: 'arcane', label: 'Arcane' },
 								{ value: 'boss', label: 'Boss' }
 							]}
 						/>

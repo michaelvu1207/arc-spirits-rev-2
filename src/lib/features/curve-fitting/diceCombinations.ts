@@ -1,4 +1,5 @@
 import type { DiceInfo, DiceCombination } from './types';
+import { getAttackDiceTier, getAttackDiceTierRank } from './diceTiers';
 
 /**
  * Generate all possible dice combinations up to maxDice total
@@ -72,10 +73,18 @@ function buildCombination(
 
 	// Sort by dice name for consistent ordering
 	diceEntries.sort((a, b) => {
-		// Sort by mean (highest first) for nicer display
+		const tierA = getAttackDiceTier(a.name);
+		const tierB = getAttackDiceTier(b.name);
+		const tierDiff = getAttackDiceTierRank(tierA) - getAttackDiceTierRank(tierB);
+		if (tierDiff !== 0) return tierDiff;
+
+		// Within a tier, sort by mean (highest first) for consistency
 		const dieA = diceById.get(a.dice_id);
 		const dieB = diceById.get(b.dice_id);
-		return (dieB?.mean ?? 0) - (dieA?.mean ?? 0);
+		const meanDiff = (dieB?.mean ?? 0) - (dieA?.mean ?? 0);
+		if (meanDiff !== 0) return meanDiff;
+
+		return a.name.localeCompare(b.name);
 	});
 
 	return {
