@@ -28,13 +28,23 @@
 	let artifacts = $state<ArtifactRow[]>([]);
 	let origins = $state<OriginRow[]>([]);
 	let runes = $state<RuneRow[]>([]);
-	let guardians = $state<Pick<GuardianRow, 'id' | 'name'>[]>([]);
+	let guardians = $state<Pick<GuardianRow, 'id' | 'name' | 'name_translations'>[]>([]);
 	let tags = $state<ArtifactTagRow[]>([]);
 	let templates = $state<ArtifactTemplateRow[]>([]);
 
 	// Lookups for efficient ID → name mapping
 	const tagLookup = useLookup(() => tags);
-	const guardianLookup = useLookup(() => guardians);
+	const guardiansForArtifactLanguage = $derived.by(() =>
+		guardians.map((guardian) => ({
+			id: guardian.id,
+			name:
+				artifactLanguage === BASE_LANGUAGE
+					? guardian.name
+					: getTranslationValue(guardian.name_translations, artifactLanguage) ?? guardian.name
+		}))
+	);
+
+	const guardianLookup = useLookup(() => guardiansForArtifactLanguage);
 	const runeLookup = useLookup(() => runes);
 
 	// Tab state
@@ -114,6 +124,13 @@
 		return lang.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
 	}
 
+	const BASE_STORAGE_LANG = 'en';
+
+	function getArtifactCardFolderForLanguage(lang: ArtifactLanguage): string {
+		const safeLang = lang === BASE_LANGUAGE ? BASE_STORAGE_LANG : sanitizeLanguageForPath(lang);
+		return `card_images/artifacts/${safeLang || BASE_STORAGE_LANG}`;
+	}
+
 	function ensureLanguageListed(lang: string) {
 		if (!lang || lang === BASE_LANGUAGE) return;
 		if (!extraArtifactLanguages.includes(lang)) extraArtifactLanguages = [...extraArtifactLanguages, lang];
@@ -148,7 +165,7 @@
 
 	$effect(() => {
 		if (artifactLanguageSelect !== artifactLanguage) {
-			artifactLanguageSelect = artifactLanguage;
+			requestArtifactLanguageChange(String(artifactLanguageSelect));
 		}
 	});
 
@@ -177,6 +194,7 @@
 		newArtifactLanguageDraft = '';
 		requestArtifactLanguageChange(normalized);
 	}
+
 
 	// Generator state
 	let currentTemplateId = $state<string | null>(null);
@@ -269,7 +287,7 @@
 			supabase.from('artifacts').select('*'),
 			supabase.from('origins').select('*').order('position', { ascending: true }),
 			supabase.from('runes').select('*'),
-			supabase.from('guardians').select('id, name').order('name'),
+				supabase.from('guardians').select('id, name, name_translations').order('name'),
 			supabase.from('artifact_tags').select('*').order('name'),
 			supabase.from('artifact_templates').select('*').order('name')
 		]);
@@ -653,12 +671,6 @@
 		};
 	}
 
-	function getCardFilenameForLanguage(lang: ArtifactLanguage): string {
-		if (lang === BASE_LANGUAGE) return 'card';
-		const safe = sanitizeLanguageForPath(lang);
-		return safe ? `card_${safe}` : 'card';
-	}
-
 	type CardGenerationResult = { successes: string[]; errors: string[] };
 
 	async function generateCardsBatch(artifactList: ArtifactRow[], langs: ArtifactLanguage[]): Promise<void> {
@@ -760,11 +772,15 @@
 			}
 
 			try {
-				const renderArtifact = renderArtifactForLanguage(artifact, lang);
-				const pngBlob = await generateArtifactCardPNG(renderArtifact, origins, runes, tags, guardians);
+					const renderArtifact = renderArtifactForLanguage(artifact, lang);
+					const guardiansForLang = guardians.map((g) => ({
+						id: g.id,
+						name: lang === BASE_LANGUAGE ? g.name : getTranslationValue(g.name_translations, lang) ?? g.name
+					}));
+					const pngBlob = await generateArtifactCardPNG(renderArtifact, origins, runes, tags, guardiansForLang);
 
-				const fileName = getCardFilenameForLanguage(lang);
-				const folder = `artifacts/${artifact.id}`;
+				const folder = getArtifactCardFolderForLanguage(lang);
+				const fileName = artifact.id;
 
 				const { data, error: uploadError } = await processAndUploadImage(pngBlob, {
 					folder,
@@ -838,7 +854,6 @@
 				<Select
 					bind:value={artifactLanguageSelect}
 					options={artifactLanguageOptions}
-					onchange={(e) => requestArtifactLanguageChange((e.currentTarget as HTMLSelectElement).value)}
 					disabled={loading || generatingCards}
 				/>
 				<Input
@@ -1127,13 +1142,13 @@
 					>
 						Generate Selected ({selectedArtifacts.size})
 					</Button>
-					<Button
-						variant="secondary"
-						onclick={generateSelectedCardsAllLanguages}
-						disabled={generatingCards || selectedArtifacts.size === 0 || artifactLanguageOptions.length <= 1}
-					>
-						Generate Selected (All)
-					</Button>
+						<Button
+							variant="secondary"
+							onclick={generateSelectedCardsAllLanguages}
+							disabled={generatingCards || selectedArtifacts.size === 0 || artifactLanguageOptions.length <= 1}
+						>
+							Generate Selected (All Languages)
+						</Button>
 					<Button
 						variant="secondary"
 						onclick={generateAllCards}
@@ -1141,13 +1156,13 @@
 					>
 						Generate All
 					</Button>
-					<Button
-						variant="secondary"
-						onclick={generateAllCardsAllLanguages}
-						disabled={generatingCards || artifacts.length === 0 || artifactLanguageOptions.length <= 1}
-					>
-						Generate All (All)
-					</Button>
+						<Button
+							variant="secondary"
+							onclick={generateAllCardsAllLanguages}
+							disabled={generatingCards || artifacts.length === 0 || artifactLanguageOptions.length <= 1}
+						>
+							Generate All (All Languages)
+						</Button>
 					<Button variant="secondary" onclick={() => (isGalleryOpen = true)}>
 						View Gallery ({generationStatus.withCards})
 					</Button>
@@ -1234,7 +1249,7 @@
 		artifact={editingArtifact}
 		language={artifactLanguage}
 		{origins}
-		guardians={guardians}
+			guardians={guardiansForArtifactLanguage}
 		{runes}
 		{tags}
 		on:save={handleSave}
@@ -1249,7 +1264,7 @@
 		on:close={() => (isTagManagerOpen = false)}
 	/>
 
-	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} language={artifactLanguage} {origins} {runes} {tags} {guardians} />
+	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} language={artifactLanguage} {origins} {runes} {tags} guardians={guardiansForArtifactLanguage} />
 
 <ArtifactCardEditor bind:isOpen={isCardEditorOpen} />
 

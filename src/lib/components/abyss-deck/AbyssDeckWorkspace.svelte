@@ -54,6 +54,7 @@
 		locations: { id: string; name: string }[];
 		specialEffects: SpecialEffectRow[];
 		monsterSpecialEffects: Record<string, string[]>;
+		language?: 'base' | string;
 		onMonsterSave: (formData: MonsterFormData, id: string | null) => Promise<string>;
 		onEventSave?: (formData: EventFormData, id: string | null) => Promise<string>;
 		onMonsterDelete: (id: string) => Promise<void>;
@@ -89,6 +90,7 @@
 		locations,
 		specialEffects,
 		monsterSpecialEffects,
+		language = 'base',
 		onMonsterSave,
 		onEventSave = async () => {
 			throw new Error('Event save handler not provided.');
@@ -1504,12 +1506,13 @@
 																{#if listPreviewVariant !== undefined}
 																	<MonsterPreviewComponent
 																		monster={monster}
+																		{language}
 																		footerLabel={monsterLabel}
 																		variant={listPreviewVariant}
 																		renderMode="fast"
 																	/>
 																{:else}
-																	<MonsterPreviewComponent monster={monster} footerLabel={monsterLabel} renderMode="fast" />
+																	<MonsterPreviewComponent monster={monster} {language} footerLabel={monsterLabel} renderMode="fast" />
 																{/if}
 															</div>
 															<div slot="placeholder" class="copy-placeholder" aria-hidden="true" />

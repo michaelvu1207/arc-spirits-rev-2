@@ -327,7 +327,7 @@
 
 	$effect(() => {
 		if (guideLanguageSelect !== guideLanguage) {
-			guideLanguageSelect = guideLanguage;
+			requestLanguageChange(String(guideLanguageSelect));
 		}
 	});
 
@@ -851,7 +851,6 @@
 				<Select
 					bind:value={guideLanguageSelect}
 					options={languageOptions}
-					onchange={(e) => requestLanguageChange((e.currentTarget as HTMLSelectElement).value)}
 					disabled={saving || reordering || exporting}
 				/>
 				<Input

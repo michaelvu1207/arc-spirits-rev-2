@@ -1,7 +1,48 @@
 import type { ArtifactRow, OriginRow, RuneRow, ArtifactTagRow, GuardianRow } from '$lib/types/gameData';
 import { generateRuneIconCanvas } from '$lib/utils/runeIconGenerator';
 import { supabase } from '$lib/api/supabaseClient';
-import { createCanvas, getContext, loadImage, canvasToBlob, roundRect, loadOpsilonFont } from '../shared/canvas';
+import { createCanvas, getContext, loadImage, canvasToBlob, roundRect, loadOpsilonFont, wrapText } from '../shared/canvas';
+
+function measureTextWithLetterSpacing(
+	ctx: CanvasRenderingContext2D,
+	text: string,
+	letterSpacing: number
+): number {
+	if (!text) return 0;
+	const chars = Array.from(text);
+	let width = 0;
+	for (const ch of chars) width += ctx.measureText(ch).width;
+	if (chars.length > 1) width += letterSpacing * (chars.length - 1);
+	return width;
+}
+
+function fillTextWithLetterSpacing(
+	ctx: CanvasRenderingContext2D,
+	text: string,
+	x: number,
+	y: number,
+	letterSpacing: number
+): void {
+	if (!letterSpacing || !text) {
+		ctx.fillText(text, x, y);
+		return;
+	}
+
+	const align = ctx.textAlign;
+	const alignMode = align === 'center' ? 'center' : align === 'right' || align === 'end' ? 'right' : 'left';
+	const totalWidth = measureTextWithLetterSpacing(ctx, text, letterSpacing);
+	let startX = x;
+	if (alignMode === 'center') startX = x - totalWidth / 2;
+	else if (alignMode === 'right') startX = x - totalWidth;
+
+	const originalAlign = ctx.textAlign;
+	ctx.textAlign = 'left';
+	for (const ch of Array.from(text)) {
+		ctx.fillText(ch, startX, y);
+		startX += ctx.measureText(ch).width + letterSpacing;
+	}
+	ctx.textAlign = originalAlign;
+}
 
 /**
  * V17 Diagonal Sidebar Layout - Canvas Implementation
@@ -136,8 +177,9 @@ export async function generateArtifactCardPNG(
 	ctx.save();
 	ctx.beginPath();
 	ctx.moveTo(0, 0);
-	ctx.lineTo(width * 0.85, 0);
-	ctx.lineTo(width * 0.65, height);
+	// Match ArtifactCardV17.svelte: clip-path polygon(0 0, 100% 0, 80% 100%, 0 100%)
+	ctx.lineTo(width, 0);
+	ctx.lineTo(width * 0.8, height);
 	ctx.lineTo(0, height);
 	ctx.closePath();
 	ctx.clip();
@@ -150,12 +192,14 @@ export async function generateArtifactCardPNG(
 	ctx.fillRect(0, 0, width, height);
 
 	// Diagonal accent (subtle gold gradient on right edge of main area)
-	const accentGradient = ctx.createLinearGradient(width * 0.6, 0, width * 0.85, height);
+	// Match ArtifactCardV17.svelte: width 60px, positioned at right: 0, with a 135deg gradient.
+	const accentWidth = 60;
+	const accentGradient = ctx.createLinearGradient(width - accentWidth, 0, width, height);
 	accentGradient.addColorStop(0, 'transparent');
 	accentGradient.addColorStop(0.4, 'transparent');
 	accentGradient.addColorStop(1, 'rgba(180, 140, 100, 0.1)');
 	ctx.fillStyle = accentGradient;
-	ctx.fillRect(0, 0, width, height);
+	ctx.fillRect(width - accentWidth, 0, accentWidth, height);
 
 	ctx.restore();
 
@@ -177,7 +221,8 @@ export async function generateArtifactCardPNG(
 	ctx.fillStyle = colors.textPrimary;
 	ctx.font = '700 22px Opsilon, serif';
 	const nameX = padding + 32; // gap: 8px + sigil width
-	ctx.fillText(artifact.name, nameX, padding);
+	// Match CSS letter-spacing: 0.5px
+	fillTextWithLetterSpacing(ctx, artifact.name, nameX, padding, 0.5);
 
 	// Slant divider (skewed line below name)
 	const dividerY = padding + 32; // margin-bottom: 8px after title
@@ -200,21 +245,7 @@ export async function generateArtifactCardPNG(
 	const benefitText = artifact.benefit || '';
 	const benefitStartY = dividerY + 14; // margin-bottom: 10px
 	const maxBenefitWidth = contentMaxX - padding;
-	const words = benefitText.split(' ');
-	const lines: string[] = [];
-	let currentLine = '';
-
-	for (const word of words) {
-		const testLine = currentLine ? `${currentLine} ${word}` : word;
-		const metrics = ctx.measureText(testLine);
-		if (metrics.width > maxBenefitWidth && currentLine) {
-			lines.push(currentLine);
-			currentLine = word;
-		} else {
-			currentLine = testLine;
-		}
-	}
-	if (currentLine) lines.push(currentLine);
+	const lines = wrapText(ctx, benefitText, maxBenefitWidth);
 
 	const lineHeight = 18.2; // 13px * 1.4
 	lines.forEach((line, i) => {
@@ -335,6 +366,18 @@ export async function generateArtifactCardPNG(
 		ctx.fillText('✧', sidebarX + sidebarWidth / 2, height / 2);
 	}
 
+	// Sidebar label ("COST")
+	ctx.save();
+	ctx.translate(width - 8, height - 8);
+	ctx.rotate(-Math.PI / 2);
+	ctx.fillStyle = 'rgba(196, 160, 96, 0.6)';
+	ctx.font = '8px Opsilon, serif';
+	ctx.textAlign = 'right';
+	ctx.textBaseline = 'bottom';
+	// Match CSS letter-spacing: 2px
+	fillTextWithLetterSpacing(ctx, 'COST', 0, 0, 2);
+	ctx.restore();
+
 	// Card border radius clip
 	ctx.globalCompositeOperation = 'destination-in';
 	ctx.fillStyle = '#000';
@@ -345,8 +388,8 @@ export async function generateArtifactCardPNG(
 	// Card shadow (outer glow)
 	// Note: Canvas doesn't support box-shadow the same way, but we've drawn the card
 
-	// Convert canvas to JPEG
-	return canvasToBlob(canvas, 'image/jpeg', 0.92);
+	// Export as PNG to match TTS expectations
+	return canvasToBlob(canvas);
 }
 
 // Legacy function name for backwards compatibility

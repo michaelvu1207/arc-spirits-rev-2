@@ -185,6 +185,8 @@ export type ArtifactRow = {
 export type GuardianRow = {
 	id: string;
 	name: string;
+	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	origin_id: string;
 	image_mat_path: string | null;
 	chibi_image_path: string | null;
@@ -280,6 +282,8 @@ export const REWARD_ROW_CONFIG: Record<RewardRowType, { label: string; color: st
 export type MonsterRow = {
 	id: string;
 	name: string;
+	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	damage: number;
 	barrier: number;
 	/**
@@ -300,7 +304,11 @@ export type MonsterRow = {
 	reward_rows: RewardRow[];
 	order_num: number;
 	card_image_path: string | null;
+	/** Optional per-language card image path keyed by language tag (e.g. 'es', 'fr-CA'). */
+	card_image_path_translations?: Record<string, string> | null;
 	special_conditions: string | null;
+	/** Optional localized special_conditions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	special_conditions_translations?: Record<string, string> | null;
 	invade_location_id: string | null;
 	/** Number of copies of this monster in the deck. Defaults to 1. */
 	quantity: number;
@@ -510,7 +518,11 @@ export type SpecialEffectType = 'before_combat' | 'during_combat' | 'after_comba
 export type SpecialEffectRow = {
 	id: string;
 	name: string;
+	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	description: string | null;
+	/** Optional localized description keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 	icon: string | null;
 	color: string;
 	effect_type: SpecialEffectType;

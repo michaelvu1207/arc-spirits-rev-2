@@ -1,5 +1,6 @@
 import type { MonsterRow, SpecialEffectRow } from '$lib/types/gameData';
 import { canvasToBlob, createCanvas, getContext, loadImage, loadOpsilonFont, roundRect, wrapText } from '../shared/canvas';
+import { getMonsterCardUi, type MonsterCardUiLanguage } from '$lib/i18n/monsterCardUi';
 
 /**
  * Strip HTML tags and decode HTML entities for plain text rendering
@@ -151,13 +152,15 @@ export async function generateMonsterCardPNG(
 	monster: MonsterRow & { effects?: SpecialEffectRow[] },
 	artUrl?: string | null,
 	iconUrl?: string | null,
-	rewardTrackIconUrls?: (string | null)[][]
+	rewardTrackIconUrls?: (string | null)[][],
+	language: MonsterCardUiLanguage = 'base'
 ): Promise<Blob> {
 	if (!monster.id || !monster.name) {
 		throw new Error('Monster missing ID or name');
 	}
 
 	await loadOpsilonFont();
+	const ui = getMonsterCardUi(language);
 
 	// Create canvas
 	const canvas = createCanvas(MONSTER_CARD_WIDTH * EXPORT_SCALE, MONSTER_CARD_HEIGHT * EXPORT_SCALE);
@@ -178,22 +181,9 @@ export async function generateMonsterCardPNG(
 		inactive: '#64748b'
 	};
 
-	const classificationLabels: Record<string, string> = {
-		monster: 'Monster',
-		abyss_guardian: 'Abyss Guardian',
-		boss: 'Boss'
-	};
-
 	const classificationColors: Record<string, string> = {
 		abyss_guardian: '#0ea5e9',
 		boss: '#450a0a'
-	};
-
-	const effectTypeLabels: Record<string, string> = {
-		before_combat: 'BEFORE COMBAT',
-		during_combat: 'DURING COMBAT',
-		after_combat: 'AFTER COMBAT',
-		combat_type: 'COMBAT TYPE'
 	};
 
 	const effectTypeColors: Record<string, string> = {
@@ -205,8 +195,9 @@ export async function generateMonsterCardPNG(
 
 	const stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
 	const classification = monster.monster_classification ?? 'monster';
-	const classificationText = classificationLabels[classification]?.toUpperCase() ?? 'MONSTER';
-	const stateText = (monster.state ?? 'tainted').toUpperCase();
+	const classificationText = (ui.classification[classification] ?? ui.classification.monster).toUpperCase();
+	const stateKey = monster.state ?? 'tainted';
+	const stateText = (ui.state[stateKey as keyof typeof ui.state] ?? String(stateKey)).toUpperCase();
 
 	ctx.save();
 	roundRect(ctx, 0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT, 4);
@@ -347,7 +338,8 @@ export async function generateMonsterCardPNG(
 	let nameBlockBottomY = tagsY + tagH;
 
 	if ((monster as any).invade_location_name) {
-		const invadeText = `Invades: ${(monster as any).invade_location_name}`;
+		const sep = ui.invadesPrefix.endsWith('：') ? '' : ' ';
+		const invadeText = `${ui.invadesPrefix}${sep}${(monster as any).invade_location_name}`;
 		ctx.font = 'italic 600 15px Opsilon, serif';
 		const invadeMetrics = ctx.measureText(invadeText);
 		const invadeAscent = invadeMetrics.actualBoundingBoxAscent || 10;
@@ -446,7 +438,7 @@ export async function generateMonsterCardPNG(
 		if (effects.length === 0) {
 			ctx.font = '400 15px Opsilon, serif';
 			ctx.fillStyle = 'rgba(148, 163, 184, 0.8)';
-			ctx.fillText('No special effects.', effectsX + pad, effectY + 12);
+			ctx.fillText(ui.noSpecialEffects, effectsX + pad, effectY + 12);
 		} else {
 			for (const effect of effects.slice(0, 2)) {
 				if (effectY > maxY) break;
@@ -454,7 +446,7 @@ export async function generateMonsterCardPNG(
 
 				// Effect type badge
 				const effectType = (effect as any).effect_type ?? 'during_combat';
-				const typeLabel = effectTypeLabels[effectType] ?? 'DURING COMBAT';
+				const typeLabel = ui.effectType[effectType as keyof typeof ui.effectType] ?? ui.effectType.during_combat;
 				const typeColor = effectTypeColors[effectType] ?? effectTypeColors.during_combat;
 
 				ctx.save();
@@ -589,7 +581,7 @@ export async function generateMonsterCardPNG(
 	ctx.font = '700 8px Opsilon, serif';
 	ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
 	ctx.textBaseline = 'top';
-	ctx.fillText('BARRIER', statsX + statColW / 2, statsY + 36);
+	ctx.fillText(ui.statsBarrier, statsX + statColW / 2, statsY + 36);
 
 	// DAMAGE stat (right column)
 	ctx.fillStyle = '#fecaca';
@@ -604,7 +596,7 @@ export async function generateMonsterCardPNG(
 	ctx.font = '700 8px Opsilon, serif';
 	ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
 	ctx.textBaseline = 'top';
-	ctx.fillText('DAMAGE', dividerX + statColW / 2, statsY + 36);
+	ctx.fillText(ui.statsDamage, dividerX + statColW / 2, statsY + 36);
 
 	ctx.textAlign = 'left';
 	ctx.textBaseline = 'alphabetic';
@@ -644,14 +636,14 @@ export async function generateMonsterCardPNG(
 	ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
 	ctx.font = '800 12px Opsilon, serif';
 
-	const calloutTitle = showTutorial ? 'TUTORIAL' : 'PARTICIPATION';
+	const calloutTitle = showTutorial ? ui.calloutTutorialTitle : ui.calloutParticipationTitle;
 	ctx.fillText(calloutTitle, calloutX + calloutW / 2, calloutY + 8);
 
 	if (showTutorial) {
 		ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
 		ctx.font = '500 10px Opsilon, serif';
 		const maxW = calloutW - 24;
-		const lines = wrapText(ctx, 'Deal damage to move the marker right, gaining rewards along the way.', maxW).slice(
+		const lines = wrapText(ctx, ui.calloutTutorialText, maxW).slice(
 			0,
 			2
 		);
@@ -662,7 +654,7 @@ export async function generateMonsterCardPNG(
 	} else if (participationUrls.length === 0) {
 		ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
 		ctx.font = '500 10px Opsilon, serif';
-		ctx.fillText('No participation rewards.', calloutX + calloutW / 2, calloutY + 30);
+		ctx.fillText(ui.calloutNoParticipationRewards, calloutX + calloutW / 2, calloutY + 30);
 	} else {
 		const iconSize = 30;
 		const iconGap = 6;
@@ -743,14 +735,14 @@ export async function generateMonsterCardPNG(
 
 			if (segIdx === 0) {
 				// Marker Start
-				ctx.fillText('Marker', centerX, labelY);
-				ctx.fillText('Start', centerX, labelY + labelLineH);
+				ctx.fillText(ui.trackMarker, centerX, labelY);
+				ctx.fillText(ui.trackStart, centerX, labelY + labelLineH);
 			} else if (segIdx === killedBarrierIndex) {
 				// KILLED
-				ctx.fillText('KILLED', centerX, labelY);
+				ctx.fillText(ui.trackKilled, centerX, labelY);
 			} else {
 				// Damage N
-				ctx.fillText(`Damage ${segIdx}`, centerX, labelY);
+				ctx.fillText(ui.trackDamage(segIdx), centerX, labelY);
 			}
 
 			// Icons for this slot (skip marker start which is slot 0)

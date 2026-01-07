@@ -14,6 +14,9 @@
 	type OriginOption = Pick<OriginRow, 'id' | 'name'>;
 	type Artifact = Pick<ArtifactRow, 'id' | 'name' | 'benefit' | 'recipe_box' | 'guardian_id'>;
 
+	type GuardianLanguage = 'base' | string;
+	const BASE_LANGUAGE: GuardianLanguage = 'base';
+
 	let guardians: Guardian[] = $state([]);
 	let origins: OriginOption[] = $state([]);
 	let artifactsByGuardian: Record<string, Artifact[]> = $state({});
@@ -22,6 +25,11 @@
 
 	let search = $state('');
 	let originFilter = $state('all');
+
+	let guardianLanguage = $state<GuardianLanguage>(BASE_LANGUAGE);
+	let guardianLanguageSelect = $state<GuardianLanguage>(BASE_LANGUAGE);
+	let newGuardianLanguageDraft = $state('');
+	let extraGuardianLanguages = $state<string[]>([]);
 
 	// Tab state
 	const tabs: Tab[] = [
@@ -42,6 +50,104 @@
 	let iconUploadInput: HTMLInputElement | null = $state(null);
 	let uploadTarget: Guardian | null = $state(null);
 	let uploadType: 'image_mat' | 'chibi' | 'icon' = $state('image_mat');
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function ensureTranslationRecord(input: unknown): Record<string, string> {
+		if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+		const out: Record<string, string> = {};
+		for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+			if (typeof value !== 'string') continue;
+			const normalizedKey = normalizeLanguageCode(key);
+			if (!normalizedKey) continue;
+			out[normalizedKey] = value;
+		}
+		return out;
+	}
+
+	function ensureLanguageListed(lang: string) {
+		if (!lang || lang === BASE_LANGUAGE) return;
+		if (!extraGuardianLanguages.includes(lang)) extraGuardianLanguages = [...extraGuardianLanguages, lang];
+	}
+
+	function getGuardianName(guardian: Guardian, lang: GuardianLanguage): string {
+		if (lang === BASE_LANGUAGE) return guardian.name;
+		return getTranslationValue(guardian.name_translations, lang) ?? guardian.name;
+	}
+
+	const detectedGuardianLanguages = $derived.by(() => {
+		const out = new Set<string>();
+		for (const guardian of guardians) {
+			const translations = guardian.name_translations;
+			if (!translations || typeof translations !== 'object' || Array.isArray(translations)) continue;
+			for (const key of Object.keys(translations as Record<string, unknown>)) {
+				const normalized = normalizeLanguageCode(key);
+				if (!normalized) continue;
+				out.add(normalized);
+			}
+		}
+		return Array.from(out).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+	});
+
+	const guardianLanguageOptions = $derived.by(() => {
+		const merged = new Set<string>([...detectedGuardianLanguages, ...extraGuardianLanguages]);
+		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
+		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+		return [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
+	});
+
+	$effect(() => {
+		if (guardianLanguageSelect !== guardianLanguage) {
+			requestGuardianLanguageChange(String(guardianLanguageSelect));
+		}
+	});
+
+	function requestGuardianLanguageChange(nextRaw: string) {
+		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
+		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
+		if (next === guardianLanguage) return;
+
+		if (modal.isOpen) {
+			const ok = confirm('Switching language will discard any unsaved changes in the modal. Continue?');
+			if (!ok) {
+				guardianLanguageSelect = guardianLanguage;
+				return;
+			}
+			modal.close();
+		}
+
+		guardianLanguage = next;
+		guardianLanguageSelect = next;
+	}
+
+	function addGuardianLanguage() {
+		const normalized = normalizeLanguageCode(newGuardianLanguageDraft);
+		if (!normalized) return;
+		ensureLanguageListed(normalized);
+		newGuardianLanguageDraft = '';
+		requestGuardianLanguageChange(normalized);
+	}
 
 	async function cropAndResizeToSquare(
 		blob: Blob
@@ -272,28 +378,61 @@
 	}
 
 	async function saveGuardian() {
-		if (!modal.formData.name?.trim()) {
-			alert('Guardian name is required.');
-			return;
-		}
 		if (!modal.formData.origin_id) {
 			alert('Select an origin for the guardian.');
 			return;
 		}
 
-		const payload = {
-			name: modal.formData.name.trim(),
-			origin_id: modal.formData.origin_id
-		};
+		if (!modal.formData.name?.trim()) {
+			if (modal.isEditing && guardianLanguage !== BASE_LANGUAGE) {
+				// Allow clearing translations
+			} else {
+				alert('Guardian name is required.');
+				return;
+			}
+		}
+
+		const normalizedName = modal.formData.name?.trim() ?? '';
 
 		try {
 			if (modal.isEditing) {
+				const existing = guardians.find((g) => g.id === modal.editingId);
+				if (!existing) {
+					alert('Guardian not found.');
+					return;
+				}
+
+				const updatePayload: Record<string, unknown> = {
+					origin_id: modal.formData.origin_id,
+					updated_at: new Date().toISOString()
+				};
+
+				if (guardianLanguage === BASE_LANGUAGE) {
+					updatePayload.name = normalizedName;
+				} else {
+					const current = ensureTranslationRecord(existing.name_translations);
+					const next = { ...current };
+					if (normalizedName) next[String(guardianLanguage)] = normalizedName;
+					else delete next[String(guardianLanguage)];
+					updatePayload.name_translations = next;
+				}
+
 				const { error: updateError } = await supabase
 					.from('guardians')
-					.update({ ...payload, updated_at: new Date().toISOString() })
+					.update(updatePayload)
 					.eq('id', modal.editingId!);
 				if (updateError) throw updateError;
 			} else {
+				if (guardianLanguage !== BASE_LANGUAGE) {
+					alert('Switch to Default language to create a new guardian.');
+					return;
+				}
+
+				const payload = {
+					name: normalizedName,
+					origin_id: modal.formData.origin_id
+				};
+
 				const { error: insertError } = await supabase.from('guardians').insert(payload);
 				if (insertError) throw insertError;
 			}
@@ -342,14 +481,33 @@
 			if (originFilter !== 'all' && guardian.origin_id !== originFilter) return false;
 			if (search.trim()) {
 				const term = search.trim().toLowerCase();
+				const displayName = getGuardianName(guardian, guardianLanguage).toLowerCase();
+				const baseName = guardian.name.toLowerCase();
 				return (
-					guardian.name.toLowerCase().includes(term) ||
+					baseName.includes(term) ||
+					displayName.includes(term) ||
 					originName(guardian.origin_id).toLowerCase().includes(term)
 				);
 			}
 			return true;
 		})
 	);
+
+	function openCreateGuardian() {
+		if (guardianLanguage !== BASE_LANGUAGE) {
+			alert('Switch to Default language to create a new guardian.');
+			return;
+		}
+		modal.open();
+	}
+
+	function openEditGuardian(guardian: Guardian) {
+		const displayName =
+			guardianLanguage === BASE_LANGUAGE
+				? guardian.name
+				: getTranslationValue(guardian.name_translations, guardianLanguage) ?? '';
+		modal.open({ id: guardian.id, name: displayName, origin_id: guardian.origin_id });
+	}
 
 	function handleTabChange(tabId: string) {
 		activeTab = tabId;
@@ -364,11 +522,31 @@
 	onTabChange={handleTabChange}
 >
 	{#snippet headerActions()}
-		<Button variant="primary" onclick={() => modal.open()}>Create Guardian</Button>
+		<Button variant="primary" onclick={openCreateGuardian}>Create Guardian</Button>
 	{/snippet}
 
 	{#snippet tabActions()}
-		<span class="guardian-count">{filteredGuardians.length} guardians</span>
+		<div class="guardian-actions-row">
+			<span class="guardian-count">{filteredGuardians.length} guardians</span>
+
+			<div class="guardian-language">
+				<span class="guardian-language__label">Language</span>
+				<Select bind:value={guardianLanguageSelect} options={guardianLanguageOptions} disabled={loading} />
+				<Input
+					bind:value={newGuardianLanguageDraft}
+					placeholder="Add lang (e.g. es, fr-CA)"
+					disabled={loading}
+				/>
+				<Button
+					variant="secondary"
+					size="sm"
+					onclick={addGuardianLanguage}
+					disabled={loading || normalizeOptionalText(newGuardianLanguageDraft) === null}
+				>
+					Add
+				</Button>
+			</div>
+		</div>
 	{/snippet}
 
 	<div class="filters">
@@ -393,9 +571,10 @@
 	{:else if activeTab === 'list'}
 		<GuardiansListView
 			guardians={filteredGuardians}
+			language={guardianLanguage}
 			{origins}
 			{artifactsByGuardian}
-			onEdit={(guardian) => modal.open(guardian)}
+			onEdit={openEditGuardian}
 			onDelete={deleteGuardian}
 			onDeleteMultiple={deleteGuardians}
 			onUploadImage={promptImageUpload}
@@ -405,9 +584,10 @@
 	{:else if activeTab === 'table'}
 		<GuardiansTableView
 			guardians={filteredGuardians}
+			language={guardianLanguage}
 			{origins}
 			{artifactsByGuardian}
-			onEdit={(guardian) => modal.open(guardian)}
+			onEdit={openEditGuardian}
 		/>
 	{/if}
 </PageLayout>
@@ -419,8 +599,8 @@
 			void saveGuardian();
 		}}
 	>
-		<FormField label="Name" required>
-			<Input type="text" bind:value={modal.formData.name} required />
+		<FormField label={`Name${guardianLanguage === BASE_LANGUAGE ? '' : ` (${guardianLanguage})`}`} required={guardianLanguage === BASE_LANGUAGE}>
+			<Input type="text" bind:value={modal.formData.name} required={guardianLanguage === BASE_LANGUAGE} />
 		</FormField>
 		<FormField label="Origin" required>
 			<Select
@@ -463,6 +643,26 @@
 
 <style>
 	.guardian-count {
+		font-size: 0.7rem;
+		color: #64748b;
+	}
+
+	.guardian-actions-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.guardian-language {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex-wrap: wrap;
+	}
+
+	.guardian-language__label {
 		font-size: 0.7rem;
 		color: #64748b;
 	}

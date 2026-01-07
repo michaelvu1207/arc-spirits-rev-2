@@ -7,7 +7,7 @@
 	import { generateMonsterCardPNG } from '$lib/generators/cards';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { PageLayout, type Tab } from '$lib/components/layout';
-	import { Button, FormField, Input, Textarea } from '$lib/components/ui';
+	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import { MonsterCardGallery } from '$lib/components/monsters';
 	import type { Monster } from '$lib/components/abyss-deck';
 	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
@@ -34,14 +34,12 @@
 	let activeTab = $state('deck');
 
 	// Data state
-	let monsters = $state<Monster[]>([]);
-	let allCards = $state<CardItem[]>([]);
-	let filteredCards = $state<CardItem[]>([]);
+	let monstersRaw = $state<Monster[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// Lookups
-	let specialEffects = $state<SpecialEffectRow[]>([]);
+	let specialEffectsRaw = $state<SpecialEffectRow[]>([]);
 	let monsterSpecialEffects = $state<Record<string, string[]>>({});
 	let invadeLocations = $state<Pick<GameLocationRow, 'id' | 'name'>[]>([]);
 
@@ -54,6 +52,158 @@
 	let generatingCards = $state(new Set<string>());
 	let progressMessage = $state('');
 	let showGalleryModal = $state(false);
+	let workspaceSelectedMonster = $state<Monster | null>(null);
+
+	type AbyssLanguage = 'base' | string;
+	const BASE_LANGUAGE: AbyssLanguage = 'base';
+	const BASE_STORAGE_LANG = 'en';
+
+	const DEFAULT_EXTRA_LANGS = ['zh-hans', 'zh-hant', 'de', 'fr', 'es', 'it', 'ja', 'pl', 'ko'];
+	let abyssLanguage = $state<AbyssLanguage>(BASE_LANGUAGE);
+	let abyssLanguageSelect = $state<AbyssLanguage>(BASE_LANGUAGE);
+	let newAbyssLanguageDraft = $state('');
+	let extraAbyssLanguages = $state<string[]>([...DEFAULT_EXTRA_LANGS]);
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function setTranslationValue(record: unknown, lang: string, next: string | null): Record<string, string> {
+		const current: Record<string, string> =
+			record && typeof record === 'object' && !Array.isArray(record)
+				? ({ ...(record as Record<string, unknown>) } as Record<string, string>)
+				: {};
+
+		if (!lang || lang === BASE_LANGUAGE) return current;
+		if (next && next.trim().length > 0) current[lang] = next.trim();
+		else delete current[lang];
+		return current;
+	}
+
+	function ensureLanguageListed(lang: string) {
+		if (!lang || lang === BASE_LANGUAGE) return;
+		if (!extraAbyssLanguages.includes(lang)) extraAbyssLanguages = [...extraAbyssLanguages, lang];
+	}
+
+	function sanitizeLanguageForPath(lang: AbyssLanguage): string {
+		const normalized = lang === BASE_LANGUAGE ? BASE_STORAGE_LANG : String(lang);
+		return normalized
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9-]+/g, '-')
+			.replace(/-+/g, '-')
+			.replace(/^-+|-+$/g, '');
+	}
+
+	function getMonsterName(monster: Monster, lang: AbyssLanguage = abyssLanguage): string {
+		if (lang === BASE_LANGUAGE) return monster.name;
+		return getTranslationValue((monster as any).name_translations, lang) ?? monster.name;
+	}
+
+	function getMonsterCardImagePath(monster: Monster, lang: AbyssLanguage = abyssLanguage): string | null {
+		if (lang === BASE_LANGUAGE) return monster.card_image_path ?? null;
+		return getTranslationValue((monster as any).card_image_path_translations, lang) ?? null;
+	}
+
+	function getSpecialEffectName(effect: SpecialEffectRow, lang: AbyssLanguage = abyssLanguage): string {
+		if (lang === BASE_LANGUAGE) return effect.name;
+		return getTranslationValue((effect as any).name_translations, lang) ?? effect.name;
+	}
+
+	function getSpecialEffectDescription(effect: SpecialEffectRow, lang: AbyssLanguage = abyssLanguage): string | null {
+		if (lang === BASE_LANGUAGE) return effect.description ?? null;
+		return getTranslationValue((effect as any).description_translations, lang) ?? effect.description ?? null;
+	}
+
+	function addAbyssLanguage() {
+		const normalized = normalizeLanguageCode(newAbyssLanguageDraft);
+		if (!normalized) return;
+		ensureLanguageListed(normalized);
+		newAbyssLanguageDraft = '';
+		requestAbyssLanguageChange(normalized);
+	}
+
+	function requestAbyssLanguageChange(nextRaw: string) {
+		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
+		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
+		if (next === abyssLanguage) return;
+
+		if (showEffectDrawer || activeTab === 'deck' || workspaceSelectedMonster) {
+			const ok = confirm('Switching language will close any open editors and discard unsaved changes. Continue?');
+			if (!ok) {
+				abyssLanguageSelect = abyssLanguage;
+				return;
+			}
+			showEffectDrawer = false;
+			workspaceSelectedMonster = null;
+		}
+
+		abyssLanguage = next;
+		abyssLanguageSelect = next;
+	}
+
+	$effect(() => {
+		if (abyssLanguageSelect !== abyssLanguage) {
+			requestAbyssLanguageChange(String(abyssLanguageSelect));
+		}
+	});
+
+	const detectedAbyssLanguages = $derived.by(() => {
+		const out = new Set<string>();
+		for (const monster of monstersRaw) {
+			const sources = [
+				(monster as any).name_translations,
+				(monster as any).card_image_path_translations,
+				(monster as any).special_conditions_translations
+			];
+			for (const source of sources) {
+				if (!source || typeof source !== 'object') continue;
+				for (const key of Object.keys(source as Record<string, unknown>)) {
+					const normalized = normalizeLanguageCode(key);
+					if (!normalized) continue;
+					out.add(normalized);
+				}
+			}
+		}
+		for (const effect of specialEffectsRaw) {
+			const sources = [(effect as any).name_translations, (effect as any).description_translations];
+			for (const source of sources) {
+				if (!source || typeof source !== 'object') continue;
+				for (const key of Object.keys(source as Record<string, unknown>)) {
+					const normalized = normalizeLanguageCode(key);
+					if (!normalized) continue;
+					out.add(normalized);
+				}
+			}
+		}
+		return Array.from(out).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+	});
+
+	const abyssLanguageOptions = $derived.by(() => {
+		const merged = new Set<string>([...detectedAbyssLanguages, ...extraAbyssLanguages]);
+		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
+		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+		return [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
+	});
 
 	// Special Effect editing state
 	let showEffectDrawer = $state(false);
@@ -82,7 +232,63 @@
 
 	const isEditingEffect = $derived(editingEffectId !== null);
 	const selectedCount = $derived(selectedCardIds.size);
-	const generatedCount = $derived(allCards.filter(c => c.card_image_path).length);
+
+	const specialEffectsById = $derived.by(() => new Map(specialEffectsRaw.map((effect) => [effect.id, effect])));
+	const specialEffects = $derived.by(() => {
+		const localized = specialEffectsRaw.map((effect) => ({
+			...effect,
+			name: getSpecialEffectName(effect, abyssLanguage),
+			description: getSpecialEffectDescription(effect, abyssLanguage)
+		}));
+		return localized.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+	});
+
+	const monsters = $derived.by(() =>
+		monstersRaw.map((monster) => {
+			const effectIds = monsterSpecialEffects[monster.id] ?? [];
+			const effects = effectIds
+				.map((id) => specialEffectsById.get(id))
+				.filter((e): e is SpecialEffectRow => e !== undefined)
+				.map((effect) => ({
+					...effect,
+					name: getSpecialEffectName(effect, abyssLanguage),
+					description: getSpecialEffectDescription(effect, abyssLanguage)
+				}));
+
+			return {
+				...monster,
+				name: getMonsterName(monster, abyssLanguage),
+				card_image_path: getMonsterCardImagePath(monster, abyssLanguage),
+				effects
+			};
+		})
+	);
+
+	const allCards = $derived.by(() =>
+		monsters.map((m) => ({
+			id: m.id,
+			name: m.name,
+			order_num: m.order_num ?? 999,
+			card_image_path: m.card_image_path,
+			data: m
+		}))
+	);
+
+	const filteredCards = $derived.by(() =>
+		allCards.filter((card) => {
+			if (stateFilter !== 'all') if (card.data.state !== stateFilter) return false;
+			if (classificationFilter !== 'all')
+				if ((card.data.monster_classification ?? 'monster') !== classificationFilter) return false;
+			if (statusFilter === 'generated' && !card.card_image_path) return false;
+			if (statusFilter === 'not-generated' && card.card_image_path) return false;
+			if (searchQuery.trim() && !card.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+				return false;
+			}
+			return true;
+		})
+	);
+
+	const generatedCount = $derived(allCards.filter((c) => c.card_image_path).length);
 	const totalCount = $derived(allCards.length);
 
 	onMount(loadData);
@@ -94,7 +300,6 @@
 			await loadAllIcons();
 			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadInvadeLocations()]);
 			await loadMonsters();
-			updateFilteredCards();
 		} catch (err) {
 			error = getErrorMessage(err);
 		} finally {
@@ -108,7 +313,7 @@
 			.select('*')
 			.order('name');
 		if (err) throw new Error(err.message);
-		specialEffects = data ?? [];
+		specialEffectsRaw = data ?? [];
 	}
 
 	async function loadMonsterSpecialEffects() {
@@ -130,38 +335,22 @@
 		invadeLocations = (data ?? []) as Pick<GameLocationRow, 'id' | 'name'>[];
 	}
 
-		async function loadMonsters() {
-			const { data, error: err } = await supabase.from('monsters').select('*').order('order_num');
-			if (err) throw new Error(err.message);
+	async function loadMonsters() {
+		const { data, error: err } = await supabase.from('monsters').select('*').order('order_num');
+		if (err) throw new Error(err.message);
 
-			monsters = (data ?? []).map((monster) => {
-				const effectIds = monsterSpecialEffects[monster.id] ?? [];
-				const monsterEffects = effectIds
-					.map(id => specialEffects.find(e => e.id === id))
-				.filter((e): e is SpecialEffectRow => e !== undefined);
-
+		monstersRaw = (data ?? []).map((monster) => {
 			const invadeLocation = monster.invade_location_id
-				? invadeLocations.find(loc => loc.id === monster.invade_location_id)
+				? invadeLocations.find((loc) => loc.id === monster.invade_location_id)
 				: null;
 
-				return {
-					...monster,
-					icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
-					art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
-					effects: monsterEffects,
-					invade_location_name: invadeLocation?.name ?? null
-				};
-			});
-
-		allCards = [
-			...monsters.map(m => ({
-				id: m.id,
-				name: m.name,
-				order_num: m.order_num ?? 999,
-				card_image_path: m.card_image_path,
-				data: m
-			}))
-		];
+			return {
+				...monster,
+				icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
+				art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
+				invade_location_name: invadeLocation?.name ?? null
+			};
+		});
 	}
 
 	function getMonsterIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
@@ -237,7 +426,6 @@
 		}
 
 		await loadMonsters();
-		updateFilteredCards();
 	}
 
 	async function handleWorkspaceMonsterSave(formData: AbyssMonsterFormData, id: string | null): Promise<string> {
@@ -245,13 +433,43 @@
 			throw new Error('Monster name is required.');
 		}
 
-			let monsterId: string;
-			const rewardTrack = normalizeRewardTrack(formData.barrier ?? 0, (formData as any).reward_track);
+		if (!id && abyssLanguage !== BASE_LANGUAGE) {
+			throw new Error('Create monsters in Default language first, then add translations.');
+		}
 
-			if (id) {
-				const { error: err } = await supabase
-					.from('monsters')
-					.update({
+		let monsterId: string;
+		const rewardTrack = normalizeRewardTrack(formData.barrier ?? 0, (formData as any).reward_track);
+
+		if (id) {
+			const current = monstersRaw.find((m) => m.id === id) as any | undefined;
+			const nameTranslations =
+				abyssLanguage === BASE_LANGUAGE
+					? undefined
+					: setTranslationValue(current?.name_translations, String(abyssLanguage), formData.name);
+
+			const updatePayload: Record<string, unknown> = {
+				...(abyssLanguage === BASE_LANGUAGE ? { name: formData.name } : { name_translations: nameTranslations }),
+				damage: formData.damage,
+				barrier: formData.barrier,
+				state: formData.state,
+				monster_classification: formData.monster_classification,
+				icon: formData.icon,
+				image_path: formData.image_path,
+				show_tutorial: (formData as any).show_tutorial ?? true,
+				invade_location_id: formData.invade_location_id,
+				order_num: formData.order_num,
+				reward_track: rewardTrack,
+				quantity: formData.quantity,
+				updated_at: new Date().toISOString()
+			};
+
+			const { error: err } = await supabase.from('monsters').update(updatePayload).eq('id', id);
+			if (err) throw err;
+			monsterId = id;
+		} else {
+			const { data, error: err } = await supabase
+				.from('monsters')
+				.insert({
 					name: formData.name,
 					damage: formData.damage,
 					barrier: formData.barrier,
@@ -260,34 +478,13 @@
 					icon: formData.icon,
 					image_path: formData.image_path,
 					show_tutorial: (formData as any).show_tutorial ?? true,
-						invade_location_id: formData.invade_location_id,
-						order_num: formData.order_num,
-						reward_track: rewardTrack,
-						quantity: formData.quantity,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', id);
-			if (err) throw err;
-			monsterId = id;
-			} else {
-				const { data, error: err } = await supabase
-					.from('monsters')
-					.insert({
-						name: formData.name,
-						damage: formData.damage,
-						barrier: formData.barrier,
-					state: formData.state,
-					monster_classification: formData.monster_classification,
-					icon: formData.icon,
-					image_path: formData.image_path,
-					show_tutorial: (formData as any).show_tutorial ?? true,
-						invade_location_id: formData.invade_location_id,
-						order_num: formData.order_num,
-						reward_track: rewardTrack,
-						quantity: formData.quantity
-					})
-					.select('id')
-					.single();
+					invade_location_id: formData.invade_location_id,
+					order_num: formData.order_num,
+					reward_track: rewardTrack,
+					quantity: formData.quantity
+				})
+				.select('id')
+				.single();
 			if (err) throw err;
 			monsterId = data.id;
 		}
@@ -308,7 +505,6 @@
 		}
 
 		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
-		updateFilteredCards();
 
 		return monsterId;
 	}
@@ -317,11 +513,14 @@
 		const { error: err } = await supabase.from('monsters').delete().eq('id', id);
 		if (err) throw err;
 		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
-		updateFilteredCards();
 	}
 
 	// Special Effect CRUD
 	function openEffectForm() {
+		if (abyssLanguage !== BASE_LANGUAGE) {
+			alert('Create special effects in Default language first, then add translations.');
+			return;
+		}
 		editingEffectId = null;
 		effectFormData = {
 			name: '',
@@ -334,13 +533,14 @@
 	}
 
 	function openEffectEditForm(effect: SpecialEffectRow) {
-		editingEffectId = effect.id;
+		const raw = specialEffectsRaw.find((e) => e.id === effect.id) ?? effect;
+		editingEffectId = raw.id;
 		effectFormData = {
-			name: effect.name,
-			description: effect.description,
-			icon: effect.icon,
-			color: effect.color || '#a855f7',
-			effect_type: effect.effect_type || 'during_combat'
+			name: getSpecialEffectName(raw, abyssLanguage),
+			description: getSpecialEffectDescription(raw, abyssLanguage),
+			icon: raw.icon,
+			color: raw.color || '#a855f7',
+			effect_type: raw.effect_type || 'during_combat'
 		};
 		showEffectDrawer = true;
 	}
@@ -353,11 +553,22 @@
 
 		try {
 			if (isEditingEffect) {
+				const current = specialEffectsRaw.find((e) => e.id === editingEffectId) as any | undefined;
+				const nameTranslations =
+					abyssLanguage === BASE_LANGUAGE
+						? undefined
+						: setTranslationValue(current?.name_translations, String(abyssLanguage), effectFormData.name);
+				const descriptionTranslations =
+					abyssLanguage === BASE_LANGUAGE
+						? undefined
+						: setTranslationValue(current?.description_translations, String(abyssLanguage), effectFormData.description);
+
 				const { error: err } = await supabase
 					.from('special_effects')
 					.update({
-						name: effectFormData.name,
-						description: effectFormData.description,
+						...(abyssLanguage === BASE_LANGUAGE
+							? { name: effectFormData.name, description: effectFormData.description }
+							: { name_translations: nameTranslations, description_translations: descriptionTranslations }),
 						icon: effectFormData.icon,
 						color: effectFormData.color,
 						effect_type: effectFormData.effect_type,
@@ -406,25 +617,6 @@
 		void saveEffect();
 	}
 
-	// Gallery filtering
-	$effect(() => {
-		updateFilteredCards();
-	});
-
-	function updateFilteredCards() {
-		filteredCards = allCards.filter(card => {
-			if (stateFilter !== 'all') if (card.data.state !== stateFilter) return false;
-			if (classificationFilter !== 'all')
-				if ((card.data.monster_classification ?? 'monster') !== classificationFilter) return false;
-			if (statusFilter === 'generated' && !card.card_image_path) return false;
-			if (statusFilter === 'not-generated' && card.card_image_path) return false;
-			if (searchQuery.trim() && !card.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-				return false;
-			}
-			return true;
-		});
-	}
-
 	// Gallery selection
 	function toggleSelection(cardId: string) {
 		if (selectedCardIds.has(cardId)) {
@@ -445,28 +637,63 @@
 	}
 
 	// Card generation
-	async function generateCard(card: CardItem) {
+	function renderMonsterForLanguage(monster: Monster, lang: AbyssLanguage): Monster {
+		const effectIds = monsterSpecialEffects[monster.id] ?? [];
+		const effects = effectIds
+			.map((id) => specialEffectsRaw.find((e) => e.id === id))
+			.filter((e): e is SpecialEffectRow => e !== undefined)
+			.map((effect) => ({
+				...effect,
+				name: getSpecialEffectName(effect, lang),
+				description: getSpecialEffectDescription(effect, lang)
+			}));
+
+		return {
+			...monster,
+			name: getMonsterName(monster, lang),
+			effects
+		};
+	}
+
+	async function generateCardForLanguage(
+		card: CardItem,
+		lang: AbyssLanguage,
+		progress?: { current: number; total: number }
+	): Promise<boolean> {
+		const rawMonster = monstersRaw.find((m) => m.id === card.id);
+		if (!rawMonster) {
+			progressMessage = `✗ Missing monster data for ${card.name}`;
+			return false;
+		}
+
+		const langLabel = lang === BASE_LANGUAGE ? 'Default' : lang;
+		const prefix = progress ? `${progress.current}/${progress.total} ` : '';
+
 		generatingCards.add(card.id);
 		generatingCards = new Set(generatingCards);
-		progressMessage = `Generating card for ${card.name}...`;
+		progressMessage = `${prefix}Generating (${langLabel}) card for ${getMonsterName(rawMonster, lang)}...`;
 
 		try {
-			const monster = card.data;
-			const rewardTrackIds = normalizeRewardTrack(monster.barrier ?? 0, (monster as any).reward_track);
+			const renderMonster = renderMonsterForLanguage(rawMonster, lang);
+			const rewardTrackIds = normalizeRewardTrack(renderMonster.barrier ?? 0, (renderMonster as any).reward_track);
 			const rewardTrackIconUrls = rewardTrackIds.map((slot) =>
 				slot
 					.map((id) => getIconPoolUrl(id))
 					.filter((url): url is string => typeof url === 'string' && url.length > 0)
 			);
 			const blob = await generateMonsterCardPNG(
-				monster,
-				monster.art_url,
-				monster.icon_url,
-				rewardTrackIconUrls
+				renderMonster,
+				renderMonster.art_url,
+				renderMonster.icon_url,
+				rewardTrackIconUrls,
+				lang
 			);
 
+			const safeLang = sanitizeLanguageForPath(lang) || BASE_STORAGE_LANG;
+			const folder = `card_images/monsters/${safeLang}`;
+
 			const { data, error: uploadError } = await processAndUploadImage(blob, {
-				folder: 'monster_cards',
+				folder,
 				filename: card.id,
 				cropTransparent: true,
 				upsert: true
@@ -475,24 +702,85 @@
 			if (uploadError) throw uploadError;
 
 			const uploadedPath = data?.path ?? '';
-			const { error: updateError } = await supabase
-				.from('monsters')
-				.update({ card_image_path: uploadedPath })
-				.eq('id', card.id);
 
+			const updatePayload: Record<string, unknown> = {
+				updated_at: new Date().toISOString()
+			};
+
+			if (lang === BASE_LANGUAGE) {
+				updatePayload.card_image_path = uploadedPath;
+			} else {
+				const current = (monstersRaw.find((m) => m.id === card.id) as any)?.card_image_path_translations ?? {};
+				updatePayload.card_image_path_translations = {
+					...(current as Record<string, string>),
+					[String(lang)]: uploadedPath
+				};
+			}
+
+			const { error: updateError } = await supabase.from('monsters').update(updatePayload).eq('id', card.id);
 			if (updateError) throw updateError;
 
-			card.card_image_path = uploadedPath;
-			allCards = [...allCards];
-			updateFilteredCards();
+			monstersRaw = monstersRaw.map((m) => {
+				if (m.id !== card.id) return m;
+				if (lang === BASE_LANGUAGE) {
+					return { ...m, card_image_path: uploadedPath };
+				}
+				const currentTranslations = ((m as any).card_image_path_translations ?? {}) as Record<string, string>;
+				return { ...m, card_image_path_translations: { ...currentTranslations, [String(lang)]: uploadedPath } };
+			});
 
-			progressMessage = `✓ Generated card for ${card.name}`;
+			progressMessage = `${prefix}✓ Generated (${langLabel}) card for ${getMonsterName(rawMonster, lang)}`;
+			return true;
 		} catch (err) {
 			console.error('Failed to generate card:', err);
-			progressMessage = `✗ Failed to generate card for ${card.name}`;
+			progressMessage = `${prefix}✗ Failed to generate (${langLabel}) card for ${getMonsterName(rawMonster, lang)}`;
+			return false;
 		} finally {
 			generatingCards.delete(card.id);
 			generatingCards = new Set(generatingCards);
+		}
+	}
+
+	function getAllAbyssLanguages(): AbyssLanguage[] {
+		const raw = abyssLanguageOptions.map((opt) =>
+			typeof opt === 'string' ? opt : String(opt.value)
+		);
+		const normalized = raw
+			.map((lang) => (lang === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(lang)))
+			.filter((lang) => lang.trim().length > 0);
+
+		const seen = new Set<string>();
+		const out: AbyssLanguage[] = [];
+		for (const lang of normalized) {
+			if (seen.has(lang)) continue;
+			seen.add(lang);
+			out.push(lang as AbyssLanguage);
+		}
+		if (!out.includes(BASE_LANGUAGE)) out.unshift(BASE_LANGUAGE);
+		return out;
+	}
+
+	async function generateCardsBatch(cards: CardItem[], langs: AbyssLanguage[], label: string) {
+		const targets = cards.filter((c) => Boolean(c.id));
+		if (targets.length === 0 || langs.length === 0) return;
+
+		const total = targets.length * langs.length;
+		let done = 0;
+		const errors: string[] = [];
+
+		for (const lang of langs) {
+			for (const card of targets) {
+				done += 1;
+				const ok = await generateCardForLanguage(card, lang, { current: done, total });
+				if (!ok) errors.push(`${lang}:${card.name}`);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+		}
+
+		if (errors.length > 0) {
+			alert(`Generated ${total - errors.length}/${total} card exports.\n\nErrors (${errors.length}):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
+		} else {
+			progressMessage = `✓ Generated ${total} card export(s) (${label})`;
 		}
 	}
 
@@ -503,30 +791,33 @@
 			return;
 		}
 
-		progressMessage = `Generating ${selectedCards.length} cards...`;
-
-		for (let i = 0; i < selectedCards.length; i++) {
-			const card = selectedCards[i];
-			progressMessage = `Generating card ${i + 1}/${selectedCards.length}: ${card.name}...`;
-			await generateCard(card);
-		}
-
-		progressMessage = `✓ Generated ${selectedCards.length} cards`;
+		await generateCardsBatch(selectedCards, [abyssLanguage], abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage);
 		deselectAll();
 	}
 
 	async function generateAll() {
-		if (!confirm(`Generate cards for all ${filteredCards.length} items?`)) return;
+		if (!confirm(`Generate cards for all ${filteredCards.length} items (${abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage})?`)) return;
+		await generateCardsBatch(filteredCards, [abyssLanguage], abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage);
+	}
 
-		progressMessage = `Generating ${filteredCards.length} cards...`;
-
-		for (let i = 0; i < filteredCards.length; i++) {
-			const card = filteredCards[i];
-			progressMessage = `Generating card ${i + 1}/${filteredCards.length}: ${card.name}...`;
-			await generateCard(card);
+	async function generateSelectedAllLanguages() {
+		const selectedCards = filteredCards.filter((c) => selectedCardIds.has(c.id));
+		if (selectedCards.length === 0) {
+			alert('No cards selected');
+			return;
 		}
 
-		progressMessage = `✓ Generated ${filteredCards.length} cards`;
+		const langs = getAllAbyssLanguages();
+		if (!confirm(`Generate cards for ${selectedCards.length} selected monsters in ALL languages (${langs.length})? This may take a while.`)) return;
+
+		await generateCardsBatch(selectedCards, langs, 'All Languages');
+		deselectAll();
+	}
+
+	async function generateAllAllLanguages() {
+		const langs = getAllAbyssLanguages();
+		if (!confirm(`Generate cards for all ${filteredCards.length} monsters in ALL languages (${langs.length})? This may take a while.`)) return;
+		await generateCardsBatch(filteredCards, langs, 'All Languages');
 	}
 
 	function handleTabChange(tabId: string) {
@@ -550,13 +841,33 @@
 	{/snippet}
 
 	{#snippet tabActions()}
-		{#if activeTab === 'deck'}
-			<span class="count">{monsters.length} monsters</span>
-		{:else if activeTab === 'special-effects'}
-			<span class="count">{specialEffects.length} effects</span>
-		{:else if activeTab === 'gallery'}
-			<span class="count">{generatedCount}/{totalCount} generated</span>
-		{/if}
+		<div class="abyss-actions-row">
+			{#if activeTab === 'deck'}
+				<span class="count">{monsters.length} monsters</span>
+			{:else if activeTab === 'special-effects'}
+				<span class="count">{specialEffects.length} effects</span>
+			{:else if activeTab === 'gallery'}
+				<span class="count">{generatedCount}/{totalCount} generated</span>
+			{/if}
+
+			<div class="abyss-language">
+				<span class="abyss-language__label">Language</span>
+				<Select bind:value={abyssLanguageSelect} options={abyssLanguageOptions} disabled={loading || generatingCards.size > 0} />
+				<Input
+					bind:value={newAbyssLanguageDraft}
+					placeholder="Add lang (e.g. es, fr-CA)"
+					disabled={loading || generatingCards.size > 0}
+				/>
+				<Button
+					variant="secondary"
+					size="sm"
+					onclick={addAbyssLanguage}
+					disabled={loading || generatingCards.size > 0 || newAbyssLanguageDraft.trim().length === 0}
+				>
+					Add
+				</Button>
+			</div>
+		</div>
 	{/snippet}
 
 	{#if loading}
@@ -564,18 +875,22 @@
 	{:else if error}
 		<div class="error-state">Error: {error}</div>
 	{:else if activeTab === 'deck'}
-		<AbyssDeckWorkspace
-			{monsters}
-			events={[]}
-			locations={invadeLocations}
-			{specialEffects}
-			{monsterSpecialEffects}
-			onMonsterSave={handleWorkspaceMonsterSave}
-			onMonsterDelete={handleWorkspaceMonsterDelete}
-			onSaveDeckOrder={saveDeckOrder}
-			defaultShowCardPreviews={false}
-			showEvents={false}
-		/>
+		{#key abyssLanguage}
+			<AbyssDeckWorkspace
+				{monsters}
+				events={[]}
+				locations={invadeLocations}
+				{specialEffects}
+				{monsterSpecialEffects}
+				language={abyssLanguage}
+				onMonsterSave={handleWorkspaceMonsterSave}
+				onMonsterDelete={handleWorkspaceMonsterDelete}
+				onSaveDeckOrder={saveDeckOrder}
+				onSelectMonster={(m) => (workspaceSelectedMonster = m)}
+				defaultShowCardPreviews={false}
+				showEvents={false}
+			/>
+		{/key}
 	{:else if activeTab === 'special-effects'}
 		<div class="effects-grid">
 			{#each specialEffects as effect (effect.id)}
@@ -643,25 +958,39 @@
 					</select>
 				</div>
 
-				<div class="actions">
-					{#if selectedCount > 0}
-						<Button variant="secondary" onclick={deselectAll}>
-							Deselect All
-						</Button>
-						<Button variant="primary" onclick={generateSelected}>
-							Generate Selected ({selectedCount})
-						</Button>
-					{:else}
-						<Button variant="secondary" onclick={selectAll}>
-							Select All ({filteredCards.length})
-						</Button>
-					{/if}
+					<div class="actions">
+						{#if selectedCount > 0}
+							<Button variant="secondary" onclick={deselectAll} disabled={generatingCards.size > 0}>
+								Deselect All
+							</Button>
+							<Button variant="primary" onclick={generateSelected} disabled={generatingCards.size > 0}>
+								Generate Selected ({selectedCount})
+							</Button>
+							<Button
+								variant="secondary"
+								onclick={generateSelectedAllLanguages}
+								disabled={generatingCards.size > 0 || abyssLanguageOptions.length <= 1}
+							>
+								Generate Selected (All Languages)
+							</Button>
+						{:else}
+							<Button variant="secondary" onclick={selectAll} disabled={generatingCards.size > 0}>
+								Select All ({filteredCards.length})
+							</Button>
+						{/if}
 
-					<Button variant="primary" onclick={generateAll}>
-						Generate All
-					</Button>
+						<Button variant="primary" onclick={generateAll} disabled={generatingCards.size > 0}>
+							Generate All
+						</Button>
+						<Button
+							variant="secondary"
+							onclick={generateAllAllLanguages}
+							disabled={generatingCards.size > 0 || abyssLanguageOptions.length <= 1}
+						>
+							Generate All (All Languages)
+						</Button>
+					</div>
 				</div>
-			</div>
 
 			{#if progressMessage}
 				<div class="progress-message">{progressMessage}</div>
@@ -721,7 +1050,7 @@
 								<Button
 									variant="secondary"
 									size="sm"
-									onclick={() => generateCard(card)}
+									onclick={() => generateCardForLanguage(card, abyssLanguage)}
 									disabled={isGenerating}
 								>
 									{isGenerating ? 'Generating...' : hasCardImage ? 'Regenerate' : 'Generate'}
@@ -758,12 +1087,17 @@
 				<button class="close-btn" onclick={() => showEffectDrawer = false}>&times;</button>
 			</div>
 			<div class="drawer-content">
-				<form id="effect-form" class="form-grid" onsubmit={submitEffectForm}>
-					<div class="full-width">
-						<FormField label="Name" required>
-							<Input type="text" bind:value={effectFormData.name} required />
-						</FormField>
-					</div>
+					<form id="effect-form" class="form-grid" onsubmit={submitEffectForm}>
+						<div class="full-width">
+							<FormField label={abyssLanguage === BASE_LANGUAGE ? 'Name' : `Name (${abyssLanguage})`} required>
+								<Input
+									type="text"
+									bind:value={effectFormData.name}
+									required
+									placeholder={abyssLanguage === BASE_LANGUAGE ? 'Effect name' : (specialEffectsRaw.find((e) => e.id === editingEffectId)?.name ?? 'Effect name')}
+								/>
+							</FormField>
+						</div>
 					<FormField label="Effect Type">
 						<select bind:value={effectFormData.effect_type} class="effect-type-select">
 							{#each effectTypeOptions as option (option.value)}
@@ -776,13 +1110,17 @@
 					</FormField>
 					<FormField label="Color">
 						<Input type="color" bind:value={effectFormData.color} />
-					</FormField>
-					<div class="full-width">
-						<FormField label="Description">
-							<Textarea rows={3} bind:value={effectFormData.description} placeholder="Effect description..." />
 						</FormField>
-					</div>
-				</form>
+						<div class="full-width">
+							<FormField label={abyssLanguage === BASE_LANGUAGE ? 'Description' : `Description (${abyssLanguage})`}>
+								<Textarea
+									rows={3}
+									bind:value={effectFormData.description}
+									placeholder={abyssLanguage === BASE_LANGUAGE ? 'Effect description...' : (specialEffectsRaw.find((e) => e.id === editingEffectId)?.description ?? 'Effect description...')}
+								/>
+							</FormField>
+						</div>
+					</form>
 			</div>
 			<div class="drawer-footer">
 				<Button variant="primary" type="submit" form="effect-form">
@@ -800,6 +1138,26 @@
 	.count {
 		font-size: 0.7rem;
 		color: #64748b;
+	}
+
+	.abyss-actions-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.abyss-language {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.abyss-language__label {
+		font-size: 0.7rem;
+		color: #94a3b8;
 	}
 
 	.loading-state,

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Translate Hex Spirit names into multiple languages and store them in
- * `arc-spirits-rev2.hex_spirits.name_translations` (primary name remains `name`).
+ * Translate Artifact names + benefits into multiple languages and store them in:
+ * - `arc-spirits-rev2.artifacts.name_translations`
+ * - `arc-spirits-rev2.artifacts.benefit_translations`
  *
  * Requirements (env):
  * - SUPABASE_SERVICE_ROLE_KEY (required)
@@ -16,10 +17,10 @@
  * - REQUEST_DELAY_MS (default: 150)
  *
  * Usage:
- *   node scripts/translate-hex-spirit-names.mjs
- *   node scripts/translate-hex-spirit-names.mjs --dry-run
- *   node scripts/translate-hex-spirit-names.mjs --limit 10
- *   node scripts/translate-hex-spirit-names.mjs --overwrite
+ *   node scripts/translate-artifacts.mjs
+ *   node scripts/translate-artifacts.mjs --dry-run
+ *   node scripts/translate-artifacts.mjs --limit 10
+ *   node scripts/translate-artifacts.mjs --overwrite
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -60,7 +61,7 @@ function parseArgs(argv) {
 
 function printHelp() {
 	console.log(`
-Translate Hex Spirit names and store in Supabase.
+Translate Artifact names and benefits and store in Supabase.
 
 Env:
   SUPABASE_SERVICE_ROLE_KEY (required)
@@ -77,7 +78,7 @@ Optional env:
 Args:
   --dry-run      Do not write to DB
   --overwrite    Overwrite existing translations
-  --limit N      Process only first N spirits
+  --limit N      Process only first N artifacts
 `);
 }
 
@@ -131,11 +132,7 @@ function buildMissingLangs(existing, targetLangs, overwrite) {
 }
 
 async function fetchJson(url, { method = 'GET', headers = {}, body } = {}) {
-	const res = await fetch(url, {
-		method,
-		headers,
-		body
-	});
+	const res = await fetch(url, { method, headers, body });
 	const text = await res.text();
 	let json = null;
 	try {
@@ -153,18 +150,18 @@ async function fetchJson(url, { method = 'GET', headers = {}, body } = {}) {
 	return json;
 }
 
-async function openaiTranslateName({ baseUrl, apiKey, model, name, langs }) {
+async function openaiTranslateArtifact({ baseUrl, apiKey, model, name, benefit, langs }) {
 	const system = [
-		'You translate game card names.',
-		'Return ONLY valid JSON (no markdown), shaped exactly as { "<lang>": "<name>", ... } for the requested languages.',
-		'Translate the name naturally for each language.',
-		'Keep it short (a name), do not add explanations or parentheses.',
-		'If the name is a proper noun, transliterate appropriately rather than leaving it in English.'
+		'You translate tabletop game card text.',
+		'Return ONLY valid JSON (no markdown), shaped exactly as { "<lang>": { "name": "<...>", "benefit": "<...>" }, ... } for the requested languages.',
+		'Translate naturally for each language.',
+		'Preserve placeholders exactly as-is (do not translate or alter): {origin}, {class}, {quantity}, {rune}, and any {like_this}.',
+		'Do not add explanations, parentheses, or extra notes.'
 	].join(' ');
 
-	const user = `Translate this Hex Spirit name into the following languages.\n\nName: ${JSON.stringify(
+	const user = `Translate this Artifact into the following languages.\n\nName: ${JSON.stringify(
 		name
-	)}\n\nLanguages (BCP-47 tags): ${langs.join(', ')}\n\nOutput JSON with exactly those keys.`;
+	)}\nBenefit: ${JSON.stringify(benefit)}\n\nLanguages (BCP-47 tags): ${langs.join(', ')}\n\nOutput JSON with exactly those keys.`;
 
 	const payload = {
 		model,
@@ -192,29 +189,33 @@ async function openaiTranslateName({ baseUrl, apiKey, model, name, langs }) {
 	let parsed;
 	try {
 		parsed = JSON.parse(content);
-	} catch (err) {
+	} catch {
 		throw new Error(`OpenAI returned non-JSON content: ${content.slice(0, 200)}`);
 	}
 	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
 		throw new Error('OpenAI returned JSON but not an object.');
 	}
 
-	const out = {};
+	const outByLang = {};
 	for (const lang of langs) {
 		const v = parsed[lang];
-		if (typeof v === 'string' && v.trim()) {
-			out[lang] = v.trim();
-		}
+		if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+		const nameOut = typeof v.name === 'string' ? v.name.trim() : '';
+		const benefitOut = typeof v.benefit === 'string' ? v.benefit.trim() : '';
+		const safe = {};
+		if (nameOut) safe.name = nameOut;
+		if (benefitOut) safe.benefit = benefitOut;
+		if (Object.keys(safe).length > 0) outByLang[lang] = safe;
 	}
-	return out;
+	return outByLang;
 }
 
-async function openaiTranslateNameWithRetry(opts, { maxAttempts = 5 } = {}) {
+async function openaiTranslateArtifactWithRetry(opts, { maxAttempts = 5 } = {}) {
 	let attempt = 0;
 	while (true) {
 		attempt++;
 		try {
-			return await openaiTranslateName(opts);
+			return await openaiTranslateArtifact(opts);
 		} catch (err) {
 			const status = err?.status;
 			const retryable = status === 429 || (typeof status === 'number' && status >= 500);
@@ -295,26 +296,31 @@ async function main() {
 	console.log('Dry run:', args.dryRun ? 'yes' : 'no');
 	console.log('Overwrite:', args.overwrite ? 'yes' : 'no');
 
-	const { data: spirits, error } = await supabase
-		.from('hex_spirits')
-		.select('id,name,name_translations')
+	const { data: artifacts, error } = await supabase
+		.from('artifacts')
+		.select('id,name,benefit,name_translations,benefit_translations')
 		.order('name', { ascending: true });
 
 	if (error) throw error;
 
-	const list = Array.isArray(spirits) ? spirits : [];
+	const list = Array.isArray(artifacts) ? artifacts : [];
 	const limited = typeof args.limit === 'number' ? list.slice(0, args.limit) : list;
-	console.log(`Found ${list.length} hex spirits; processing ${limited.length}.`);
+	console.log(`Found ${list.length} artifacts; processing ${limited.length}.`);
 
 	let skipped = 0;
 	let updated = 0;
 	let failed = 0;
 
-	await runWithConcurrency(limited, concurrency, async (spirit, i) => {
-		const id = spirit.id;
-		const name = spirit.name;
-		const existing = spirit.name_translations ?? {};
-		const missing = buildMissingLangs(existing, targetLangs, args.overwrite);
+	await runWithConcurrency(limited, concurrency, async (artifact, i) => {
+		const id = artifact.id;
+		const name = artifact.name;
+		const benefit = artifact.benefit ?? '';
+		const existingNames = artifact.name_translations ?? {};
+		const existingBenefits = artifact.benefit_translations ?? {};
+
+		const missingNames = buildMissingLangs(existingNames, targetLangs, args.overwrite);
+		const missingBenefits = buildMissingLangs(existingBenefits, targetLangs, args.overwrite);
+		const missing = Array.from(new Set([...missingNames, ...missingBenefits]));
 
 		if (missing.length === 0) {
 			skipped++;
@@ -324,29 +330,65 @@ async function main() {
 		if (requestDelayMs) await sleep(requestDelayMs);
 
 		try {
-			const newOnes = await openaiTranslateNameWithRetry({
+			const translated = await openaiTranslateArtifactWithRetry({
 				baseUrl: OPENAI_BASE_URL,
 				apiKey: OPENAI_API_KEY,
 				model: OPENAI_MODEL,
 				name,
+				benefit,
 				langs: missing
 			});
 
-			const merged = { ...ensureObject(existing), ...newOnes };
+			const mergedNames = { ...ensureObject(existingNames) };
+			const mergedBenefits = { ...ensureObject(existingBenefits) };
+			let nameAdded = 0;
+			let benefitAdded = 0;
+
+			for (const lang of missing) {
+				const row = translated?.[lang];
+				if (!row || typeof row !== 'object') continue;
+
+				const translatedName = typeof row.name === 'string' ? row.name.trim() : '';
+				const translatedBenefit = typeof row.benefit === 'string' ? row.benefit.trim() : '';
+
+				if (args.overwrite || missingNames.includes(lang)) {
+					if (translatedName) {
+						mergedNames[lang] = translatedName;
+						nameAdded++;
+					}
+				}
+				if (args.overwrite || missingBenefits.includes(lang)) {
+					if (translatedBenefit) {
+						mergedBenefits[lang] = translatedBenefit;
+						benefitAdded++;
+					}
+				}
+			}
+
+			if (nameAdded === 0 && benefitAdded === 0) {
+				skipped++;
+				console.log(`[${i + 1}/${limited.length}] ${name}: (no usable translations)`);
+				return;
+			}
+
 			if (args.dryRun) {
 				updated++;
-				console.log(`[${i + 1}/${limited.length}] (dry-run) ${name}: +${Object.keys(newOnes).length}`);
+				console.log(`[${i + 1}/${limited.length}] (dry-run) ${name}: +${nameAdded} name, +${benefitAdded} benefit`);
 				return;
 			}
 
 			const { error: updateError } = await supabase
-				.from('hex_spirits')
-				.update({ name_translations: merged, updated_at: new Date().toISOString() })
+				.from('artifacts')
+				.update({
+					name_translations: mergedNames,
+					benefit_translations: mergedBenefits,
+					updated_at: new Date().toISOString()
+				})
 				.eq('id', id);
 
 			if (updateError) throw updateError;
 			updated++;
-			console.log(`[${i + 1}/${limited.length}] ${name}: +${Object.keys(newOnes).length}`);
+			console.log(`[${i + 1}/${limited.length}] ${name}: +${nameAdded} name, +${benefitAdded} benefit`);
 		} catch (err) {
 			failed++;
 			console.error(`[${i + 1}/${limited.length}] ❌ ${name}: ${err?.message || String(err)}`);

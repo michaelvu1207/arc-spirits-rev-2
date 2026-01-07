@@ -7,8 +7,12 @@
 
 	type ArtifactSummary = Pick<ArtifactRow, 'id' | 'name' | 'benefit' | 'recipe_box' | 'guardian_id'>;
 
+	type GuardianLanguage = 'base' | string;
+	const BASE_LANGUAGE: GuardianLanguage = 'base';
+
 	interface Props {
 		guardians: GuardianRow[];
+		language?: GuardianLanguage;
 		origins: Array<{ id: string; name: string }>;
 		artifactsByGuardian: Record<string, ArtifactSummary[]>;
 		onEdit: (guardian: GuardianRow) => void;
@@ -19,9 +23,37 @@
 		uploadingId: string | null;
 	}
 
-	let { guardians, origins, artifactsByGuardian, onEdit, onDelete, onDeleteMultiple, onUploadImage, onRemoveImage, uploadingId }: Props = $props();
+	let { guardians, origins, artifactsByGuardian, onEdit, onDelete, onDeleteMultiple, onUploadImage, onRemoveImage, uploadingId, language = BASE_LANGUAGE }: Props = $props();
 
 	let selectedIds = $state<Set<string>>(new Set());
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function guardianDisplayName(guardian: GuardianRow): string {
+		if (language === BASE_LANGUAGE) return guardian.name;
+		return getTranslationValue(guardian.name_translations, language) ?? guardian.name;
+	}
 
 	const originName = (originId: string) =>
 		origins.find((o) => o.id === originId)?.name ?? 'Unknown';
@@ -71,6 +103,7 @@
 
 <section class="list-view">
 	{#each guardians as guardian (guardian.id)}
+		{@const displayName = guardianDisplayName(guardian)}
 		<article class="guardian-card" class:selected={selectedIds.has(guardian.id)}>
 			<header>
 				<div class="checkbox-wrapper">
@@ -78,11 +111,11 @@
 						type="checkbox"
 						checked={selectedIds.has(guardian.id)}
 						onchange={() => toggleSelect(guardian.id)}
-						aria-label="Select {guardian.name}"
+						aria-label="Select {displayName}"
 					/>
 				</div>
 				<div class="header-content">
-					<h2>{guardian.name}</h2>
+					<h2>{displayName}</h2>
 					<CardActionMenu
 						onEdit={() => onEdit(guardian)}
 						onDelete={() => onDelete(guardian)}
@@ -96,7 +129,7 @@
 				<h3>Image Mat</h3>
 				{#if getImageUrl(guardian.image_mat_path)}
 					<div class="image-preview">
-						<img src={getImageUrl(guardian.image_mat_path)} alt="{guardian.name} image mat" />
+						<img src={getImageUrl(guardian.image_mat_path)} alt="{displayName} image mat" />
 						<Button
 							class="btn-remove"
 							onclick={() => onRemoveImage(guardian, 'image_mat')}
@@ -121,7 +154,7 @@
 				<h3>Chibi</h3>
 				{#if getImageUrl(guardian.chibi_image_path)}
 					<div class="image-preview">
-						<img src={getImageUrl(guardian.chibi_image_path)} alt="{guardian.name} chibi" />
+						<img src={getImageUrl(guardian.chibi_image_path)} alt="{displayName} chibi" />
 						<Button
 							class="btn-remove"
 							onclick={() => onRemoveImage(guardian, 'chibi')}
@@ -146,7 +179,7 @@
 				<h3>Icon</h3>
 				{#if getImageUrl(guardian.icon_image_path)}
 					<div class="image-preview">
-						<img src={getImageUrl(guardian.icon_image_path)} alt="{guardian.name} icon" />
+						<img src={getImageUrl(guardian.icon_image_path)} alt="{displayName} icon" />
 						<Button
 							class="btn-remove"
 							onclick={() => onRemoveImage(guardian, 'icon')}

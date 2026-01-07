@@ -7,6 +7,21 @@
 	let error = $state<string | null>(null);
 	let selectedEdition = $state('Base');
 	let editions = $state<string[]>(['Base']);
+	type ExportLanguage = 'base' | string;
+	const BASE_LANGUAGE: ExportLanguage = 'base';
+	const DEFAULT_LANGS: ExportLanguage[] = [
+		BASE_LANGUAGE,
+		'zh-hans',
+		'zh-hant',
+		'de',
+		'fr',
+		'es',
+		'it',
+		'ja',
+		'pl',
+		'ko'
+	];
+	let selectedLanguage = $state<ExportLanguage>(BASE_LANGUAGE);
 	let expandedPaths = $state<SvelteSet<string>>(new SvelteSet());
 	let searchQuery = $state('');
 	let copySuccess = $state(false);
@@ -33,15 +48,16 @@
 		}
 	}
 
-	async function fetchJson() {
-		loading = true;
-		error = null;
-		try {
-			const url = `${EDGE_FUNCTION_URL}?edition=${encodeURIComponent(selectedEdition)}`;
-			const response = await fetch(url);
-			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-			}
+		async function fetchJson() {
+			loading = true;
+			error = null;
+			try {
+				const langParam = selectedLanguage === BASE_LANGUAGE ? '' : `&lang=${encodeURIComponent(String(selectedLanguage))}`;
+				const url = `${EDGE_FUNCTION_URL}?edition=${encodeURIComponent(selectedEdition)}${langParam}`;
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+				}
 			jsonData = await response.json();
 			// Auto-expand top level
 			expandedPaths = new SvelteSet(['root']);
@@ -96,7 +112,8 @@
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `tts-export-${selectedEdition.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;
+		const langSuffix = selectedLanguage === BASE_LANGUAGE ? 'base' : String(selectedLanguage);
+		a.download = `tts-export-${selectedEdition.toLowerCase().replace(/\s+/g, '-')}-${langSuffix}-${new Date().toISOString().slice(0, 10)}.json`;
 		a.click();
 		URL.revokeObjectURL(url);
 	}
@@ -142,10 +159,10 @@
 		</div>
 
 		<!-- Controls -->
-		<div class="bg-gray-800 rounded-lg p-4 mb-6 flex flex-wrap gap-4 items-center">
-			<div class="flex items-center gap-2">
-				<label for="edition" class="text-sm text-gray-400">Edition:</label>
-				<select
+			<div class="bg-gray-800 rounded-lg p-4 mb-6 flex flex-wrap gap-4 items-center">
+				<div class="flex items-center gap-2">
+					<label for="edition" class="text-sm text-gray-400">Edition:</label>
+					<select
 					id="edition"
 					bind:value={selectedEdition}
 					onchange={fetchJson}
@@ -154,12 +171,26 @@
 					{#each editions as edition (edition)}
 						<option value={edition}>{edition}</option>
 					{/each}
-				</select>
-			</div>
+					</select>
+				</div>
 
-			<div class="flex items-center gap-2 flex-1 max-w-md">
-				<label for="search" class="text-sm text-gray-400">Search:</label>
-				<input
+				<div class="flex items-center gap-2">
+					<label for="lang" class="text-sm text-gray-400">Language:</label>
+					<select
+						id="lang"
+						bind:value={selectedLanguage}
+						onchange={fetchJson}
+						class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+					>
+						{#each DEFAULT_LANGS as lang (lang)}
+							<option value={lang}>{lang === BASE_LANGUAGE ? 'base (Default)' : lang}</option>
+						{/each}
+					</select>
+				</div>
+
+				<div class="flex items-center gap-2 flex-1 max-w-md">
+					<label for="search" class="text-sm text-gray-400">Search:</label>
+					<input
 					id="search"
 					type="text"
 					bind:value={searchQuery}

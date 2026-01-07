@@ -29,6 +29,7 @@ let benefitDraft = '';
 let lastInitKey = '';
 
 const BASE_LANGUAGE: 'base' = 'base';
+const BASE_STORAGE_LANG = 'en';
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
 	const trimmed = (value ?? '').trim();
@@ -150,15 +151,16 @@ function sanitizeLanguageForPath(lang: string): string {
 				benefit: getArtifactBenefitForLanguage(artifact)
 			};
 
-			const safeLang = language === BASE_LANGUAGE ? '' : sanitizeLanguageForPath(language);
-			const filename = safeLang ? `card_${safeLang}` : 'card';
+			const safeLang = language === BASE_LANGUAGE ? BASE_STORAGE_LANG : sanitizeLanguageForPath(language);
+			const folder = `card_images/artifacts/${safeLang || BASE_STORAGE_LANG}`;
+			const filename = artifact.id;
 
 			// Generate PNG directly using Canvas API
 			const pngBlob = await generateArtifactCardPNG(renderArtifact as ArtifactRow, origins, runes, tags, guardians);
 
 			// Upload with transparent area cropping
 			const { data, error: uploadError } = await processAndUploadImage(pngBlob, {
-				folder: `artifacts/${artifact.id}`,
+				folder,
 				filename,
 				cropTransparent: true,
 				upsert: true

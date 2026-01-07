@@ -181,24 +181,124 @@ export function wrapText(
 	text: string,
 	maxWidth: number
 ): string[] {
-	const words = text.split(' ');
-	const lines: string[] = [];
-	let currentLine = '';
+	const normalize = (value: string) => value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+	const segmentGraphemes = (value: string): string[] => {
+			try {
+				const SegmenterCtor = (Intl as typeof Intl & { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+				if (typeof SegmenterCtor === 'function') {
+					const seg = new SegmenterCtor(undefined, { granularity: 'grapheme' });
+					return Array.from(seg.segment(value), (s) => s.segment);
+				}
+			} catch {
+				// ignore
+			}
+		return Array.from(value);
+	};
 
-	for (const word of words) {
-		const testLine = currentLine ? `${currentLine} ${word}` : word;
-		const metrics = ctx.measureText(testLine);
-		if (metrics.width > maxWidth && currentLine) {
-			lines.push(currentLine);
-			currentLine = word;
-		} else {
-			currentLine = testLine;
+	const containsCJK = (value: string): boolean =>
+		/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(value);
+
+	const breakLongToken = (token: string): string[] => {
+		const parts: string[] = [];
+		let current = '';
+		let currentSum = 0;
+		for (const piece of segmentGraphemes(token)) {
+			const pieceWidth = ctx.measureText(piece).width;
+			const next = current + piece;
+			const nextSum = currentSum + pieceWidth;
+			const measured = ctx.measureText(next).width;
+			const nextWidth = Math.max(measured, nextSum);
+			if (current.length === 0 || nextWidth <= maxWidth) {
+				current = next;
+				currentSum = nextSum;
+				continue;
+			}
+			parts.push(current);
+			current = piece;
+			currentSum = pieceWidth;
 		}
+		if (current) parts.push(current);
+		return parts;
+	};
+
+	const collapsed = normalize(text ?? '').replace(/\s+/g, ' ').trim();
+	if (!collapsed) return [''];
+
+	// For CJK languages, browsers line-break at grapheme boundaries more readily than whitespace.
+	// Use a grapheme-based wrapper so JP/ZH/KO strings without spaces still wrap correctly.
+	if (containsCJK(collapsed)) {
+		const out: string[] = [];
+		let line = '';
+		let lineSum = 0;
+
+		for (const piece of segmentGraphemes(collapsed)) {
+			if (!line && piece === ' ') continue; // avoid leading spaces
+
+			const pieceWidth = ctx.measureText(piece).width;
+			const next = line + piece;
+			const nextSum = lineSum + pieceWidth;
+			const measured = ctx.measureText(next).width;
+			const nextWidth = Math.max(measured, nextSum);
+
+			if (line && nextWidth > maxWidth) {
+				out.push(line.trimEnd());
+				if (piece === ' ') {
+					line = '';
+					lineSum = 0;
+				} else {
+					line = piece;
+					lineSum = pieceWidth;
+				}
+				continue;
+			}
+
+			line = next;
+			lineSum = nextSum;
+		}
+
+		const finalLine = line.trimEnd();
+		if (finalLine || out.length === 0) out.push(finalLine);
+		return out;
 	}
-	if (currentLine) {
-		lines.push(currentLine);
+
+	const tokens = collapsed.split(' ');
+	const out: string[] = [];
+	let line = '';
+
+	for (const token of tokens) {
+		if (!token) continue;
+
+		if (!line) {
+			if (ctx.measureText(token).width <= maxWidth) {
+				line = token;
+				continue;
+			}
+
+			const parts = breakLongToken(token);
+			out.push(...parts.slice(0, -1));
+			line = parts.at(-1) ?? '';
+			continue;
+		}
+
+		const candidate = `${line} ${token}`;
+		if (ctx.measureText(candidate).width <= maxWidth) {
+			line = candidate;
+			continue;
+		}
+
+		out.push(line);
+		if (ctx.measureText(token).width <= maxWidth) {
+			line = token;
+			continue;
+		}
+
+		const parts = breakLongToken(token);
+		out.push(...parts.slice(0, -1));
+		line = parts.at(-1) ?? '';
 	}
-	return lines;
+
+	if (line) out.push(line);
+	return out.length > 0 ? out : [''];
 }
 
 /**

@@ -4,6 +4,7 @@
 	 * Dark red/purple theme with full-width bottom damage bar
 	 */
 	import type { MonsterRow, SpecialEffectRow, SpecialEffectType } from '$lib/types/gameData';
+	import { getMonsterCardUi, type MonsterCardUiLanguage } from '$lib/i18n/monsterCardUi';
 	import { getIconPoolUrl } from '$lib/utils/iconPool';
 
 	type Monster = MonsterRow & {
@@ -17,6 +18,10 @@
 	export let orderNum: number | undefined = undefined;
 	export let footerLabel: string = 'Monster';
 	export let renderMode: 'full' | 'fast' = 'full';
+	export let language: MonsterCardUiLanguage = 'base';
+
+	let ui = getMonsterCardUi(language);
+	$: ui = getMonsterCardUi(language);
 
 	const stateColors: Record<string, string> = {
 		tainted: '#dc2626',
@@ -26,22 +31,9 @@
 		inactive: '#64748b'
 	};
 
-	const classificationLabels: Record<string, string> = {
-		monster: 'Monster',
-		abyss_guardian: 'Abyss Guardian',
-		boss: 'Boss'
-	};
-
 	const classificationColors: Record<string, string> = {
 		abyss_guardian: '#0ea5e9',
 		boss: '#450a0a'
-	};
-
-	const effectTypeLabels: Record<SpecialEffectType, string> = {
-		before_combat: 'BEFORE COMBAT',
-		during_combat: 'DURING COMBAT',
-		after_combat: 'AFTER COMBAT',
-		combat_type: 'COMBAT TYPE'
 	};
 
 	const effectTypeColors: Record<SpecialEffectType, string> = {
@@ -58,8 +50,9 @@
 
 	$: stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
 	$: classification = monster.monster_classification ?? 'monster';
-	$: classificationLabel = classificationLabels[classification] ?? 'Monster';
+	$: classificationLabel = ui.classification[classification] ?? ui.classification.monster;
 	$: classificationColor = classificationColors[classification] ?? '#334155';
+	$: stateLabel = ui.state[monster.state ?? 'tainted'] ?? ui.state.tainted;
 	$: barrierCount = Math.max(0, Math.round(monster.barrier ?? 0));
 	$: killedBarrierIndex = Math.max(1, barrierCount);
 
@@ -125,11 +118,13 @@
 							</span>
 						{/if}
 						<span class="state-badge" style="--state-color: {stateColor}">
-							{(monster.state ?? 'tainted').toUpperCase()}
+							{stateLabel.toUpperCase()}
 						</span>
 					</div>
 					{#if monster.invade_location_name}
-						<div class="invade-subtitle">Invades: {monster.invade_location_name}</div>
+						<div class="invade-subtitle">
+							{ui.invadesPrefix}{ui.invadesPrefix.endsWith('：') ? '' : ' '}{monster.invade_location_name}
+						</div>
 					{/if}
 				</div>
 			</div>
@@ -143,7 +138,7 @@
 								class="effect-type-badge"
 								style="--type-color: {effectTypeColors[effect.effect_type] ?? effectTypeColors.during_combat}"
 							>
-								{effectTypeLabels[effect.effect_type] ?? 'DURING COMBAT'}
+								{ui.effectType[effect.effect_type] ?? ui.effectType.during_combat}
 							</span>
 							<div class="effect-content">
 								<span class="effect-bullet"></span>
@@ -153,7 +148,7 @@
 						</div>
 					{/each}
 				{:else}
-					<div class="effects-empty">No special effects.</div>
+					<div class="effects-empty">{ui.noSpecialEffects}</div>
 				{/if}
 			</div>
 
@@ -175,7 +170,7 @@
 	<div class="bottom-bar">
 		<div class="barrier-track" style="--slot-count: {trackSlotCount + 1};">
 			<div class="barrier-segment marker-start" style="background: {getGradientColor(0)};">
-				<div class="barrier-hint">Marker<br/>Start</div>
+				<div class="barrier-hint">{ui.trackMarker}<br />{ui.trackStart}</div>
 			</div>
 			{#each Array.from({ length: trackSlotCount }, (_, i) => i + 1) as slotIndex (slotIndex)}
 				{@const iconIds = rewardSlots[slotIndex] ?? []}
@@ -188,9 +183,9 @@
 				>
 					<div class="barrier-hint">
 						{#if isKilled}
-							KILLED
+							{ui.trackKilled}
 						{:else}
-							Damage {slotIndex}
+							{ui.trackDamage(slotIndex)}
 						{/if}
 					</div>
 					{#if hasIcons}
@@ -211,12 +206,12 @@
 	<div class="tutorial-float">
 		<div class="tutorial-block">
 			{#if showTutorial}
-				<div class="tutorial-title">Tutorial</div>
-				<div class="tutorial-text">Deal damage to move the marker right, gaining rewards along the way.</div>
+				<div class="tutorial-title">{ui.calloutTutorialTitle}</div>
+				<div class="tutorial-text">{ui.calloutTutorialText}</div>
 			{:else}
-				<div class="tutorial-title">Participation</div>
+				<div class="tutorial-title">{ui.calloutParticipationTitle}</div>
 				{#if participationIconIds.length === 0}
-					<div class="tutorial-text">No participation rewards.</div>
+					<div class="tutorial-text">{ui.calloutNoParticipationRewards}</div>
 				{:else}
 					<div class="tutorial-icons">
 						{#each participationIconIds as iconId}
@@ -235,12 +230,12 @@
 		<div class="stats-block">
 			<div class="stat-column">
 				<div class="stat-value">{barrierCount}</div>
-				<div class="stat-label">BARRIER</div>
+				<div class="stat-label">{ui.statsBarrier}</div>
 			</div>
 			<div class="stat-divider"></div>
 			<div class="stat-column">
 				<div class="stat-value">{monster.damage ?? 0}</div>
-				<div class="stat-label">DAMAGE</div>
+				<div class="stat-label">{ui.statsDamage}</div>
 			</div>
 		</div>
 	</div>

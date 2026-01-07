@@ -4,6 +4,7 @@ import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 type SpiritRow = {
   id: string;
   name: string;
+  name_translations?: Record<string, string> | null;
   cost: number;
   traits: { origin_ids?: string[]; class_ids?: string[] } | null;
   game_print_image_path: string | null;
@@ -43,13 +44,16 @@ type RewardRowData = {
 type MonsterRow = {
   id: string;
   name: string;
+  name_translations?: Record<string, string> | null;
   state: string | null;
   barrier: number | null;
   damage: number | null;
   order_num: number | null;
   card_image_path: string | null;
+  card_image_path_translations?: Record<string, string> | null;
   reward_rows: RewardRowData[] | null;
   special_conditions: string | null;
+  special_conditions_translations?: Record<string, string> | null;
   quantity: number | null;
 };
 
@@ -92,7 +96,9 @@ type EventRow = {
 type SpecialEffectRow = {
   id: string;
   name: string;
+  name_translations?: Record<string, string> | null;
   description: string | null;
+  description_translations?: Record<string, string> | null;
   icon: string | null;
   color: string;
 };
@@ -174,6 +180,7 @@ type CallingOrbImageRow = {
 type HexSpiritBasic = {
   id: string;
   name: string;
+  name_translations?: Record<string, string> | null;
   cost: number;
   game_print_image_path: string | null;
   traits: { origin_ids?: string[]; class_ids?: string[] } | null;
@@ -183,8 +190,11 @@ type IconPoolRow = {
   id: string;
   name: string;
   description?: string | null;
+  description_translations?: Record<string, string> | null;
   icon_guide_name?: string | null;
+  icon_guide_name_translations?: Record<string, string> | null;
   icon_guide_group?: string | null;
+  icon_guide_group_translations?: Record<string, string> | null;
   icon_guide_position?: number | null;
   source_type: string;
   file_path: string | null;
@@ -232,6 +242,50 @@ const BUCKET = "game_assets";
 const stringify = (obj: unknown) =>
   JSON.stringify(obj, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2);
 
+const normalizeLanguageTag = (value: string | null) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/_/g, "-").toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "base" || normalized === "default") return null;
+  return normalized;
+};
+
+const sanitizeLanguageForPath = (lang: string) =>
+  lang
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const getTranslationValue = (record: unknown, lang: string): string | null => {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const normalizedLang = normalizeLanguageTag(lang) ?? lang.trim().toLowerCase();
+  if (!normalizedLang) return null;
+
+  const obj = record as Record<string, unknown>;
+  const direct = obj[normalizedLang];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  for (const [key, value] of Object.entries(obj)) {
+    const normalizedKey = normalizeLanguageTag(key) ?? key.trim().toLowerCase();
+    if (!normalizedKey || normalizedKey !== normalizedLang) continue;
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+
+  return null;
+};
+
+const pickLocalizedText = (
+  base: string | null | undefined,
+  translations: unknown,
+  lang: string | null,
+) => {
+  if (!lang) return base ?? null;
+  return getTranslationValue(translations, lang) ?? base ?? null;
+};
+
 // Storage render base URL (image transformation endpoint)
 const storageRenderBaseUrl = (req: Request) => {
   const host = new URL(req.url).host; // e.g., gvxfokbptelmvvlxbigh.functions.supabase.co
@@ -265,6 +319,8 @@ serve(async (req) => {
   // Parse edition query parameter (default to "Base")
   const url = new URL(req.url);
   const editionName = url.searchParams.get("edition") ?? "Base";
+  const exportLang = normalizeLanguageTag(url.searchParams.get("lang"));
+  const exportLangPath = exportLang ? sanitizeLanguageForPath(exportLang) : null;
 
   const dbUrl =
     Deno.env.get("SUPABASE_DB_URL") ??
@@ -295,10 +351,10 @@ serve(async (req) => {
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".classes`),
       client.queryObject<NamedId>(`select id, name from "${SCHEMA}".artifact_tags`),
       client.queryObject<GuardianRow>(
-        `select id, name, origin_id, image_mat_path, chibi_image_path, icon_image_path from "${SCHEMA}".guardians`
+        `select id, name, name_translations, origin_id, image_mat_path, chibi_image_path, icon_image_path from "${SCHEMA}".guardians`
       ),
       client.queryObject<MonsterRow>(
-        `select id, name, state, barrier, damage, order_num, card_image_path, reward_rows, special_conditions, quantity from "${SCHEMA}".monsters`
+        `select id, name, name_translations, state, barrier, damage, order_num, card_image_path, card_image_path_translations, reward_rows, special_conditions, special_conditions_translations, quantity from "${SCHEMA}".monsters`
       ),
       client.queryObject<TravelerRow>(
         `select id, name, state, order_num, card_image_path, traveler_subtext, traveler_description, trade_rows, gain_rows, trade_left_icon_ids, trade_right_icon_ids, quantity from "${SCHEMA}".travelers order by order_num`
@@ -312,7 +368,7 @@ serve(async (req) => {
       client.queryObject<GameLocationRow>(
         `select id, name, origin_id, reward_rows, background_image_path, image_with_icons_path from "${SCHEMA}".game_locations order by name`
       ),
-      client.queryObject<SpiritRow>(`select id, name, cost, traits, game_print_image_path from "${SCHEMA}".hex_spirits`),
+      client.queryObject<SpiritRow>(`select id, name, name_translations, cost, traits, game_print_image_path from "${SCHEMA}".hex_spirits`),
       client.queryObject<ArtifactRow>(`select id, name, benefit, name_translations, benefit_translations, recipe_box, guardian_id, tag_ids, card_image_path, card_image_path_translations, quantity from "${SCHEMA}".artifacts`),
       client.queryObject<RuneRow>(`select id, name, origin_id, class_id, icon_path from "${SCHEMA}".runes`),
       // Full origins with calling card data
@@ -320,7 +376,7 @@ serve(async (req) => {
       // Calling orb images
       client.queryObject<CallingOrbImageRow>(`select id, origin_id, image_path from "${SCHEMA}".calling_orb_images`),
       // Basic hex spirit info for calling card associations
-      client.queryObject<HexSpiritBasic>(`select id, name, cost, game_print_image_path, traits from "${SCHEMA}".hex_spirits`),
+      client.queryObject<HexSpiritBasic>(`select id, name, name_translations, cost, game_print_image_path, traits from "${SCHEMA}".hex_spirits`),
       // Custom dice with their prefab templates
       client.queryObject<CustomDiceRow>(`select id, name, description, icon, color, dice_type, exported_template_path from "${SCHEMA}".custom_dice`),
       // Full classes with effect schema (contains dice_id references in breakpoints)
@@ -332,9 +388,9 @@ serve(async (req) => {
       // Special categories for grouping classes
       client.queryObject<SpecialCategoryRow>(`select id, name, position, slot_1_class_ids, slot_2_class_ids, slot_3_class_ids from "${SCHEMA}".special_categories`),
       // All icons from icon_pool for reward resolution and full export
-      client.queryObject<IconPoolRow>(`select id, name, description, icon_guide_name, icon_guide_group, icon_guide_position, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
+      client.queryObject<IconPoolRow>(`select id, name, description, description_translations, icon_guide_name, icon_guide_name_translations, icon_guide_group, icon_guide_group_translations, icon_guide_position, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
       // Special effects definitions
-      client.queryObject<SpecialEffectRow>(`select id, name, description, icon, color from "${SCHEMA}".special_effects`),
+      client.queryObject<SpecialEffectRow>(`select id, name, name_translations, description, description_translations, icon, color from "${SCHEMA}".special_effects`),
       // Monster-to-special-effects junction
       client.queryObject<MonsterSpecialEffectRow>(`select monster_id, special_effect_id from "${SCHEMA}".monster_special_effects`),
     ]);
@@ -368,27 +424,37 @@ serve(async (req) => {
       return null;
     };
 
-    // Build icon map for reward resolution (id -> { name, file_path, description })
-    const iconMap = new Map(
-      allIconsRes.rows.map((r) => [
-        r.id,
-        {
-          name: r.name,
-          file_path: r.file_path,
-          description: typeof r.description === "string" ? r.description : null,
-          icon_guide_name:
-            typeof r.icon_guide_name === "string" && r.icon_guide_name.trim().length > 0
-              ? r.icon_guide_name.trim()
-              : null,
-          icon_guide_group:
-            typeof r.icon_guide_group === "string" && r.icon_guide_group.trim().length > 0
-              ? r.icon_guide_group.trim()
-              : null,
-          icon_guide_position:
-            typeof r.icon_guide_position === "number" ? r.icon_guide_position : null,
-        },
-      ])
-    );
+	    // Build icon map for reward resolution (id -> { name, file_path, description })
+	    const iconMap = new Map(
+	      allIconsRes.rows.map((r) => [
+	        r.id,
+	        {
+	          name: r.name,
+	          file_path: r.file_path,
+	          description: pickLocalizedText(
+	            typeof r.description === "string" ? r.description : null,
+	            r.description_translations,
+	            exportLang,
+	          ),
+	          icon_guide_name: pickLocalizedText(
+	            typeof r.icon_guide_name === "string" && r.icon_guide_name.trim().length > 0
+	              ? r.icon_guide_name.trim()
+	              : null,
+	            r.icon_guide_name_translations,
+	            exportLang,
+	          ),
+	          icon_guide_group: pickLocalizedText(
+	            typeof r.icon_guide_group === "string" && r.icon_guide_group.trim().length > 0
+	              ? r.icon_guide_group.trim()
+	              : null,
+	            r.icon_guide_group_translations,
+	            exportLang,
+	          ),
+	          icon_guide_position:
+	            typeof r.icon_guide_position === "number" ? r.icon_guide_position : null,
+	        },
+	      ])
+	    );
 
     const resolveIcon = (iconId: string) => {
       const iconData = iconMap.get(iconId);
@@ -498,13 +564,17 @@ serve(async (req) => {
     }
 
     // Build special_effects lookup array for export
-    const special_effects = specialEffectsRes.rows.map((e) => ({
-      id: e.id,
-      name: e.name,
-      description: e.description,
-      icon: e.icon,
-      color: e.color,
-    }));
+    const special_effects = specialEffectsRes.rows.map((e) => {
+      const name = pickLocalizedText(e.name, e.name_translations, exportLang) ?? e.name;
+      const description = pickLocalizedText(e.description, e.description_translations, exportLang);
+      return {
+        id: e.id,
+        name,
+        description,
+        icon: e.icon,
+        color: e.color,
+      };
+    });
 
     // Build resolved reward rows map for each monster (monster_id -> resolved reward rows)
     type ResolvedRewardRow = {
@@ -656,18 +726,19 @@ serve(async (req) => {
       // Get associated hex spirit if calling card is enabled
       // Structure matches the hex_spirits array output exactly
       let associated_hex_spirit = null;
-      if (o.calling_card?.enabled && o.calling_card?.hex_spirit_id) {
-        const spirit = hexSpiritMap.get(o.calling_card.hex_spirit_id);
-        if (spirit) {
-          const spiritOriginIds = spirit.traits?.origin_ids ?? [];
-          const spiritClassIds = spirit.traits?.class_ids ?? [];
-          associated_hex_spirit = {
-            id: spirit.id,
-            name: spirit.name,
-            cost: spirit.cost,
-            traits: {
-              origins: spiritOriginIds.map((id) => ({ id, name: originMap.get(id) ?? null })),
-              classes: spiritClassIds.map((id) => ({ id, name: classMap.get(id) ?? null })),
+	      if (o.calling_card?.enabled && o.calling_card?.hex_spirit_id) {
+	        const spirit = hexSpiritMap.get(o.calling_card.hex_spirit_id);
+	        if (spirit) {
+	          const spiritName = pickLocalizedText(spirit.name, spirit.name_translations, exportLang) ?? spirit.name;
+	          const spiritOriginIds = spirit.traits?.origin_ids ?? [];
+	          const spiritClassIds = spirit.traits?.class_ids ?? [];
+	          associated_hex_spirit = {
+	            id: spirit.id,
+	            name: spiritName,
+	            cost: spirit.cost,
+	            traits: {
+	              origins: spiritOriginIds.map((id) => ({ id, name: originMap.get(id) ?? null })),
+	              classes: spiritClassIds.map((id) => ({ id, name: classMap.get(id) ?? null })),
             },
             image_url: spirit.game_print_image_path
               ? `${base}${encodeURI(spirit.game_print_image_path)}?quality=80`
@@ -700,6 +771,7 @@ serve(async (req) => {
       .filter((g) => g.image_mat_path)
       .map((g) => {
         const origin_name = g.origin_id ? originMap.get(g.origin_id) ?? null : null;
+        const name = pickLocalizedText(g.name, g.name_translations, exportLang) ?? g.name;
         const mat_image_url = `${base}${encodeURI(g.image_mat_path!)}?quality=80`;
         const chibi_image_url = g.chibi_image_path
           ? `${base}${encodeURI(g.chibi_image_path)}?quality=80`
@@ -718,7 +790,7 @@ serve(async (req) => {
         const char_select_purple_url = `${base}${encodeURI(`tts_menu/guardians/${g.id}/purple_selected.png`)}?quality=80`;
         return {
           id: g.id,
-          name: g.name,
+          name,
           origin_id: g.origin_id,
           origin_name,
           mat_image_url,
@@ -744,8 +816,8 @@ serve(async (req) => {
       copy_index: number;
     }[] = [];
 
-    for (const s of spiritsRes.rows) {
-      const spiritOriginIds = s.traits?.origin_ids ?? [];
+	    for (const s of spiritsRes.rows) {
+	      const spiritOriginIds = s.traits?.origin_ids ?? [];
 
       // Check if spirit has at least one origin that matches the edition
       const hasMatchingOrigin = spiritOriginIds.some((oid) => editionOriginIds.includes(oid));
@@ -760,41 +832,43 @@ serve(async (req) => {
       // Get duplicate count for this spirit's cost (default to 1)
       const duplicateCount = costDuplicates[String(s.cost)] ?? 1;
 
-      // Add copies based on duplicate count
-      for (let i = 0; i < duplicateCount; i++) {
-        hex_spirits.push({
-          id: s.id,
-          name: s.name,
-          cost: s.cost,
-          traits: { origins, classes },
-          image_url,
-          copy_index: i + 1,
+	      // Add copies based on duplicate count
+	      for (let i = 0; i < duplicateCount; i++) {
+	        const displayName = pickLocalizedText(s.name, s.name_translations, exportLang) ?? s.name;
+	        hex_spirits.push({
+	          id: s.id,
+	          name: displayName,
+	          cost: s.cost,
+	          traits: { origins, classes },
+	          image_url,
+	          copy_index: i + 1,
         });
       }
     }
 
-    const artifacts = artifactsRes.rows.map((a) => {
-      const tag_ids = a.tag_ids ?? [];
-      const tag_names = tag_ids.map((id) => tagMap.get(id) ?? null);
-      const image_path = a.card_image_path
-        ? `${base}${encodeURI(a.card_image_path)}?quality=80`
-        : null;
+	    const artifacts = artifactsRes.rows.map((a) => {
+	      const tag_ids = a.tag_ids ?? [];
+	      const tag_names = tag_ids.map((id) => tagMap.get(id) ?? null);
+	      const imageStoragePath = pickLocalizedText(a.card_image_path, a.card_image_path_translations, exportLang);
+	      const image_path = imageStoragePath ? `${base}${encodeURI(imageStoragePath)}?quality=80` : null;
 
-      const image_path_translations: Record<string, string> = {};
-      if (a.card_image_path_translations && typeof a.card_image_path_translations === "object") {
-        for (const [lang, path] of Object.entries(a.card_image_path_translations)) {
+	      const image_path_translations: Record<string, string> = {};
+	      if (a.card_image_path_translations && typeof a.card_image_path_translations === "object") {
+	        for (const [lang, path] of Object.entries(a.card_image_path_translations)) {
           if (typeof path !== "string" || path.trim().length === 0) continue;
           image_path_translations[String(lang)] = `${base}${encodeURI(path)}?quality=80`;
         }
-      }
-      return {
-        id: a.id,
-        name: a.name,
-        benefit: a.benefit,
-        name_translations: a.name_translations ?? {},
-        benefit_translations: a.benefit_translations ?? {},
-        recipe_box: a.recipe_box,
-        guardian_id: a.guardian_id,
+	      }
+	      const name = pickLocalizedText(a.name, a.name_translations, exportLang) ?? a.name;
+	      const benefit = pickLocalizedText(a.benefit, a.benefit_translations, exportLang) ?? a.benefit;
+	      return {
+	        id: a.id,
+	        name,
+	        benefit,
+	        name_translations: a.name_translations ?? {},
+	        benefit_translations: a.benefit_translations ?? {},
+	        recipe_box: a.recipe_box,
+	        guardian_id: a.guardian_id,
         image_path,
         image_path_translations,
         tag_ids,
@@ -803,28 +877,28 @@ serve(async (req) => {
       };
     });
 
-    // Map monsters
-    // Expand monsters by quantity (duplicates appear in sequence)
-    const monsterCards = monstersRes.rows.flatMap((m) => {
-      const image_url = m.card_image_path
-        ? `${base}${encodeURI(m.card_image_path)}?quality=80`
-        : null;
-      const reward_rows = monsterRewardRowsMap.get(m.id) ?? [];
+	    // Map monsters
+	    // Expand monsters by quantity (duplicates appear in sequence)
+	    const monsterCards = monstersRes.rows.flatMap((m) => {
+	      const cardPath = pickLocalizedText(m.card_image_path, m.card_image_path_translations, exportLang);
+	      const image_url = cardPath ? `${base}${encodeURI(cardPath)}?quality=80` : null;
+	      const reward_rows = monsterRewardRowsMap.get(m.id) ?? [];
+	      const name = pickLocalizedText(m.name, m.name_translations, exportLang) ?? m.name;
 
-      // Get effect IDs for this monster (normalized - just IDs, lookup via special_effects)
-      const effect_ids = monsterEffectsMap.get(m.id) ?? [];
+	      // Get effect IDs for this monster (normalized - just IDs, lookup via special_effects)
+	      const effect_ids = monsterEffectsMap.get(m.id) ?? [];
 
       const quantity = m.quantity ?? 1;
       const baseOrderNum = m.order_num ?? 999;
 
-      // Create quantity copies of the card
-      return Array.from({ length: quantity }, (_, copyIndex) => ({
-        id: m.id,
-        name: m.name,
-        type: "monster" as const,
-        state: m.state,
-        barrier: m.barrier,
-        damage: m.damage,
+	      // Create quantity copies of the card
+	      return Array.from({ length: quantity }, (_, copyIndex) => ({
+	        id: m.id,
+	        name,
+	        type: "monster" as const,
+	        state: m.state,
+	        barrier: m.barrier,
+	        damage: m.damage,
         // Use fractional order_num to keep copies together in sequence
         order_num: baseOrderNum + (copyIndex * 0.001),
         image_url,
@@ -1107,8 +1181,11 @@ serve(async (req) => {
         return a.name.localeCompare(b.name);
       });
 
-    const iconGuidePngPath = "exports/icon_guide/icon_guide.png";
+    const baseIconGuidePngPath = "exports/icon_guide/icon_guide.png";
     const legacyIconGuidePngPath = "exports/location_guide/location_guide.png";
+    const iconGuidePngPath = exportLangPath
+      ? `exports/icon_guide/icon_guide_${exportLangPath}.png`
+      : baseIconGuidePngPath;
     // Always return the deterministic public URL; it may 404 if the PNG hasn't been exported yet.
     let icon_guide_png_url: string | null = resolveStorageObjectUrl(iconGuidePngPath);
     try {
@@ -1128,6 +1205,24 @@ serve(async (req) => {
           iconGuidePngPath,
           cacheBust ? { cb: cacheBust } : undefined,
         );
+      } else if (exportLangPath) {
+        const baseMetaRes = await client.queryObject<StorageObjectMetaRow>(
+          `select
+            metadata->>'mimetype' as mimetype,
+            metadata->>'size' as size,
+            updated_at
+          from storage.objects
+          where bucket_id = $1 and name = $2
+          limit 1`,
+          [BUCKET, baseIconGuidePngPath],
+        );
+        const baseCacheBust = toCacheBustParam(baseMetaRes.rows[0]?.updated_at);
+        if (baseMetaRes.rows.length > 0) {
+          icon_guide_png_url = resolveStorageObjectUrl(
+            baseIconGuidePngPath,
+            baseCacheBust ? { cb: baseCacheBust } : undefined,
+          );
+        }
       } else {
         const legacyMetaRes = await client.queryObject<StorageObjectMetaRow>(
           `select
@@ -1166,6 +1261,7 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 | Field | Type | Description |
 |-------|------|-------------|
 | \`exported_at\` | string | ISO 8601 timestamp of when the export was generated |
+| \`export_language\` | string | Language tag used to localize translatable fields (or \`base\`) |
 | \`edition\` | Edition | The edition configuration used for this export |
 | \`schema_docs\` | string | This documentation in markdown format |
 | \`origins\` | Origin[] | Array of origin factions |
@@ -1603,12 +1699,13 @@ Some database fields are not exported as they are internal/admin-only:
 - Use the dice_id from class effect_schema to look up the corresponding CustomDice and its faces
 `;
 
-    const body = stringify({
-      exported_at: new Date().toISOString(),
-      schema_docs,
-      edition: {
-        name: edition.name,
-        origin_count: editionOriginIds.length,
+	    const body = stringify({
+	      exported_at: new Date().toISOString(),
+	      export_language: exportLang ?? "base",
+	      schema_docs,
+	      edition: {
+	        name: edition.name,
+	        origin_count: editionOriginIds.length,
         cost_duplicates: costDuplicates,
       },
       origins,

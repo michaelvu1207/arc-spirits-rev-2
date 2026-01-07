@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HexSpiritRow, RuneRow } from '$lib/types/gameData';
+	import { supabase } from '$lib/api/supabaseClient';
 
 	type SortColumn =
 		| 'name'
@@ -31,6 +32,14 @@
 	let sortColumn: SortColumn = $state('name');
 	let sortDirection: SortDirection = $state('asc');
 	let nameLanguage: string = $state('primary');
+	let editingId: string | null = $state(null);
+	let editValue: string = $state('');
+	let savingById: Record<string, boolean> = $state({});
+	let errorById: Record<string, string | null> = $state({});
+
+	// Optimistic overrides so the table updates immediately after save.
+	let nameOverrideById: Record<string, string | undefined> = $state({});
+	let translationOverrideById: Record<string, Record<string, string | null> | undefined> = $state({});
 
 	const LANGUAGE_LABELS: Record<string, string> = {
 		primary: 'Primary',
@@ -45,16 +54,133 @@
 		ko: 'Korean'
 	};
 
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
 	function getNameTranslation(spirit: HexSpiritRow, lang: string): string | null {
 		if (lang === 'primary') return spirit.name;
+		const normalizedLang = normalizeLanguageCode(lang);
+
+		const overrides = translationOverrideById[spirit.id];
+		if (overrides) {
+			if (lang in overrides) {
+				const direct = overrides[lang];
+				if (typeof direct === 'string') return normalizeOptionalText(direct);
+				if (direct === null) return null;
+			}
+			for (const [key, value] of Object.entries(overrides)) {
+				if (normalizeLanguageCode(key) !== normalizedLang) continue;
+				if (typeof value !== 'string') continue;
+				return normalizeOptionalText(value);
+			}
+		}
+
 		const translations = (spirit as { name_translations?: unknown }).name_translations;
 		if (!translations || typeof translations !== 'object' || Array.isArray(translations)) return null;
 		const v = (translations as Record<string, unknown>)[lang];
-		return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+		if (typeof v === 'string') return normalizeOptionalText(v);
+		for (const [key, value] of Object.entries(translations as Record<string, unknown>)) {
+			if (normalizeLanguageCode(key) !== normalizedLang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
 	}
 
 	function getDisplayName(spirit: HexSpiritRow): string {
+		const nameOverride = nameOverrideById[spirit.id];
+		if (typeof nameOverride === 'string' && nameOverride.trim().length > 0) return nameOverride.trim();
 		return getNameTranslation(spirit, nameLanguage) ?? spirit.name;
+	}
+
+	function getCurrentEditableName(spirit: HexSpiritRow): string {
+		if (nameLanguage === 'primary') return getDisplayName(spirit);
+		return getNameTranslation(spirit, nameLanguage) ?? '';
+	}
+
+	function startInlineEdit(spirit: HexSpiritRow) {
+		editingId = spirit.id;
+		editValue = getCurrentEditableName(spirit);
+		errorById = { ...errorById, [spirit.id]: null };
+	}
+
+	function cancelInlineEdit() {
+		editingId = null;
+		editValue = '';
+	}
+
+	async function saveInlineEdit(spirit: HexSpiritRow) {
+		const id = spirit.id;
+		if (savingById[id]) return;
+
+		const next = editValue.trim();
+		if (nameLanguage === 'primary' && next.length === 0) {
+			errorById = { ...errorById, [id]: 'Name cannot be empty.' };
+			return;
+		}
+
+		savingById = { ...savingById, [id]: true };
+		errorById = { ...errorById, [id]: null };
+
+		try {
+			if (nameLanguage === 'primary') {
+				const { error } = await supabase
+					.from('hex_spirits')
+					.update({ name: next, updated_at: new Date().toISOString() })
+					.eq('id', id);
+				if (error) throw error;
+
+				nameOverrideById = { ...nameOverrideById, [id]: next };
+			} else {
+				const existing = (spirit as { name_translations?: unknown }).name_translations;
+				const base =
+					existing && typeof existing === 'object' && !Array.isArray(existing)
+						? ({ ...(existing as Record<string, unknown>) } as Record<string, unknown>)
+						: {};
+
+				// Avoid duplicate keys across different casing/formatting (e.g. `zh-Hans` vs `zh-hans`).
+				const normalizedTarget = normalizeLanguageCode(nameLanguage);
+				for (const key of Object.keys(base)) {
+					if (normalizeLanguageCode(key) !== normalizedTarget) continue;
+					delete base[key];
+				}
+				if (next.length > 0) base[nameLanguage] = next;
+
+				const cleaned: Record<string, string> = {};
+				for (const [k, v] of Object.entries(base)) {
+					if (typeof v === 'string' && v.trim().length > 0) cleaned[k] = v.trim();
+				}
+
+				const { error } = await supabase
+					.from('hex_spirits')
+					.update({ name_translations: cleaned, updated_at: new Date().toISOString() })
+					.eq('id', id);
+				if (error) throw error;
+
+				const existingOverrides = translationOverrideById[id] ?? {};
+				translationOverrideById = {
+					...translationOverrideById,
+					[id]: { ...existingOverrides, [nameLanguage]: next.length === 0 ? null : next }
+				};
+			}
+
+			cancelInlineEdit();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			errorById = { ...errorById, [id]: message };
+		} finally {
+			savingById = { ...savingById, [id]: false };
+		}
+	}
+
+	function isEditing(spirit: HexSpiritRow): boolean {
+		return editingId === spirit.id;
 	}
 
 	function primaryOriginId(spirit: HexSpiritRow): string | null {
@@ -255,7 +381,41 @@
 			<tbody>
 				{#each sortedSpirits as spirit (spirit.id)}
 					<tr class="data-row" onclick={() => onEdit(spirit)}>
-						<td class="cell-name">{getDisplayName(spirit)}</td>
+						<td class="cell-name" onclick={(e) => e.stopPropagation()}>
+							<div class="name-cell">
+								{#if isEditing(spirit)}
+									<input
+										class="name-cell__input"
+										type="text"
+										bind:value={editValue}
+										placeholder={nameLanguage === 'primary' ? 'Name' : 'Translation (optional)'}
+										onkeydown={(e) => {
+											if (e.key === 'Enter') void saveInlineEdit(spirit);
+											if (e.key === 'Escape') cancelInlineEdit();
+										}}
+									/>
+									<button
+										type="button"
+										class="name-cell__btn name-cell__btn--primary"
+										disabled={savingById[spirit.id]}
+										onclick={() => void saveInlineEdit(spirit)}
+									>
+										{savingById[spirit.id] ? 'Saving…' : 'Save'}
+									</button>
+									<button type="button" class="name-cell__btn" onclick={cancelInlineEdit} disabled={savingById[spirit.id]}>
+										Cancel
+									</button>
+								{:else}
+									<span class="name-cell__value">{getDisplayName(spirit)}</span>
+									<button type="button" class="name-cell__btn" onclick={() => startInlineEdit(spirit)}>
+										Edit
+									</button>
+								{/if}
+							</div>
+							{#if errorById[spirit.id]}
+								<div class="name-cell__error">{errorById[spirit.id]}</div>
+							{/if}
+						</td>
 						<td class="cell-center">{spirit.cost}</td>
 						<td>{originLookup.getLabel(primaryOriginId(spirit), 'Unassigned')}</td>
 						<td>{classLookup.getLabel(primaryClassId(spirit), 'None')}</td>
@@ -310,6 +470,67 @@
 		border: 1px solid rgba(148, 163, 184, 0.18);
 		color: #e2e8f0;
 		font-size: 0.75rem;
+	}
+
+	.name-cell {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		min-width: 240px;
+	}
+
+	.name-cell__value {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.name-cell__input {
+		flex: 1;
+		min-width: 0;
+		padding: 0.25rem 0.4rem;
+		border-radius: 6px;
+		background: rgba(15, 23, 42, 0.7);
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		color: #e2e8f0;
+		font-size: 0.75rem;
+	}
+
+	.name-cell__btn {
+		padding: 0.22rem 0.45rem;
+		border-radius: 6px;
+		background: rgba(148, 163, 184, 0.12);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		color: #e2e8f0;
+		font-size: 0.7rem;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.name-cell__btn:hover {
+		background: rgba(148, 163, 184, 0.18);
+	}
+
+	.name-cell__btn:disabled {
+		opacity: 0.7;
+		cursor: default;
+	}
+
+	.name-cell__btn--primary {
+		background: rgba(34, 197, 94, 0.14);
+		border-color: rgba(34, 197, 94, 0.25);
+	}
+
+	.name-cell__btn--primary:hover {
+		background: rgba(34, 197, 94, 0.18);
+	}
+
+	.name-cell__error {
+		margin-top: 0.2rem;
+		color: rgba(248, 113, 113, 0.95);
+		font-size: 0.7rem;
 	}
 
 	.spirits-table {
