@@ -13,10 +13,52 @@ import { createClient } from '@supabase/supabase-js';
 import { readFile, readdir } from 'fs/promises';
 import { join, basename } from 'path';
 import { existsSync } from 'fs';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+function loadEnvFile(path) {
+	const envVars = {};
+	try {
+		const envContent = readFileSync(path, 'utf-8');
+		envContent.split('\n').forEach((line) => {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith('#')) return;
+			const [key, ...valueParts] = trimmed.split('=');
+			if (!key || valueParts.length === 0) return;
+			envVars[key.trim()] = valueParts.join('=').trim().replace(/^["']|["']$/g, '');
+		});
+	} catch {
+		// ignore missing file
+	}
+	return envVars;
+}
+
+function getEnv(key, envVars) {
+	return process.env[key] || envVars[key];
+}
 
 // Supabase configuration
-const SUPABASE_URL = 'https://gvxfokbptelmvvlxbigh.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2eGZva2JwdGVsbXZ2bHhiaWdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4NzY4NTAsImV4cCI6MjA2ODQ1Mjg1MH0.QLIyWCf8AGIUDmGlttbqRKrxxBSOBn_B5O-0yuCwlGE';
+const repoRoot = join(__dirname, '..');
+const envVars = {
+	...loadEnvFile(join(repoRoot, '.env.local')),
+	...loadEnvFile(join(repoRoot, '.env'))
+};
+
+const SUPABASE_URL =
+	getEnv('PUBLIC_SUPABASE_URL', envVars) ||
+	getEnv('VITE_SUPABASE_URL', envVars) ||
+	'https://gvxfokbptelmvvlxbigh.supabase.co';
+const SUPABASE_ANON_KEY = getEnv('PUBLIC_SUPABASE_ANON_KEY', envVars) || getEnv('VITE_SUPABASE_ANON_KEY', envVars);
+
+if (!SUPABASE_ANON_KEY) {
+	console.error('❌ Missing PUBLIC_SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY)');
+	console.error('Set it in `.env.local` before running this script.');
+	process.exit(1);
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     db: { schema: 'arc-spirits-rev2' }
