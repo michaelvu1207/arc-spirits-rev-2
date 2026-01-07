@@ -17,8 +17,9 @@
 	import ArtifactCardEditor from '$lib/components/artifacts/ArtifactCardEditor.svelte';
 	import { ArtifactsListView, ArtifactsTableView, ArtifactsGridView } from '$lib/components/artifacts';
 	import { PageLayout, type Tab } from '$lib/components/layout';
-	import { Button } from '$lib/components/ui';
+	import { Button, Input, Select } from '$lib/components/ui';
 	import { ConfirmDialog, FilterBar } from '$lib/components/shared';
+	import { normalizeTranslationRecord } from '$lib/features/artifacts/artifactTranslations';
 	import { getErrorMessage } from '$lib/utils';
 	import { processAndUploadImage } from '$lib/utils/storage';
 	import { useLookup } from '$lib/composables';
@@ -62,6 +63,121 @@
 	let search = $state('');
 	let tagFilter = $state<string[]>([]);
 
+	type ArtifactLanguage = 'base' | string;
+	const BASE_LANGUAGE: ArtifactLanguage = 'base';
+
+	let artifactLanguage = $state<ArtifactLanguage>(BASE_LANGUAGE);
+	let artifactLanguageSelect = $state<ArtifactLanguage>(BASE_LANGUAGE);
+	let newArtifactLanguageDraft = $state('');
+	let extraArtifactLanguages = $state<string[]>([]);
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function getArtifactName(artifact: ArtifactRow, lang: ArtifactLanguage = artifactLanguage): string {
+		if (lang === BASE_LANGUAGE) return artifact.name;
+		return getTranslationValue(artifact.name_translations, lang) ?? artifact.name;
+	}
+
+	function getArtifactBenefit(artifact: ArtifactRow, lang: ArtifactLanguage = artifactLanguage): string {
+		if (lang === BASE_LANGUAGE) return artifact.benefit ?? '';
+		return getTranslationValue(artifact.benefit_translations, lang) ?? artifact.benefit ?? '';
+	}
+
+	function getArtifactCardImagePath(artifact: ArtifactRow, lang: ArtifactLanguage = artifactLanguage): string | null {
+		if (lang === BASE_LANGUAGE) return artifact.card_image_path ?? null;
+		return getTranslationValue(artifact.card_image_path_translations, lang) ?? null;
+	}
+
+	function sanitizeLanguageForPath(lang: ArtifactLanguage): string {
+		if (lang === BASE_LANGUAGE) return BASE_LANGUAGE;
+		return lang.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+	}
+
+	function ensureLanguageListed(lang: string) {
+		if (!lang || lang === BASE_LANGUAGE) return;
+		if (!extraArtifactLanguages.includes(lang)) extraArtifactLanguages = [...extraArtifactLanguages, lang];
+	}
+
+	const detectedArtifactLanguages = $derived.by(() => {
+		const out = new Set<string>();
+		for (const artifact of artifacts) {
+			const sources = [
+				artifact.name_translations,
+				artifact.benefit_translations,
+				artifact.card_image_path_translations
+			];
+			for (const source of sources) {
+				if (!source || typeof source !== "object") continue;
+				for (const key of Object.keys(source as Record<string, unknown>)) {
+					const normalized = normalizeLanguageCode(key);
+					if (!normalized) continue;
+					out.add(normalized);
+				}
+			}
+		}
+		return Array.from(out).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+	});
+
+	const artifactLanguageOptions = $derived.by(() => {
+		const merged = new Set<string>([...detectedArtifactLanguages, ...extraArtifactLanguages]);
+		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
+		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+		return [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
+	});
+
+	$effect(() => {
+		if (artifactLanguageSelect !== artifactLanguage) {
+			artifactLanguageSelect = artifactLanguage;
+		}
+	});
+
+	function requestArtifactLanguageChange(nextRaw: string) {
+		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
+		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
+		if (next === artifactLanguage) return;
+
+		if (isEditorOpen) {
+			const ok = confirm('Switching language will discard any unsaved changes in the editor. Continue?');
+			if (!ok) {
+				artifactLanguageSelect = artifactLanguage;
+				return;
+			}
+			isEditorOpen = false;
+		}
+
+		artifactLanguage = next;
+		artifactLanguageSelect = next;
+	}
+
+	function addArtifactLanguage() {
+		const normalized = normalizeLanguageCode(newArtifactLanguageDraft);
+		if (!normalized) return;
+		ensureLanguageListed(normalized);
+		newArtifactLanguageDraft = '';
+		requestArtifactLanguageChange(normalized);
+	}
+
 	// Generator state
 	let currentTemplateId = $state<string | null>(null);
 	let templateName = $state('New Template');
@@ -91,8 +207,13 @@
 				// Search
 				if (search) {
 					const q = search.toLowerCase();
-					const matchesName = artifact.name?.toLowerCase().includes(q);
-					const matchesBenefit = artifact.benefit?.toLowerCase().includes(q);
+					const baseName = (artifact.name ?? '').toLowerCase();
+					const baseBenefit = (artifact.benefit ?? '').toLowerCase();
+					const localizedName = getArtifactName(artifact, artifactLanguage).toLowerCase();
+					const localizedBenefit = getArtifactBenefit(artifact, artifactLanguage).toLowerCase();
+
+					const matchesName = baseName.includes(q) || localizedName.includes(q);
+					const matchesBenefit = baseBenefit.includes(q) || localizedBenefit.includes(q);
 					if (!matchesName && !matchesBenefit) {
 						return false;
 					}
@@ -121,14 +242,14 @@
 				}
 
 				// Within same guardian (or both no guardian), sort by artifact name
-				return (a.name || '').localeCompare(b.name || '');
+				return getArtifactName(a, artifactLanguage).localeCompare(getArtifactName(b, artifactLanguage));
 			})
 	);
 
 	// Generation status
 	const generationStatus = $derived({
 		total: artifacts.length,
-		withCards: artifacts.filter((a) => a.card_image_path).length,
+		withCards: artifacts.filter((a) => Boolean(getArtifactCardImagePath(a, artifactLanguage))).length,
 		selected: selectedArtifacts.size
 	});
 
@@ -203,11 +324,14 @@
 
 		const payload = {
 			name: toSave.name,
-			benefit: toSave.benefit,
+			benefit: toSave.benefit ?? '',
 			guardian_id: toSave.guardian_id,
 			tag_ids: toSave.tag_ids ?? [],
 			recipe_box: toSave.recipe_box,
-			quantity: toSave.quantity ?? 1
+			quantity: toSave.quantity ?? 1,
+			name_translations: normalizeTranslationRecord(toSave.name_translations, 'name'),
+			benefit_translations: normalizeTranslationRecord(toSave.benefit_translations, 'benefit'),
+			card_image_path_translations: normalizeTranslationRecord(toSave.card_image_path_translations, 'path')
 		};
 
 		try {
@@ -521,6 +645,52 @@
 		selectedArtifacts = new Set();
 	}
 
+	function renderArtifactForLanguage(artifact: ArtifactRow, lang: ArtifactLanguage): ArtifactRow {
+		return {
+			...artifact,
+			name: getArtifactName(artifact, lang),
+			benefit: getArtifactBenefit(artifact, lang)
+		};
+	}
+
+	function getCardFilenameForLanguage(lang: ArtifactLanguage): string {
+		if (lang === BASE_LANGUAGE) return 'card';
+		const safe = sanitizeLanguageForPath(lang);
+		return safe ? `card_${safe}` : 'card';
+	}
+
+	type CardGenerationResult = { successes: string[]; errors: string[] };
+
+	async function generateCardsBatch(artifactList: ArtifactRow[], langs: ArtifactLanguage[]): Promise<void> {
+		if (langs.length === 0) return;
+
+		generatingCards = true;
+		generationProgress = { current: 0, total: artifactList.length * langs.length };
+
+		const allErrors: string[] = [];
+		const allSuccesses: string[] = [];
+		let done = 0;
+
+		for (const lang of langs) {
+			const { successes, errors } = await generateCardsForLanguage(artifactList, lang, () => {
+				done += 1;
+				generationProgress = { current: done, total: artifactList.length * langs.length };
+			});
+			allSuccesses.push(...successes);
+			allErrors.push(...errors);
+		}
+
+		generatingCards = false;
+		generationProgress = { current: 0, total: 0 };
+
+		await loadData();
+
+		const message = `Generated ${allSuccesses.length} card image(s) successfully.\n${allErrors.length > 0 ? `\n${allErrors.length} errors:\n${allErrors.slice(0, 10).join('\n')}${allErrors.length > 10 ? `\n... and ${allErrors.length - 10} more` : ''}` : ''}`;
+		alert(message);
+
+		selectedArtifacts = new Set();
+	}
+
 	async function generateSelectedCards() {
 		const selected = artifacts.filter((a) => selectedArtifacts.has(a.id));
 		if (selected.length === 0) {
@@ -528,41 +698,72 @@
 			return;
 		}
 
-		if (!confirm(`Generate card images for ${selected.length} selected artifact${selected.length !== 1 ? 's' : ''}? This may take a while.`)) {
+		if (!confirm(`Generate card images for ${selected.length} selected artifact${selected.length !== 1 ? 's' : ''} (${artifactLanguage === BASE_LANGUAGE ? 'Default' : artifactLanguage})? This may take a while.`)) {
 			return;
 		}
 
-		await generateCards(selected);
+		await generateCardsBatch(selected, [artifactLanguage]);
 	}
 
 	async function generateAllCards() {
-		if (!confirm(`Generate card images for all ${artifacts.length} artifacts? This may take a while.`)) {
+		if (!confirm(`Generate card images for all ${artifacts.length} artifacts (${artifactLanguage === BASE_LANGUAGE ? 'Default' : artifactLanguage})? This may take a while.`)) {
 			return;
 		}
 
-		await generateCards(artifacts);
+		await generateCardsBatch(artifacts, [artifactLanguage]);
 	}
 
-	async function generateCards(artifactList: ArtifactRow[]) {
-		generatingCards = true;
-		generationProgress = { current: 0, total: artifactList.length };
+	async function generateSelectedCardsAllLanguages() {
+		const selected = artifacts.filter((a) => selectedArtifacts.has(a.id));
+		if (selected.length === 0) {
+			alert('Please select at least one artifact');
+			return;
+		}
 
+		if (!confirm(`Generate card images for ${selected.length} selected artifacts in ALL languages? This may take a while.`)) {
+			return;
+		}
+
+		const langs = artifactLanguageOptions
+			.map((o) => (typeof o === 'string' ? o : String(o.value)))
+			.filter((l) => l !== '') as ArtifactLanguage[];
+
+		await generateCardsBatch(selected, langs);
+	}
+
+	async function generateAllCardsAllLanguages() {
+		if (!confirm(`Generate card images for all ${artifacts.length} artifacts in ALL languages? This may take a while.`)) {
+			return;
+		}
+
+		const langs = artifactLanguageOptions
+			.map((o) => (typeof o === 'string' ? o : String(o.value)))
+			.filter((l) => l !== '') as ArtifactLanguage[];
+
+		await generateCardsBatch(artifacts, langs);
+	}
+
+	async function generateCardsForLanguage(
+		artifactList: ArtifactRow[],
+		lang: ArtifactLanguage,
+		onArtifactDone: () => void
+	): Promise<CardGenerationResult> {
 		const errors: string[] = [];
 		const successes: string[] = [];
 
-		for (let i = 0; i < artifactList.length; i++) {
-			const artifact = artifactList[i];
-			generationProgress = { current: i + 1, total: artifactList.length };
+		for (const artifact of artifactList) {
 
 			if (!artifact.id || !artifact.name) {
 				errors.push(`${artifact.name || 'Unknown'}: Missing ID or name`);
+				onArtifactDone();
 				continue;
 			}
 
 			try {
-				const pngBlob = await generateArtifactCardPNG(artifact, origins, runes, tags, guardians);
+				const renderArtifact = renderArtifactForLanguage(artifact, lang);
+				const pngBlob = await generateArtifactCardPNG(renderArtifact, origins, runes, tags, guardians);
 
-				const fileName = 'card';
+				const fileName = getCardFilenameForLanguage(lang);
 				const folder = `artifacts/${artifact.id}`;
 
 				const { data, error: uploadError } = await processAndUploadImage(pngBlob, {
@@ -574,40 +775,45 @@
 
 				if (uploadError) {
 					errors.push(`${artifact.name}: ${uploadError.message}`);
+					onArtifactDone();
 					continue;
 				}
 
 				const uploadedPath = data?.path ?? '';
 
+				const updatePayload: Partial<ArtifactRow> = {
+					updated_at: new Date().toISOString()
+				};
+
+				if (lang === BASE_LANGUAGE) {
+					updatePayload.card_image_path = uploadedPath;
+				} else {
+					const current = artifact.card_image_path_translations ?? {};
+					updatePayload.card_image_path_translations = {
+						...(current as Record<string, string>),
+						[lang]: uploadedPath
+					};
+				}
+
 				const { error: updateError } = await supabase
 					.from('artifacts')
-					.update({
-						card_image_path: uploadedPath,
-						updated_at: new Date().toISOString()
-					})
+					.update(updatePayload)
 					.eq('id', artifact.id);
 
 				if (updateError) {
 					errors.push(`${artifact.name}: ${updateError.message}`);
 				} else {
-					successes.push(artifact.name);
+					successes.push(renderArtifact.name);
 				}
 			} catch (error) {
 				errors.push(`${artifact.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
 			}
 
 			await new Promise((resolve) => setTimeout(resolve, 50));
+			onArtifactDone();
 		}
 
-		generatingCards = false;
-		generationProgress = { current: 0, total: 0 };
-
-		await loadData();
-
-		const message = `Generated ${successes.length} card images successfully.\n${errors.length > 0 ? `\n${errors.length} errors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}` : ''}`;
-		alert(message);
-
-		selectedArtifacts = new Set();
+		return { successes, errors };
 	}
 </script>
 
@@ -625,7 +831,31 @@
 	{/snippet}
 
 	{#snippet tabActions()}
-		<span class="artifact-count">{filteredArtifacts.length} artifacts</span>
+		<div class="artifact-actions-row">
+			<span class="artifact-count">{filteredArtifacts.length} artifacts</span>
+			<div class="artifact-language">
+				<span class="artifact-language__label">Language</span>
+				<Select
+					bind:value={artifactLanguageSelect}
+					options={artifactLanguageOptions}
+					onchange={(e) => requestArtifactLanguageChange((e.currentTarget as HTMLSelectElement).value)}
+					disabled={loading || generatingCards}
+				/>
+				<Input
+					bind:value={newArtifactLanguageDraft}
+					placeholder="Add lang (e.g. es, fr-CA)"
+					disabled={loading || generatingCards}
+				/>
+				<Button
+					variant="secondary"
+					size="sm"
+					onclick={addArtifactLanguage}
+					disabled={loading || generatingCards || newArtifactLanguageDraft.trim().length === 0}
+				>
+					Add
+				</Button>
+			</div>
+		</div>
 	{/snippet}
 
 	<FilterBar
@@ -651,6 +881,7 @@
 	{:else if activeTab === 'list'}
 		<ArtifactsListView
 			artifacts={filteredArtifacts}
+			language={artifactLanguage}
 			{tagLookup}
 			{guardianLookup}
 			{runeLookup}
@@ -660,6 +891,7 @@
 	{:else if activeTab === 'table'}
 		<ArtifactsTableView
 			artifacts={filteredArtifacts}
+			language={artifactLanguage}
 			{tagLookup}
 			{guardianLookup}
 			{runeLookup}
@@ -897,10 +1129,24 @@
 					</Button>
 					<Button
 						variant="secondary"
+						onclick={generateSelectedCardsAllLanguages}
+						disabled={generatingCards || selectedArtifacts.size === 0 || artifactLanguageOptions.length <= 1}
+					>
+						Generate Selected (All)
+					</Button>
+					<Button
+						variant="secondary"
 						onclick={generateAllCards}
 						disabled={generatingCards || artifacts.length === 0}
 					>
 						Generate All
+					</Button>
+					<Button
+						variant="secondary"
+						onclick={generateAllCardsAllLanguages}
+						disabled={generatingCards || artifacts.length === 0 || artifactLanguageOptions.length <= 1}
+					>
+						Generate All (All)
 					</Button>
 					<Button variant="secondary" onclick={() => (isGalleryOpen = true)}>
 						View Gallery ({generationStatus.withCards})
@@ -929,6 +1175,9 @@
 
 			<div class="artifacts-grid">
 				{#each filteredArtifacts as artifact (artifact.id)}
+					{@const displayName = getArtifactName(artifact, artifactLanguage)}
+					{@const displayBenefit = getArtifactBenefit(artifact, artifactLanguage)}
+					{@const cardPath = getArtifactCardImagePath(artifact, artifactLanguage)}
 					<div
 						class="artifact-card"
 						class:selected={selectedArtifacts.has(artifact.id)}
@@ -949,12 +1198,12 @@
 								onclick={(e) => e.stopPropagation()}
 								onchange={() => toggleSelection(artifact.id)}
 							/>
-							<h3>{artifact.name}</h3>
-							{#if artifact.card_image_path}
+							<h3>{displayName}</h3>
+							{#if cardPath}
 								<span class="status-badge-check">✓</span>
 							{/if}
 						</div>
-						<p class="benefit">{artifact.benefit || 'No benefit description'}</p>
+						<p class="benefit">{displayBenefit || 'No benefit description'}</p>
 						<div class="card-footer">
 							{#if artifact.guardian_id}
 								<span class="tag guardian-tag">Guardian</span>
@@ -983,6 +1232,7 @@
 	<ArtifactEditorDrawer
 		bind:isOpen={isEditorOpen}
 		artifact={editingArtifact}
+		language={artifactLanguage}
 		{origins}
 		guardians={guardians}
 		{runes}
@@ -999,7 +1249,7 @@
 		on:close={() => (isTagManagerOpen = false)}
 	/>
 
-	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} {origins} {runes} {tags} {guardians} />
+	<ArtifactCardGallery bind:isOpen={isGalleryOpen} {artifacts} language={artifactLanguage} {origins} {runes} {tags} {guardians} />
 
 <ArtifactCardEditor bind:isOpen={isCardEditorOpen} />
 
@@ -1014,6 +1264,27 @@
 	.artifact-count {
 		font-size: 0.7rem;
 		color: #64748b;
+	}
+
+	.artifact-actions-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		width: 100%;
+	}
+
+	.artifact-language {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.artifact-language__label {
+		font-size: 0.7rem;
+		color: #94a3b8;
 	}
 
 	.loading-state {

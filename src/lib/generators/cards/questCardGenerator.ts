@@ -255,11 +255,14 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 	return lines;
 }
 
+type QuestLikeRow = Pick<TravelerQuestRow, 'title' | 'description' | 'reward_text' | 'reward_icon_ids' | 'quantity'>;
+
 export async function drawQuestCard(
 	ctx: CanvasRenderingContext2D,
-	quest: TravelerQuestRow
+	quest: QuestLikeRow,
+	headerLabel: string = 'Quest'
 ): Promise<void> {
-	const displayTitle = quest.title || 'Quest';
+	const displayTitle = quest.title || headerLabel;
 	const displayDescription = quest.description || 'Details yet unknown...';
 	const rewardText = quest.reward_text?.trim() || '';
 	const rewardIconIds = quest.reward_icon_ids || [];
@@ -285,7 +288,7 @@ export async function drawQuestCard(
 	const textWidth = contentWidth - CONTENT_PADDING_X * 2;
 	let y = CONTENT_PADDING_TOP;
 
-	// Header: "~ Quest ~"
+	// Header: "~ {headerLabel} ~"
 	ctx.save();
 	ctx.font = '700 28px "Opsilon", "Crimson Text", serif';
 	ctx.fillStyle = TEXT_COLORS.ornament;
@@ -293,7 +296,7 @@ export async function drawQuestCard(
 	ctx.textBaseline = 'alphabetic';
 
 	const headerY = y + 28;
-	const questText = 'Quest';
+	const questText = headerLabel;
 	const ornamentGap = 16;
 	const questWidth = ctx.measureText(questText).width;
 	const centerX = contentX + contentWidth / 2;
@@ -303,7 +306,7 @@ export async function drawQuestCard(
 	ctx.fillText('~', centerX - questWidth / 2 - ornamentGap - 8, headerY);
 	ctx.fillText('~', centerX + questWidth / 2 + ornamentGap + 8, headerY);
 
-	// Draw "Quest" text
+	// Draw label text
 	ctx.font = '400 22px "Opsilon", serif';
 	ctx.fillStyle = TEXT_COLORS.header;
 	ctx.letterSpacing = '3px';
@@ -463,6 +466,7 @@ export async function generateQuestCardPNG(quest: TravelerQuestRow): Promise<Blo
 
 	const canvas = createCanvas(QUEST_CARD_WIDTH, QUEST_CARD_HEIGHT);
 	const ctx = getContext(canvas);
-	await drawQuestCard(ctx, quest);
+	await drawQuestCard(ctx, quest, 'Quest');
 	return canvasToBlob(canvas);
 }
+

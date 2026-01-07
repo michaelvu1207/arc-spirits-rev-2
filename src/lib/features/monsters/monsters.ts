@@ -8,6 +8,10 @@ export interface MonsterFormData {
 	name: string;
 	damage: number;
 	barrier: number;
+	/** Unified reward-track slots (slot0 participation, slotN killed). */
+	reward_track: string[][];
+	/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
+	show_tutorial: boolean;
 	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 	monster_classification: MonsterClassification;
 	icon: string | null;
@@ -29,6 +33,8 @@ export function emptyMonsterForm(): MonsterFormData {
 		name: '',
 		damage: DEFAULT_DAMAGE,
 		barrier: DEFAULT_BARRIER,
+		reward_track: [[], []],
+		show_tutorial: true,
 		state: DEFAULT_STATE,
 		monster_classification: DEFAULT_CLASSIFICATION,
 		icon: null,
@@ -65,6 +71,8 @@ export function monsterRowToForm(row: MonsterRow): MonsterFormData {
 		name: row.name,
 		damage: row.damage,
 		barrier: row.barrier,
+		reward_track: normalizeRewardTrack(row.barrier ?? DEFAULT_BARRIER, (row as any).reward_track),
+		show_tutorial: (row as any).show_tutorial ?? true,
 		state: row.state,
 		monster_classification: row.monster_classification ?? DEFAULT_CLASSIFICATION,
 		icon: row.icon,
@@ -99,6 +107,8 @@ export async function saveMonsterRecord(
 		name: sanitized.name,
 		damage: sanitized.damage,
 		barrier: sanitized.barrier,
+		reward_track: sanitized.reward_track,
+		show_tutorial: sanitized.show_tutorial,
 		state: sanitized.state,
 		monster_classification: sanitized.monster_classification,
 		icon: sanitized.icon,
@@ -161,6 +171,8 @@ function sanitizeMonsterForm(form: MonsterFormData): MonsterFormData {
 	const name = form.name.trim();
 	const damage = Number.isFinite(form.damage) ? Math.max(0, Math.round(form.damage)) : DEFAULT_DAMAGE;
 	const barrier = Number.isFinite(form.barrier) ? Math.max(0, Math.round(form.barrier)) : DEFAULT_BARRIER;
+	const reward_track = normalizeRewardTrack(barrier, form.reward_track);
+	const show_tutorial = Boolean(form.show_tutorial);
 	const state: MonsterFormData['state'] = form.state ?? DEFAULT_STATE;
 	const classification: MonsterFormData['monster_classification'] =
 		form.monster_classification === 'abyss_guardian' || form.monster_classification === 'boss'
@@ -180,6 +192,8 @@ function sanitizeMonsterForm(form: MonsterFormData): MonsterFormData {
 		name,
 		damage,
 		barrier,
+		reward_track,
+		show_tutorial,
 		state,
 		monster_classification: classification,
 		icon,
@@ -189,4 +203,24 @@ function sanitizeMonsterForm(form: MonsterFormData): MonsterFormData {
 		special_conditions,
 		quantity
 	};
+}
+
+function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
+	const barrier = Math.max(0, Math.round(barrierValue));
+	const killedIndex = Math.max(1, barrier);
+	const targetLen = killedIndex + 1; // includes slot0 participation
+
+	const safe: string[][] = Array.isArray(track)
+		? track.map((slot) =>
+				Array.isArray(slot)
+					? slot
+							.filter((id): id is string => typeof id === 'string')
+							.map((id) => id.trim())
+							.filter(Boolean)
+					: []
+			)
+		: [];
+
+	while (safe.length < targetLen) safe.push([]);
+	return safe.slice(0, targetLen);
 }

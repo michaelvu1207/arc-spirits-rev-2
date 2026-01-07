@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { SpecialEffectRow, TradeRow, GainRow } from '$lib/types/gameData';
 	import { getErrorMessage } from '$lib/utils';
-	import { MonsterCardPreview, RewardRowsEditor } from '$lib/components/monsters';
+	import { getIconPoolUrl } from '$lib/utils/iconPool';
+		import { MonsterCardPreview } from '$lib/components/monsters';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import LazyMount from '$lib/components/shared/LazyMount.svelte';
 	import Modal from '../layout/Modal.svelte';
-	import { ConfirmDialog, ImageUploader, SpecialEffectPicker } from '$lib/components/shared';
+	import { ConfirmDialog, IconPicker, ImageUploader, SpecialEffectPicker } from '$lib/components/shared';
 	import GainRowsEditor from '$lib/components/shared/GainRowsEditor.svelte';
 	import TradeRowsEditor from '$lib/components/shared/TradeRowsEditor.svelte';
 	import EventCardPreview from './EventCardPreview.svelte';
@@ -22,6 +23,10 @@
 		description: string | null;
 		damage: number;
 		barrier: number;
+		/** Unified reward-track slots (slot0 participation, slotN killed). */
+		reward_track: string[][];
+		/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
+		show_tutorial: boolean;
 		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 		monster_classification: 'monster' | 'abyss_guardian' | 'boss';
 		icon: string | null;
@@ -130,6 +135,10 @@
 	let inlineEffectOpenId = $state<string | null>(null);
 	let inlineStateEdits = $state<Record<string, MonsterState>>({});
 	const inlineAutosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+		let rewardSlotPickerOpen = $state(false);
+		let rewardSlotPickerIndex = $state<number | null>(null);
+		let rewardSlotPickerSelection = $state<string[]>([]);
 
 	const specialEffectById = $derived.by(() => new Map(specialEffects.map((effect) => [effect.id, effect])));
 	const sortedSpecialEffects = $derived.by(() => [...specialEffects].sort((a, b) => a.name.localeCompare(b.name)));
@@ -337,17 +346,24 @@
 		return safeRows.length > 0 ? safeRows : [createEmptyGainRow()];
 	}
 
-	function monsterToFormData(monster: Monster): MonsterFormData {
-		return {
-			name: monster.name,
-			subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
-			description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
-			damage: monster.damage ?? 0,
-			barrier: monster.barrier ?? 0,
-			state: monster.state,
-			monster_classification: monster.monster_classification ?? 'monster',
-			icon: monster.icon,
-			image_path: monster.image_path,
+		function monsterToFormData(monster: Monster): MonsterFormData {
+			const barrier = monster.barrier ?? 0;
+			const rewardTrack = normalizeRewardTrack(
+				barrier,
+				(monster as { reward_track?: string[][] | null }).reward_track
+			);
+			return {
+				name: monster.name,
+				subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
+				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
+				damage: monster.damage ?? 0,
+				barrier,
+				reward_track: rewardTrack,
+				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
+				state: monster.state,
+				monster_classification: monster.monster_classification ?? 'monster',
+				icon: monster.icon,
+				image_path: monster.image_path,
 			invade_location_id: monster.invade_location_id ?? null,
 			order_num: monster.order_num,
 			reward_rows: monster.reward_rows ?? [],
@@ -358,9 +374,59 @@
 			),
 			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
 			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-			quantity: monster.quantity ?? 1
-		};
-	}
+				quantity: monster.quantity ?? 1
+			};
+		}
+
+		function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
+			const barrier = Math.max(0, Math.round(barrierValue));
+			const killedIndex = Math.max(1, barrier);
+			const targetLen = killedIndex + 1; // includes slot0 participation
+
+			const safe: string[][] = Array.isArray(track)
+				? track.map((slot) =>
+						Array.isArray(slot)
+							? slot
+									.filter((id): id is string => typeof id === 'string')
+									.map((id) => id.trim())
+									.filter(Boolean)
+							: []
+					)
+				: [];
+
+			while (safe.length < targetLen) safe.push([]);
+			return safe.slice(0, targetLen);
+		}
+
+		function openRewardSlotPicker(slotIndex: number) {
+			const slots = monsterFormData.reward_track ?? [];
+			if (slotIndex < 0 || slotIndex >= slots.length) return;
+			rewardSlotPickerIndex = slotIndex;
+			rewardSlotPickerSelection = [...(slots[slotIndex] ?? [])];
+			rewardSlotPickerOpen = true;
+		}
+
+		function closeRewardSlotPicker() {
+			rewardSlotPickerOpen = false;
+			rewardSlotPickerIndex = null;
+			rewardSlotPickerSelection = [];
+		}
+
+		function applyRewardSlotSelection(ids: string[]) {
+			if (rewardSlotPickerIndex === null) return;
+			const next = monsterFormData.reward_track.map((slot, idx) => (idx === rewardSlotPickerIndex ? ids : slot));
+			monsterFormData.reward_track = next;
+		}
+
+		function clearRewardSlot(slotIndex: number) {
+			const slots = monsterFormData.reward_track ?? [];
+			if (slotIndex < 0 || slotIndex >= slots.length) return;
+			const next = slots.map((slot, idx) => (idx === slotIndex ? [] : slot));
+			monsterFormData.reward_track = next;
+			if (rewardSlotPickerIndex === slotIndex) {
+				rewardSlotPickerSelection = [];
+			}
+		}
 
 	function parseNonNegativeInt(value: string, fallback: number): number {
 		const parsed = Number(value);
@@ -513,10 +579,10 @@
 		}
 	}
 
-	async function saveInlineEdits(monsterId: string) {
-		if (inlineStatsSaving[monsterId]) return;
-		const monster = monsterById.get(monsterId);
-		if (!monster) return;
+		async function saveInlineEdits(monsterId: string) {
+			if (inlineStatsSaving[monsterId]) return;
+			const monster = monsterById.get(monsterId);
+			if (!monster) return;
 
 		const statsEdit = inlineStatsEdits[monsterId];
 		const effectsEdit = inlineEffectEdits[monsterId];
@@ -527,14 +593,16 @@
 		inlineStatsError = { ...inlineStatsError, [monsterId]: null };
 		try {
 			const formData = monsterToFormData(monster);
-			const merged: MonsterFormData = {
-				...formData,
-				damage: statsEdit?.damage ?? formData.damage,
-				barrier: statsEdit?.barrier ?? formData.barrier,
-				state: stateEdit ?? formData.state,
-				special_effect_ids: effectsEdit ?? formData.special_effect_ids
-			};
-			await onMonsterSave(merged, monsterId);
+			const nextBarrier = statsEdit?.barrier ?? formData.barrier;
+				const merged: MonsterFormData = {
+					...formData,
+					damage: statsEdit?.damage ?? formData.damage,
+					barrier: nextBarrier,
+					reward_track: normalizeRewardTrack(nextBarrier, formData.reward_track),
+					state: stateEdit ?? formData.state,
+					special_effect_ids: effectsEdit ?? formData.special_effect_ids
+				};
+				await onMonsterSave(merged, monsterId);
 
 			const nextStats = { ...inlineStatsEdits };
 			delete nextStats[monsterId];
@@ -560,6 +628,8 @@
 		description: null,
 		damage: 0,
 		barrier: 0,
+		reward_track: [[], []],
+		show_tutorial: true,
 		state: 'tainted',
 		monster_classification: 'monster',
 		icon: null,
@@ -591,20 +661,22 @@
 		return event?.title ?? event?.name ?? 'Unknown Event';
 	}
 
-	function openNewMonster() {
-		if (!showMonsters) return;
-		editorType = 'monster';
-		editingId = null;
-		monsterFormData = {
-			name: '',
-			subtext: null,
-			description: null,
-			damage: 0,
-			barrier: 0,
-			state: 'tainted',
-			monster_classification: 'monster',
-			icon: null,
-			image_path: null,
+		function openNewMonster() {
+			if (!showMonsters) return;
+			editorType = 'monster';
+			editingId = null;
+			monsterFormData = {
+				name: '',
+				subtext: null,
+				description: null,
+				damage: 0,
+				barrier: 0,
+				reward_track: [[], []],
+				show_tutorial: true,
+				state: 'tainted',
+				monster_classification: 'monster',
+				icon: null,
+				image_path: null,
 			invade_location_id: null,
 			order_num: deckOrder.length,
 			reward_rows: [],
@@ -631,7 +703,7 @@
 		editorOpen = true;
 	}
 
-	function openEdit(type: 'monster' | 'event', id: string) {
+		function openEdit(type: 'monster' | 'event', id: string) {
 		if (type === 'monster' && !showMonsters) return;
 		if (type === 'event' && !showEvents) return;
 
@@ -649,19 +721,21 @@
 			}
 			editorType = type;
 			editingId = id;
-			const baseForm = monsterToFormData(monster);
-			const statsEdit = inlineStatsEdits[id];
-			const effectsEdit = inlineEffectEdits[id];
-			const stateEdit = inlineStateEdits[id];
-			monsterFormData = {
-				...baseForm,
-				damage: statsEdit?.damage ?? baseForm.damage,
-				barrier: statsEdit?.barrier ?? baseForm.barrier,
-				state: stateEdit ?? baseForm.state,
-				special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
-			};
-			onSelectMonster?.(monster);
-			editorOpen = true;
+				const baseForm = monsterToFormData(monster);
+				const statsEdit = inlineStatsEdits[id];
+				const effectsEdit = inlineEffectEdits[id];
+				const stateEdit = inlineStateEdits[id];
+				const nextBarrier = statsEdit?.barrier ?? baseForm.barrier;
+				monsterFormData = {
+					...baseForm,
+					damage: statsEdit?.damage ?? baseForm.damage,
+					barrier: nextBarrier,
+					reward_track: normalizeRewardTrack(nextBarrier, baseForm.reward_track),
+					state: stateEdit ?? baseForm.state,
+					special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
+				};
+				onSelectMonster?.(monster);
+				editorOpen = true;
 		} else {
 			const event = eventById.get(id);
 			if (!event) return;
@@ -693,22 +767,26 @@
 		showDeleteConfirm = true;
 	}
 
-	async function duplicateMonster(id: string) {
-		if (!showMonsters) return;
-		const monster = monsterById.get(id);
-		if (!monster) return;
+		async function duplicateMonster(id: string) {
+			if (!showMonsters) return;
+			const monster = monsterById.get(id);
+			if (!monster) return;
 
-		duplicatingId = id;
-		const copyForm: MonsterFormData = {
-			name: monster.name,
-			subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
-			description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
-			damage: monster.damage,
-			barrier: monster.barrier,
-			state: monster.state,
-			monster_classification: monster.monster_classification ?? 'monster',
-			icon: monster.icon,
-			image_path: monster.image_path,
+			const barrierValue = monster.barrier ?? 0;
+			duplicatingId = id;
+			const rewardTrack = normalizeRewardTrack(barrierValue, (monster as { reward_track?: string[][] | null }).reward_track);
+			const copyForm: MonsterFormData = {
+				name: monster.name,
+				subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
+				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
+				damage: monster.damage,
+				barrier: barrierValue,
+				reward_track: rewardTrack,
+				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
+				state: monster.state,
+				monster_classification: monster.monster_classification ?? 'monster',
+				icon: monster.icon,
+				image_path: monster.image_path,
 			invade_location_id: monster.invade_location_id ?? null,
 			order_num: monster.order_num ?? deckOrder.length,
 			reward_rows: monster.reward_rows ?? [],
@@ -898,20 +976,22 @@
 		}
 	}
 
-	async function saveMonster() {
-		if (!showMonsters) return;
-		if (!monsterFormData.name.trim()) {
-			alert(`${monsterLabel} name is required.`);
+		async function saveMonster() {
+			if (!showMonsters) return;
+			if (!monsterFormData.name.trim()) {
+				alert(`${monsterLabel} name is required.`);
 			return;
 		}
 
 		try {
-			const sanitized: MonsterFormData = {
-				...monsterFormData,
-				damage: coerceNonNegativeInt(monsterFormData.damage, 0),
-				barrier: coerceNonNegativeInt(monsterFormData.barrier, 0)
-			};
-			const id = await onMonsterSave(sanitized, editingId);
+			const barrierValue = coerceNonNegativeInt(monsterFormData.barrier, 0);
+				const sanitized: MonsterFormData = {
+					...monsterFormData,
+					damage: coerceNonNegativeInt(monsterFormData.damage, 0),
+					barrier: barrierValue,
+					reward_track: normalizeRewardTrack(barrierValue, monsterFormData.reward_track)
+				};
+				const id = await onMonsterSave(sanitized, editingId);
 			if (!editingId) {
 				deckOrder = [...deckOrder, { type: 'monster', id }];
 			}
@@ -1087,6 +1167,38 @@
 			closeEditor();
 		}
 	});
+
+		$effect(() => {
+			if (!editorOpen || editorType !== 'monster') return;
+			const barrierValue = coerceNonNegativeInt(monsterFormData.barrier, 0);
+
+			const normalizedTrack = normalizeRewardTrack(barrierValue, monsterFormData.reward_track);
+			const currentTrack = monsterFormData.reward_track;
+			let trackChanged = normalizedTrack.length !== currentTrack.length;
+			if (!trackChanged) {
+				for (let i = 0; i < normalizedTrack.length; i++) {
+					const a = normalizedTrack[i] ?? [];
+					const b = currentTrack[i] ?? [];
+					if (a.length !== b.length) {
+						trackChanged = true;
+						break;
+					}
+					for (let j = 0; j < a.length; j++) {
+						if (a[j] !== b[j]) {
+							trackChanged = true;
+							break;
+						}
+					}
+					if (trackChanged) break;
+				}
+			}
+			if (trackChanged) {
+				monsterFormData.reward_track = normalizedTrack;
+			}
+			if (rewardSlotPickerIndex !== null && rewardSlotPickerIndex >= normalizedTrack.length) {
+				closeRewardSlotPicker();
+			}
+		});
 
 	$effect(() => {
 		if (!showEvents && editorType === 'event') {
@@ -1479,6 +1591,13 @@
 								<Input type="number" min={0} bind:value={monsterFormData.barrier} />
 							</FormField>
 						</div>
+
+						<FormField label="Tutorial" helperText="If off, the card shows Participation rewards (reward track slot 0) instead.">
+							<label class="checkbox-field">
+								<input type="checkbox" bind:checked={monsterFormData.show_tutorial} />
+								<span>Show tutorial callout</span>
+							</label>
+						</FormField>
 					{/if}
 
 					<div class="grid-2">
@@ -1561,11 +1680,67 @@
 						</div>
 					{/if}
 
-					{#if showRewardRows}
-						<div class="full-width">
-							<RewardRowsEditor bind:rewardRows={monsterFormData.reward_rows} />
-						</div>
-					{/if}
+						{#if showRewardRows}
+							{@const killedIndex = Math.max(1, coerceNonNegativeInt(monsterFormData.barrier, 0))}
+							<div class="full-width reward-track-editor">
+								<div class="reward-track-editor__header">
+									<div class="reward-track-editor__title">Reward Track</div>
+									<div class="reward-track-editor__hint">
+										Slot 0 is Participation (shown when Tutorial is off). Slot {killedIndex} is KILLED.
+									</div>
+								</div>
+
+								<div class="reward-track-editor__slots">
+									{#each monsterFormData.reward_track as iconIds, idx (idx)}
+										{@const label =
+											idx === 0 ? 'Participation (Reserved)' : idx === killedIndex ? 'KILLED' : `Damage ${idx}`}
+										{@const urls = iconIds.map((id) => getIconPoolUrl(id)).filter(Boolean) as string[]}
+										<button type="button" class="reward-track-slot" onclick={() => openRewardSlotPicker(idx)}>
+											<div class="reward-track-slot__label">{label}</div>
+											<div class="reward-track-slot__icons">
+												{#if urls.length === 0}
+													<span class="reward-track-slot__placeholder">+</span>
+												{:else}
+													{#each urls.slice(0, 8) as url, urlIdx (`${url}:${urlIdx}`)}
+														<img src={url} alt="" loading="lazy" decoding="async" />
+													{/each}
+													{#if urls.length > 8}
+														<span class="reward-track-slot__more">+{urls.length - 8}</span>
+													{/if}
+												{/if}
+											</div>
+										</button>
+									{/each}
+								</div>
+
+								{#if rewardSlotPickerOpen && rewardSlotPickerIndex !== null}
+									<div class="reward-track-editor__picker">
+										<div class="reward-track-editor__picker-header">
+											<span>Editing slot #{rewardSlotPickerIndex}</span>
+											<div class="reward-track-editor__picker-actions">
+												<Button variant="secondary" size="sm" onclick={closeRewardSlotPicker}>
+													Done
+												</Button>
+												<Button
+													variant="danger"
+													size="sm"
+													onclick={() => clearRewardSlot(rewardSlotPickerIndex!)}
+												>
+													Clear
+												</Button>
+											</div>
+										</div>
+										<IconPicker
+											bind:selected={rewardSlotPickerSelection}
+											onselect={applyRewardSlotSelection}
+											multiple={true}
+											maxSelection={12}
+											allowDuplicates={true}
+										/>
+									</div>
+								{/if}
+							</div>
+						{/if}
 
 					<div class="editor-actions">
 						<Button variant="primary" type="submit">Save</Button>
@@ -2225,13 +2400,149 @@
 		gap: 0.75rem;
 	}
 
+	.checkbox-field {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		font-size: 0.9rem;
+		color: rgba(226, 232, 240, 0.85);
+	}
+
+	.checkbox-field input[type='checkbox'] {
+		width: 16px;
+		height: 16px;
+		accent-color: rgba(59, 130, 246, 0.85);
+	}
+
 	.full-width {
 		width: 100%;
 	}
 
-	.editor-actions {
-		margin-top: 0.25rem;
-		display: flex;
+		.reward-track-editor {
+			display: flex;
+			flex-direction: column;
+			gap: 0.6rem;
+			padding: 0.6rem 0.65rem;
+			border-radius: 10px;
+			border: 1px solid rgba(148, 163, 184, 0.16);
+			background: rgba(15, 23, 42, 0.35);
+		}
+
+		.reward-track-editor__header {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+		}
+
+		.reward-track-editor__title {
+			font-size: 0.8rem;
+			font-weight: 700;
+			color: #e2e8f0;
+		}
+
+		.reward-track-editor__hint {
+			font-size: 0.7rem;
+			color: #94a3b8;
+		}
+
+		.reward-track-editor__slots {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+			gap: 0.5rem;
+		}
+
+		.reward-track-slot {
+			display: flex;
+			flex-direction: column;
+			gap: 0.35rem;
+			padding: 0.6rem 0.65rem;
+			border-radius: 10px;
+			border: 1px solid rgba(148, 163, 184, 0.18);
+			background: rgba(2, 6, 23, 0.35);
+			cursor: pointer;
+			transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+			text-align: left;
+		}
+
+		.reward-track-slot:hover {
+			transform: translateY(-1px);
+			border-color: rgba(168, 85, 247, 0.45);
+			background: rgba(168, 85, 247, 0.1);
+		}
+
+		.reward-track-slot__label {
+			font-size: 0.7rem;
+			font-weight: 800;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: rgba(226, 232, 240, 0.9);
+		}
+
+		.reward-track-slot__icons {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.35rem;
+			align-items: center;
+			min-height: 34px;
+		}
+
+		.reward-track-slot__icons img {
+			width: 30px;
+			height: 30px;
+			object-fit: contain;
+			filter:
+				drop-shadow(1px 0 0 rgba(43, 26, 18, 0.9))
+				drop-shadow(-1px 0 0 rgba(43, 26, 18, 0.9))
+				drop-shadow(0 1px 0 rgba(43, 26, 18, 0.9))
+				drop-shadow(0 -1px 0 rgba(43, 26, 18, 0.9));
+		}
+
+		.reward-track-slot__placeholder {
+			width: 30px;
+			height: 30px;
+			display: grid;
+			place-items: center;
+			border-radius: 8px;
+			border: 1px dashed rgba(148, 163, 184, 0.3);
+			color: rgba(148, 163, 184, 0.8);
+			font-size: 1.1rem;
+		}
+
+		.reward-track-slot__more {
+			font-size: 0.75rem;
+			font-weight: 700;
+			color: rgba(226, 232, 240, 0.75);
+			padding: 0 0.25rem;
+		}
+
+		.reward-track-editor__picker {
+			display: flex;
+			flex-direction: column;
+			gap: 0.5rem;
+			margin-top: 0.25rem;
+		}
+
+		.reward-track-editor__picker-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+			font-size: 0.75rem;
+			color: #cbd5e1;
+		}
+
+		.reward-track-editor__picker-actions {
+			display: flex;
+			gap: 0.4rem;
+			flex-wrap: wrap;
+		}
+
+		.editor-actions {
+			margin-top: 0.25rem;
+			display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
 	}

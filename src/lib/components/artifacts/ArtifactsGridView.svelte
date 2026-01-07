@@ -1,6 +1,9 @@
 <script lang="ts">
 	import type { ArtifactRow } from '$lib/types/gameData';
 
+	type ArtifactLanguage = 'base' | string;
+	const BASE_LANGUAGE: ArtifactLanguage = 'base';
+
 	type LookupService = {
 		getLabel: (id: string | null, defaultValue?: string) => string;
 		get: (id: string | null) => any;
@@ -8,27 +11,63 @@
 
 	type Props = {
 		artifacts: ArtifactRow[];
+		language?: ArtifactLanguage;
 		tagLookup: LookupService;
 		guardianLookup: LookupService;
 		runeLookup: LookupService;
 	};
 
-	let { artifacts, tagLookup, guardianLookup, runeLookup }: Props = $props();
+	let { artifacts, language = BASE_LANGUAGE, tagLookup, guardianLookup, runeLookup }: Props = $props();
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function getArtifactName(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.name;
+		return getTranslationValue(artifact.name_translations, language) ?? artifact.name;
+	}
+
+	function getArtifactBenefit(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.benefit ?? '';
+		return getTranslationValue(artifact.benefit_translations, language) ?? artifact.benefit ?? '';
+	}
 </script>
 
 <section class="preview-grid">
 	{#each artifacts as artifact (artifact.id)}
+		{@const displayName = getArtifactName(artifact)}
+		{@const displayBenefit = getArtifactBenefit(artifact)}
 		<article class="preview-card">
 			<div class="card-header">
-				<h2>{artifact.name}</h2>
+				<h2>{displayName}</h2>
 				{#if artifact.guardian_id}
 					<span class="guardian">{guardianLookup.getLabel(artifact.guardian_id)}</span>
 				{/if}
 			</div>
 
-			{#if artifact.benefit}
+			{#if displayBenefit}
 				<div class="card-benefit">
-					<p>{artifact.benefit}</p>
+					<p>{displayBenefit}</p>
 				</div>
 			{/if}
 

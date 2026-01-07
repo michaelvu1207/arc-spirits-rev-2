@@ -1,9 +1,13 @@
 import { supabase, type Rev2Client } from '$lib/api/supabaseClient';
 import type { HexSpiritRow } from '$lib/types/gameData';
 
+export type HexSpiritNameTranslation = { lang: string; name: string };
+
 export interface HexSpiritFormData {
 	id?: string;
 	name: string;
+	/** Optional localized names. Primary name remains `name`. */
+	name_translations: HexSpiritNameTranslation[];
 	cost: number;
 	origin_id?: string | null; // UI convenience
 	class_id?: string | null; // UI convenience
@@ -27,6 +31,7 @@ const DEFAULT_COST = 1;
 export function emptyHexSpiritForm(): HexSpiritFormData {
 	return {
 		name: '',
+		name_translations: [],
 		cost: DEFAULT_COST,
 		origin_id: null,
 		class_id: null,
@@ -44,10 +49,12 @@ export function hexSpiritRowToForm(row: HexSpiritRow): HexSpiritFormData {
 	// Load traits directly - duplicates are allowed
 	const origin_ids = row.traits?.origin_ids ?? [];
 	const class_ids = row.traits?.class_ids ?? [];
+	const translations = normalizeNameTranslations((row as { name_translations?: unknown }).name_translations);
 
 	return {
 		id: row.id,
 		name: row.name,
+		name_translations: translations,
 		cost: row.cost,
 		origin_id: origin_ids[0] ?? null, // UI convenience only
 		class_id: class_ids[0] ?? null, // UI convenience only
@@ -75,9 +82,11 @@ export async function saveHexSpiritRecord(
 ): Promise<HexSpiritRow> {
 	const sanitized = sanitizeHexSpiritForm(form);
 	let spiritId = sanitized.id;
+	const name_translations = nameTranslationsToRecord(sanitized.name_translations);
 
 	const payload = {
 		name: sanitized.name,
+		name_translations,
 		cost: sanitized.cost,
 		traits: sanitized.traits,
 		game_print_image_path: sanitized.game_print_image_path,
@@ -114,6 +123,7 @@ export async function deleteHexSpiritRecord(id: string, client: Rev2Client = sup
 
 function sanitizeHexSpiritForm(form: HexSpiritFormData): HexSpiritFormData {
 	const name = form.name.trim();
+	const name_translations = normalizeNameTranslations(form.name_translations);
 	const cost = Number.isFinite(form.cost) ? Math.max(1, Math.round(form.cost)) : DEFAULT_COST;
 
 	// Use traits directly - the page manages origin_ids and class_ids arrays
@@ -131,6 +141,7 @@ function sanitizeHexSpiritForm(form: HexSpiritFormData): HexSpiritFormData {
 	return {
 		...form,
 		name,
+		name_translations,
 		cost,
 		traits: { origin_ids, class_ids },
 		game_print_image_path,
@@ -140,4 +151,44 @@ function sanitizeHexSpiritForm(form: HexSpiritFormData): HexSpiritFormData {
 		manual_game_print,
 		rune_cost
 	};
+}
+
+function normalizeNameTranslations(input: unknown): HexSpiritNameTranslation[] {
+	const normalizedRows: HexSpiritNameTranslation[] = [];
+
+	if (Array.isArray(input)) {
+		for (const row of input) {
+			const langRaw = typeof (row as any)?.lang === 'string' ? (row as any).lang : '';
+			const nameRaw = typeof (row as any)?.name === 'string' ? (row as any).name : '';
+			const lang = langRaw.trim().replace(/_/g, '-').toLowerCase();
+			const name = nameRaw.trim();
+			if (!lang || !name) continue;
+			normalizedRows.push({ lang, name });
+		}
+	} else if (input && typeof input === 'object') {
+		for (const [langRaw, nameRaw] of Object.entries(input as Record<string, unknown>)) {
+			if (typeof nameRaw !== 'string') continue;
+			const lang = String(langRaw).trim().replace(/_/g, '-').toLowerCase();
+			const name = nameRaw.trim();
+			if (!lang || !name) continue;
+			normalizedRows.push({ lang, name });
+		}
+	}
+
+	const deduped = new Map<string, string>();
+	for (const row of normalizedRows) {
+		deduped.set(row.lang, row.name);
+	}
+
+	return [...deduped.entries()]
+		.map(([lang, name]) => ({ lang, name }))
+		.sort((a, b) => a.lang.localeCompare(b.lang));
+}
+
+function nameTranslationsToRecord(rows: HexSpiritNameTranslation[]): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const row of rows) {
+		out[row.lang] = row.name;
+	}
+	return out;
 }

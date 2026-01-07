@@ -14,10 +14,15 @@ type NamedId = { id: string; name: string };
 type ArtifactRow = {
   id: string;
   name: string;
+  benefit: string;
+  name_translations?: Record<string, string> | null;
+  benefit_translations?: Record<string, string> | null;
   recipe_box: unknown;
   guardian_id: string | null;
   tag_ids: string[] | null;
   card_image_path: string | null;
+  card_image_path_translations?: Record<string, string> | null;
+  quantity: number | null;
 };
 
 type GuardianRow = {
@@ -177,6 +182,10 @@ type HexSpiritBasic = {
 type IconPoolRow = {
   id: string;
   name: string;
+  description?: string | null;
+  icon_guide_name?: string | null;
+  icon_guide_group?: string | null;
+  icon_guide_position?: number | null;
   source_type: string;
   file_path: string | null;
   tags: string[] | null;
@@ -304,7 +313,7 @@ serve(async (req) => {
         `select id, name, origin_id, reward_rows, background_image_path, image_with_icons_path from "${SCHEMA}".game_locations order by name`
       ),
       client.queryObject<SpiritRow>(`select id, name, cost, traits, game_print_image_path from "${SCHEMA}".hex_spirits`),
-      client.queryObject<ArtifactRow>(`select id, name, recipe_box, guardian_id, tag_ids, card_image_path from "${SCHEMA}".artifacts`),
+      client.queryObject<ArtifactRow>(`select id, name, benefit, name_translations, benefit_translations, recipe_box, guardian_id, tag_ids, card_image_path, card_image_path_translations, quantity from "${SCHEMA}".artifacts`),
       client.queryObject<RuneRow>(`select id, name, origin_id, class_id, icon_path from "${SCHEMA}".runes`),
       // Full origins with calling card data
       client.queryObject<OriginRow>(`select id, name, position, color, description, icon_png, calling_card from "${SCHEMA}".origins order by position`),
@@ -323,7 +332,7 @@ serve(async (req) => {
       // Special categories for grouping classes
       client.queryObject<SpecialCategoryRow>(`select id, name, position, slot_1_class_ids, slot_2_class_ids, slot_3_class_ids from "${SCHEMA}".special_categories`),
       // All icons from icon_pool for reward resolution and full export
-      client.queryObject<IconPoolRow>(`select id, name, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
+      client.queryObject<IconPoolRow>(`select id, name, description, icon_guide_name, icon_guide_group, icon_guide_position, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
       // Special effects definitions
       client.queryObject<SpecialEffectRow>(`select id, name, description, icon, color from "${SCHEMA}".special_effects`),
       // Monster-to-special-effects junction
@@ -359,9 +368,26 @@ serve(async (req) => {
       return null;
     };
 
-    // Build icon map for reward resolution (id -> { name, file_path })
+    // Build icon map for reward resolution (id -> { name, file_path, description })
     const iconMap = new Map(
-      allIconsRes.rows.map((r) => [r.id, { name: r.name, file_path: r.file_path }])
+      allIconsRes.rows.map((r) => [
+        r.id,
+        {
+          name: r.name,
+          file_path: r.file_path,
+          description: typeof r.description === "string" ? r.description : null,
+          icon_guide_name:
+            typeof r.icon_guide_name === "string" && r.icon_guide_name.trim().length > 0
+              ? r.icon_guide_name.trim()
+              : null,
+          icon_guide_group:
+            typeof r.icon_guide_group === "string" && r.icon_guide_group.trim().length > 0
+              ? r.icon_guide_group.trim()
+              : null,
+          icon_guide_position:
+            typeof r.icon_guide_position === "number" ? r.icon_guide_position : null,
+        },
+      ])
     );
 
     const resolveIcon = (iconId: string) => {
@@ -753,14 +779,27 @@ serve(async (req) => {
       const image_path = a.card_image_path
         ? `${base}${encodeURI(a.card_image_path)}?quality=80`
         : null;
+
+      const image_path_translations: Record<string, string> = {};
+      if (a.card_image_path_translations && typeof a.card_image_path_translations === "object") {
+        for (const [lang, path] of Object.entries(a.card_image_path_translations)) {
+          if (typeof path !== "string" || path.trim().length === 0) continue;
+          image_path_translations[String(lang)] = `${base}${encodeURI(path)}?quality=80`;
+        }
+      }
       return {
         id: a.id,
         name: a.name,
+        benefit: a.benefit,
+        name_translations: a.name_translations ?? {},
+        benefit_translations: a.benefit_translations ?? {},
         recipe_box: a.recipe_box,
         guardian_id: a.guardian_id,
         image_path,
+        image_path_translations,
         tag_ids,
         tag_names,
+        quantity: a.quantity ?? 1,
       };
     });
 
@@ -1031,6 +1070,87 @@ serve(async (req) => {
       };
     });
 
+    // Icon Guide: icons manually pinned via icon_pool.tags ("icon_guide").
+    const iconGuideIconIds = new Set<string>();
+    for (const icon of allIconsRes.rows) {
+      if (Array.isArray(icon.tags) && icon.tags.includes("icon_guide")) {
+        iconGuideIconIds.add(icon.id);
+      }
+    }
+
+    const icon_guide_icons = Array.from(iconGuideIconIds)
+      .map((iconId) => {
+        const iconData = iconMap.get(iconId);
+        const displayName = iconData?.icon_guide_name ?? iconData?.name ?? "Unknown";
+        return {
+          id: iconId,
+          group: iconData?.icon_guide_group ?? null,
+          position: iconData?.icon_guide_position ?? null,
+          name: displayName,
+          description: iconData?.description ?? null,
+          image_url: resolveStorageImageUrl(iconData?.file_path ?? null),
+        };
+      })
+      .sort((a, b) => {
+        const groupA = a.group;
+        const groupB = b.group;
+        const aHasGroup = groupA !== null;
+        const bHasGroup = groupB !== null;
+        if (aHasGroup !== bHasGroup) return aHasGroup ? -1 : 1;
+        if (groupA && groupB) {
+          const groupCmp = groupA.localeCompare(groupB, undefined, { sensitivity: "base" });
+          if (groupCmp !== 0) return groupCmp;
+        }
+        const posA = a.position ?? Number.POSITIVE_INFINITY;
+        const posB = b.position ?? Number.POSITIVE_INFINITY;
+        if (posA !== posB) return posA - posB;
+        return a.name.localeCompare(b.name);
+      });
+
+    const iconGuidePngPath = "exports/icon_guide/icon_guide.png";
+    const legacyIconGuidePngPath = "exports/location_guide/location_guide.png";
+    // Always return the deterministic public URL; it may 404 if the PNG hasn't been exported yet.
+    let icon_guide_png_url: string | null = resolveStorageObjectUrl(iconGuidePngPath);
+    try {
+      const metaRes = await client.queryObject<StorageObjectMetaRow>(
+        `select
+          metadata->>'mimetype' as mimetype,
+          metadata->>'size' as size,
+          updated_at
+        from storage.objects
+        where bucket_id = $1 and name = $2
+        limit 1`,
+        [BUCKET, iconGuidePngPath],
+      );
+      const cacheBust = toCacheBustParam(metaRes.rows[0]?.updated_at);
+      if (metaRes.rows.length > 0) {
+        icon_guide_png_url = resolveStorageObjectUrl(
+          iconGuidePngPath,
+          cacheBust ? { cb: cacheBust } : undefined,
+        );
+      } else {
+        const legacyMetaRes = await client.queryObject<StorageObjectMetaRow>(
+          `select
+            metadata->>'mimetype' as mimetype,
+            metadata->>'size' as size,
+            updated_at
+          from storage.objects
+          where bucket_id = $1 and name = $2
+          limit 1`,
+          [BUCKET, legacyIconGuidePngPath],
+        );
+        const legacyCacheBust = toCacheBustParam(legacyMetaRes.rows[0]?.updated_at);
+        if (legacyMetaRes.rows.length > 0) {
+          icon_guide_png_url = resolveStorageObjectUrl(
+            legacyIconGuidePngPath,
+            legacyCacheBust ? { cb: legacyCacheBust } : undefined,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to read Icon Guide PNG storage metadata", err);
+    }
+
     // Schema documentation
     const schema_docs = `# Arc Spirits TTS Export Schema Documentation
 
@@ -1054,6 +1174,8 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 | \`artifacts\` | Artifact[] | Array of artifact cards |
 | \`monsters\` | Monster[] | Array of monster and event cards (combined, sorted by order_num) |
 | \`game_locations\` | GameLocation[] | Array of game locations |
+| \`icon_guide_icons\` | IconGuideIcon[] | Icons manually pinned to the Icon Guide |
+| \`icon_guide_png_url\` | string \\| null | Public URL to the Icon Guide PNG (may 404 if not exported yet) |
 | \`travelers\` | Traveler[] | Array of traveler cards |
 | \`traveler_quests\` | TravelerQuest[] | Array of traveler quest cards |
 | \`special_effects\` | SpecialEffect[] | Array of special effect definitions |
@@ -1247,6 +1369,32 @@ Game locations include their resolved reward rows and the generated location ima
 - Gain row: \`{ type: "gain", icons: RewardIcon[] }\`
 - Trade row: \`{ type: "trade", cost_icons: RewardIcon[], gain_icons: RewardIcon[] }\`
 - Text row: \`{ type: "text", text: string }\`
+
+---
+
+## IconGuideIcon
+
+Icons manually pinned to the Icon Guide (intended for a legend/guide UI).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | Icon pool UUID |
+| \`group\` | string \\| null | Optional group label used to visually separate icons |
+| \`position\` | number \\| null | Optional sort position within a group (lower numbers appear first) |
+| \`name\` | string | Display name (uses Icon Guide name override when set) |
+| \`description\` | string \\| null | Optional guide/legend description |
+| \`image_url\` | string \\| null | Icon image URL |
+
+---
+
+## Icon Guide PNG
+
+The latest exported Icon Guide PNG. This is generated via the web UI and stored at
+\`exports/icon_guide/icon_guide.png\` in the \`${BUCKET}\` bucket.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`icon_guide_png_url\` | string \\| null | Public URL to the Icon Guide PNG (may 404 if not exported yet) |
 
 ---
 
@@ -1469,6 +1617,8 @@ Some database fields are not exported as they are internal/admin-only:
       artifacts,
       monsters,
       game_locations,
+      icon_guide_icons,
+      icon_guide_png_url,
       travelers,
       traveler_quests,
       special_effects,

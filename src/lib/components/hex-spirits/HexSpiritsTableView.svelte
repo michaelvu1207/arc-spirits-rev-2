@@ -30,6 +30,32 @@
 
 	let sortColumn: SortColumn = $state('name');
 	let sortDirection: SortDirection = $state('asc');
+	let nameLanguage: string = $state('primary');
+
+	const LANGUAGE_LABELS: Record<string, string> = {
+		primary: 'Primary',
+		'zh-Hans': 'Chinese (Simplified)',
+		'zh-Hant': 'Chinese (Traditional)',
+		de: 'German',
+		fr: 'French',
+		es: 'Spanish',
+		it: 'Italian',
+		ja: 'Japanese',
+		pl: 'Polish',
+		ko: 'Korean'
+	};
+
+	function getNameTranslation(spirit: HexSpiritRow, lang: string): string | null {
+		if (lang === 'primary') return spirit.name;
+		const translations = (spirit as { name_translations?: unknown }).name_translations;
+		if (!translations || typeof translations !== 'object' || Array.isArray(translations)) return null;
+		const v = (translations as Record<string, unknown>)[lang];
+		return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+	}
+
+	function getDisplayName(spirit: HexSpiritRow): string {
+		return getNameTranslation(spirit, nameLanguage) ?? spirit.name;
+	}
 
 	function primaryOriginId(spirit: HexSpiritRow): string | null {
 		return spirit.traits?.origin_ids?.[0] ?? null;
@@ -69,8 +95,8 @@
 
 			switch (sortColumn) {
 				case 'name':
-					aValue = a.name.toLowerCase();
-					bValue = b.name.toLowerCase();
+					aValue = getDisplayName(a).toLowerCase();
+					bValue = getDisplayName(b).toLowerCase();
 					break;
 				case 'cost':
 					aValue = a.cost;
@@ -120,6 +146,27 @@
 		return sorted;
 	});
 
+	const availableNameLanguages = $derived.by(() => {
+		const langs = new Set<string>(['primary', ...Object.keys(LANGUAGE_LABELS).filter((k) => k !== 'primary')]);
+		for (const spirit of spirits) {
+			const translations = (spirit as { name_translations?: unknown }).name_translations;
+			if (!translations || typeof translations !== 'object' || Array.isArray(translations)) continue;
+			for (const k of Object.keys(translations as Record<string, unknown>)) {
+				const lang = k.trim();
+				if (lang) langs.add(lang);
+			}
+		}
+		const out = [...langs];
+		out.sort((a, b) => {
+			if (a === 'primary') return -1;
+			if (b === 'primary') return 1;
+			const la = LANGUAGE_LABELS[a] ?? a;
+			const lb = LANGUAGE_LABELS[b] ?? b;
+			return la.localeCompare(lb);
+		});
+		return out;
+	});
+
 	const isEmpty = $derived(spirits.length === 0);
 </script>
 
@@ -130,11 +177,21 @@
 			<p class="empty-state__message">No spirits to display.</p>
 		</div>
 	{:else}
+		<div class="table-toolbar">
+			<label class="table-toolbar__label">
+				Name Language
+				<select class="table-toolbar__select" bind:value={nameLanguage}>
+					{#each availableNameLanguages as lang (lang)}
+						<option value={lang}>{LANGUAGE_LABELS[lang] ?? lang}</option>
+					{/each}
+				</select>
+			</label>
+		</div>
 		<table class="spirits-table">
 			<thead>
 				<tr>
 					<th class="sortable" onclick={() => handleSort('name')}>
-						Name
+						Name {nameLanguage === 'primary' ? '' : `(${LANGUAGE_LABELS[nameLanguage] ?? nameLanguage})`}
 						{#if sortColumn === 'name'}
 							<span class="sort-indicator">{sortDirection === 'asc' ? '▲' : '▼'}</span>
 						{/if}
@@ -198,7 +255,7 @@
 			<tbody>
 				{#each sortedSpirits as spirit (spirit.id)}
 					<tr class="data-row" onclick={() => onEdit(spirit)}>
-						<td class="cell-name">{spirit.name}</td>
+						<td class="cell-name">{getDisplayName(spirit)}</td>
 						<td class="cell-center">{spirit.cost}</td>
 						<td>{originLookup.getLabel(primaryOriginId(spirit), 'Unassigned')}</td>
 						<td>{classLookup.getLabel(primaryClassId(spirit), 'None')}</td>
@@ -226,6 +283,33 @@
 		background: rgba(15, 23, 42, 0.3);
 		border: 1px solid rgba(148, 163, 184, 0.1);
 		min-height: 300px;
+	}
+
+	.table-toolbar {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		padding: 0.5rem 0.6rem;
+		border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+		gap: 0.5rem;
+	}
+
+	.table-toolbar__label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: rgba(226, 232, 240, 0.8);
+		font-size: 0.75rem;
+		white-space: nowrap;
+	}
+
+	.table-toolbar__select {
+		padding: 0.25rem 0.45rem;
+		border-radius: 6px;
+		background: rgba(15, 23, 42, 0.7);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		color: #e2e8f0;
+		font-size: 0.75rem;
 	}
 
 	.spirits-table {

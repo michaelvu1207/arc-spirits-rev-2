@@ -3,7 +3,14 @@
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui';
 	import { PageLayout, type Tab } from '$lib/components/layout';
-	import { IconPoolGridView, AllIconsGridView, TTSGraphicsView, TokenExportView, IconEditor } from '$lib/components/icons';
+	import {
+		IconPoolGridView,
+		AllIconsGridView,
+		TTSGraphicsView,
+		TokenExportView,
+		IconEditor,
+		IconGuideView
+	} from '$lib/components/icons';
 	import { processAndUploadImage } from '$lib/utils/storage';
 	import { loadAllIcons, clearIconPoolCache } from '$lib/utils/iconPool';
 	import type { IconPoolRow } from '$lib/types/gameData';
@@ -24,6 +31,7 @@
 		{ id: 'all', label: 'All Icons', icon: '🎨' },
 		{ id: 'uploaded', label: 'Uploaded', icon: '📤' },
 		{ id: 'generated', label: 'Generated', icon: '⚙️' },
+		{ id: 'icon-guide', label: 'Icon Guide', icon: '📖' },
 		{ id: 'token-export', label: 'Token Export', icon: '🎯' },
 		{ id: 'tts-graphics', label: 'TTS Graphics', icon: '🖼️' }
 	];
@@ -42,6 +50,9 @@
 	const diceSideCount = $derived(allIcons.filter(i => i.source_type === 'dice_side').length);
 	const runeCount = $derived(runeIcons.length);
 	const tokenExportCount = $derived(allIcons.filter(i => i.export_as_token).length);
+	const iconGuideCount = $derived(
+		allIcons.filter((i) => Array.isArray(i.tags) && i.tags.includes('icon_guide')).length
+	);
 
 	const sanitize = (name: string) =>
 		name
@@ -210,6 +221,8 @@
 				<span class="stat">{diceSideCount} dice sides</span>
 			{:else if activeTab === 'token-export'}
 				<span class="stat">{tokenExportCount} selected for export</span>
+			{:else if activeTab === 'icon-guide'}
+				<span class="stat">{iconGuideCount} in guide</span>
 			{/if}
 		</div>
 	{/snippet}
@@ -250,6 +263,8 @@
 			<IconPoolGridView icons={uploadedIcons} {publicUrl} onEdit={handleEditIcon} />
 		{:else if activeTab === 'generated'}
 			<IconPoolGridView icons={poolIcons} {publicUrl} onEdit={handleEditIcon} />
+		{:else if activeTab === 'icon-guide'}
+			<IconGuideView bind:allIcons />
 		{:else if activeTab === 'token-export'}
 			<TokenExportView icons={allIcons} {publicUrl} onUpdate={refreshIcons} onEditIcon={handleEditIcon} />
 		{:else if activeTab === 'tts-graphics'}

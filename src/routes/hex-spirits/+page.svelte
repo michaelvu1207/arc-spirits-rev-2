@@ -240,6 +240,28 @@
 		}
 	}
 
+	function addNameTranslationRow() {
+		const current = modal.formData.name_translations ?? [];
+		modal.formData = {
+			...modal.formData,
+			name_translations: [...current, { lang: '', name: '' }]
+		};
+	}
+
+	function updateNameTranslationRow(index: number, patch: Partial<{ lang: string; name: string }>) {
+		const current = modal.formData.name_translations ?? [];
+		if (index < 0 || index >= current.length) return;
+		const next = current.map((row, idx) => (idx === index ? { ...row, ...patch } : row));
+		modal.formData = { ...modal.formData, name_translations: next };
+	}
+
+	function removeNameTranslationRow(index: number) {
+		const current = modal.formData.name_translations ?? [];
+		if (index < 0 || index >= current.length) return;
+		const next = current.filter((_, idx) => idx !== index);
+		modal.formData = { ...modal.formData, name_translations: next };
+	}
+
 	async function saveSpirit() {
 		if (!modal.formData.name.trim()) {
 			alert('Spirit name is required.');
@@ -1362,6 +1384,45 @@
 			Name
 			<input type="text" bind:value={modal.formData.name} required />
 		</label>
+		<div class="span-full translations-editor">
+			<div class="translations-editor__header">
+				<div class="translations-editor__title">Alternate Names (Languages)</div>
+				<button type="button" class="translations-editor__add" onclick={addNameTranslationRow}>+ Add</button>
+			</div>
+			{#if (modal.formData.name_translations ?? []).length === 0}
+				<div class="translations-editor__empty">No alternate names.</div>
+			{:else}
+				<div class="translations-editor__rows">
+					{#each modal.formData.name_translations ?? [] as row, idx (idx)}
+						<div class="translations-row">
+							<input
+								class="translations-row__lang"
+								type="text"
+								placeholder="lang (e.g. es, fr-CA)"
+								value={row.lang}
+								oninput={(e) => updateNameTranslationRow(idx, { lang: (e.currentTarget as HTMLInputElement).value })}
+							/>
+							<input
+								class="translations-row__name"
+								type="text"
+								placeholder="translated name"
+								value={row.name}
+								oninput={(e) => updateNameTranslationRow(idx, { name: (e.currentTarget as HTMLInputElement).value })}
+							/>
+							<button
+								type="button"
+								class="translations-row__remove"
+								onclick={() => removeNameTranslationRow(idx)}
+								aria-label="Remove alternate name"
+							>
+								Remove
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<small class="translations-editor__hint">Primary name stays in “Name” above; these are optional.</small>
+		</div>
 		<label>
 			Cost
 			<input type="number" min="0" bind:value={modal.formData.cost} />
@@ -1540,6 +1601,89 @@
 	}
 
 	.spirit-form small {
+		color: #64748b;
+		font-size: 0.65rem;
+	}
+
+	.translations-editor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding: 0.4rem;
+		border: 1px solid rgba(148, 163, 184, 0.12);
+		background: rgba(15, 23, 42, 0.25);
+	}
+
+	.translations-editor__header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
+	.translations-editor__title {
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: #cbd5e1;
+	}
+
+	.translations-editor__add {
+		background: rgba(99, 102, 241, 0.2);
+		border: 1px solid rgba(99, 102, 241, 0.35);
+		color: #e2e8f0;
+		padding: 0.25rem 0.45rem;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 0.7rem;
+	}
+
+	.translations-editor__add:hover {
+		background: rgba(99, 102, 241, 0.28);
+	}
+
+	.translations-editor__empty {
+		color: #64748b;
+		font-size: 0.75rem;
+		padding: 0.1rem 0;
+	}
+
+	.translations-editor__rows {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.translations-row {
+		display: grid;
+		grid-template-columns: 110px 1fr auto;
+		gap: 0.35rem;
+		align-items: center;
+	}
+
+	.translations-row input {
+		padding: 0.35rem 0.45rem;
+		background: rgba(15, 23, 42, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		color: inherit;
+		font-size: 0.8rem;
+	}
+
+	.translations-row__remove {
+		background: rgba(248, 113, 113, 0.12);
+		border: 1px solid rgba(248, 113, 113, 0.3);
+		color: #fecaca;
+		padding: 0.3rem 0.45rem;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 0.7rem;
+		white-space: nowrap;
+	}
+
+	.translations-row__remove:hover {
+		background: rgba(248, 113, 113, 0.18);
+	}
+
+	.translations-editor__hint {
 		color: #64748b;
 		font-size: 0.65rem;
 	}

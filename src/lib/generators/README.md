@@ -34,7 +34,7 @@ import { generateArtifactCardPNG, generateMonsterCardPNG, generateEventCardPNG, 
 const artifactBlob = await generateArtifactCardPNG(artifact, origins, runes, tags, guardians);
 
 // Generate monster card
-const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewardRows);
+const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewardTrackIconUrls);
 
 // Generate event card
 const eventBlob = await generateEventCardPNG(event, artUrl);

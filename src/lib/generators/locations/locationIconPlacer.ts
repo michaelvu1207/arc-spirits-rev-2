@@ -72,6 +72,8 @@ export interface LocationRowBackgroundConfig {
 }
 
 export interface LocationIconPlacementConfig {
+	/** Used for lightweight config migrations. */
+	_schema_version?: number;
 	_icon_size: number;
 	/**
 	 * Row template slots.
@@ -105,14 +107,15 @@ export function createDefaultLocationIconConfig(): LocationIconPlacementConfig {
 	const iconSize = 80;
 	const defaultRowBackground: LocationRowBackgroundConfig = { path: null, x: 0, y: 0, scale: 1 };
 
-	// Default template (single row): gain=4, trade cost=2, trade gain=3
+	// Default template (single row): gain=4, trade cost=3, trade gain=3
 	const y = 24;
 	const gain_slots = Array.from({ length: 4 }, (_, i) => ({ x: 24 + i * 92, y, w: iconSize, h: iconSize }));
-	const trade_cost_slots = Array.from({ length: 2 }, (_, i) => ({ x: 24 + i * 92, y, w: iconSize, h: iconSize }));
+	const trade_cost_slots = Array.from({ length: 3 }, (_, i) => ({ x: 24 + i * 92, y, w: iconSize, h: iconSize }));
 	const trade_gain_slots = Array.from({ length: 3 }, (_, i) => ({ x: 280 + i * 92, y, w: iconSize, h: iconSize }));
 	const rows: LocationRowPlacement[] = [{ gain_slots, trade_cost_slots, trade_gain_slots }];
 
 	return {
+		_schema_version: 2,
 		_icon_size: iconSize,
 		rows,
 		gain_row_background: { ...defaultRowBackground },
@@ -139,6 +142,27 @@ export function normalizeLocationIconPlacementConfig(input: unknown): LocationIc
 	if (typeof parsed._icon_size !== 'number' || !Array.isArray(parsed.rows)) return defaults;
 
 	const MAX_ROW_SLOTS = 12;
+	const EPSILON = 0.001;
+
+	function approxEqual(a: number | undefined, b: number | undefined): boolean {
+		if (typeof a !== 'number' || typeof b !== 'number') return false;
+		return Math.abs(a - b) <= EPSILON;
+	}
+
+	function looksLikeLegacyDefaultTradeCostSlots(slots: IconSlot[], size: number): boolean {
+		if (slots.length !== 2) return false;
+		const [s1, s2] = slots;
+		return (
+			approxEqual(s1.x, 24) &&
+			approxEqual(s1.y, 24) &&
+			approxEqual(s1.w ?? size, size) &&
+			approxEqual(s1.h ?? size, size) &&
+			approxEqual(s2.x, 24 + 92) &&
+			approxEqual(s2.y, 24) &&
+			approxEqual(s2.w ?? size, size) &&
+			approxEqual(s2.h ?? size, size)
+		);
+	}
 
 	function sanitizeSlot(input: unknown, fallback: IconSlot | undefined, defaultSize: number): IconSlot | null {
 		if (!input || typeof input !== 'object') {
@@ -195,18 +219,58 @@ export function normalizeLocationIconPlacementConfig(input: unknown): LocationIc
 
 	// Only the first row is used as the global template.
 	const firstRow = (parsed.rows?.[0] as LocationRowPlacement | undefined) ?? defaults.rows[0];
+	const schemaVersion = typeof (parsed as any)._schema_version === 'number' && Number.isFinite((parsed as any)._schema_version)
+		? Number((parsed as any)._schema_version)
+		: 1;
 	const defaultSize = typeof parsed._icon_size === 'number' && Number.isFinite(parsed._icon_size)
 		? parsed._icon_size
 		: defaults._icon_size;
+
+	const gainSlots = sanitizeSlots(firstRow?.gain_slots, defaults.rows[0].gain_slots, defaultSize);
+	let tradeCostSlots = sanitizeSlots(firstRow?.trade_cost_slots, defaults.rows[0].trade_cost_slots, defaultSize);
+	const tradeGainSlots = sanitizeSlots(firstRow?.trade_gain_slots, defaults.rows[0].trade_gain_slots, defaultSize);
+
+	// Ensure trade cost can support up to 3 icons (append a third slot if needed).
+	// This keeps existing custom layouts intact while extending older ones.
+	if (tradeCostSlots.length > 0 && tradeCostSlots.length < 3) {
+		while (tradeCostSlots.length < 3) {
+			const last = tradeCostSlots[tradeCostSlots.length - 1];
+			const prev = tradeCostSlots.length >= 2 ? tradeCostSlots[tradeCostSlots.length - 2] : null;
+			const defaultStep = (last.w ?? defaultSize) + 12;
+			const stepXRaw = prev ? last.x - prev.x : defaultStep;
+			const stepX = Math.abs(stepXRaw) > EPSILON ? stepXRaw : defaultStep;
+			tradeCostSlots = [
+				...tradeCostSlots,
+				{
+					x: last.x + stepX,
+					y: last.y,
+					w: last.w ?? defaultSize,
+					h: last.h ?? defaultSize
+				}
+			];
+		}
+	} else if (
+		schemaVersion < 2 &&
+		tradeCostSlots.length === 2 &&
+		looksLikeLegacyDefaultTradeCostSlots(tradeCostSlots, defaultSize)
+	) {
+		// Legacy exact-default: keep deterministic spacing.
+		tradeCostSlots = [
+			...tradeCostSlots,
+			{ x: 24 + 2 * 92, y: 24, w: defaultSize, h: defaultSize }
+		];
+	}
+
 	const rows: LocationRowPlacement[] = [
 		{
-			gain_slots: sanitizeSlots(firstRow?.gain_slots, defaults.rows[0].gain_slots, defaultSize),
-			trade_cost_slots: sanitizeSlots(firstRow?.trade_cost_slots, defaults.rows[0].trade_cost_slots, defaultSize),
-			trade_gain_slots: sanitizeSlots(firstRow?.trade_gain_slots, defaults.rows[0].trade_gain_slots, defaultSize)
+			gain_slots: gainSlots,
+			trade_cost_slots: tradeCostSlots,
+			trade_gain_slots: tradeGainSlots
 		}
 	];
 
 	return {
+		_schema_version: defaults._schema_version,
 		_icon_size: parsed._icon_size,
 		rows,
 		gain_row_background: sanitizeRowBackground(parsed.gain_row_background, defaults.gain_row_background),

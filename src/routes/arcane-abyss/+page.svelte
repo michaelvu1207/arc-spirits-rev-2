@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { SpecialEffectRow, RewardRow, GameLocationRow } from '$lib/types/gameData';
+	import type { SpecialEffectRow, GameLocationRow, SpecialEffectType } from '$lib/types/gameData';
 	import { publicAssetUrl, processAndUploadImage } from '$lib/utils/storage';
 	import { getErrorMessage } from '$lib/utils';
 	import { generateMonsterCardPNG } from '$lib/generators/cards';
@@ -9,7 +9,7 @@
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { Button, FormField, Input, Textarea } from '$lib/components/ui';
 	import { MonsterCardGallery } from '$lib/components/monsters';
-	import type { Monster, ResolvedRewardRow } from '$lib/components/abyss-deck';
+	import type { Monster } from '$lib/components/abyss-deck';
 	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 	import type {
 		DeckOrderItem,
@@ -62,8 +62,23 @@
 		name: '',
 		description: null as string | null,
 		icon: null as string | null,
-		color: '#a855f7'
+		color: '#a855f7',
+		effect_type: 'during_combat' as SpecialEffectType
 	});
+
+	const effectTypeOptions: { value: SpecialEffectType; label: string }[] = [
+		{ value: 'before_combat', label: 'Before Combat' },
+		{ value: 'during_combat', label: 'During Combat' },
+		{ value: 'after_combat', label: 'After Combat' },
+		{ value: 'combat_type', label: 'Combat Type' }
+	];
+
+	const effectTypeColors: Record<SpecialEffectType, string> = {
+		before_combat: '#f59e0b',
+		during_combat: '#ef4444',
+		after_combat: '#22c55e',
+		combat_type: '#8b5cf6'
+	};
 
 	const isEditingEffect = $derived(editingEffectId !== null);
 	const selectedCount = $derived(selectedCardIds.size);
@@ -115,34 +130,28 @@
 		invadeLocations = (data ?? []) as Pick<GameLocationRow, 'id' | 'name'>[];
 	}
 
-	async function loadMonsters() {
-		const { data, error: err } = await supabase.from('monsters').select('*').order('order_num');
-		if (err) throw new Error(err.message);
+		async function loadMonsters() {
+			const { data, error: err } = await supabase.from('monsters').select('*').order('order_num');
+			if (err) throw new Error(err.message);
 
-		monsters = (data ?? []).map((monster) => {
-			const resolvedRewardRows: ResolvedRewardRow[] = (monster.reward_rows ?? []).map((row: RewardRow) => ({
-				...row,
-				icon_urls: (row.icon_ids ?? []).map((id: string) => getIconPoolUrl(id))
-			}));
-
-			const effectIds = monsterSpecialEffects[monster.id] ?? [];
-			const monsterEffects = effectIds
-				.map(id => specialEffects.find(e => e.id === id))
+			monsters = (data ?? []).map((monster) => {
+				const effectIds = monsterSpecialEffects[monster.id] ?? [];
+				const monsterEffects = effectIds
+					.map(id => specialEffects.find(e => e.id === id))
 				.filter((e): e is SpecialEffectRow => e !== undefined);
 
 			const invadeLocation = monster.invade_location_id
 				? invadeLocations.find(loc => loc.id === monster.invade_location_id)
 				: null;
 
-			return {
-				...monster,
-				icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
-				art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
-				resolved_reward_rows: resolvedRewardRows,
-				effects: monsterEffects,
-				invade_location_name: invadeLocation?.name ?? null
-			};
-		});
+				return {
+					...monster,
+					icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
+					art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
+					effects: monsterEffects,
+					invade_location_name: invadeLocation?.name ?? null
+				};
+			});
 
 		allCards = [
 			...monsters.map(m => ({
@@ -186,6 +195,26 @@
 		}
 	}
 
+		function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
+			const barrier = Math.max(0, Math.round(barrierValue));
+			const killedIndex = Math.max(1, barrier);
+			const targetLen = killedIndex + 1; // includes slot0 participation
+
+			const safe: string[][] = Array.isArray(track)
+				? track.map((slot) =>
+						Array.isArray(slot)
+							? slot
+									.filter((id): id is string => typeof id === 'string')
+									.map((id) => id.trim())
+									.filter(Boolean)
+							: []
+					)
+				: [];
+
+			while (safe.length < targetLen) safe.push([]);
+			return safe.slice(0, targetLen);
+		}
+
 	function getCardImageUrl(card: CardItem): string | null {
 		if (!card.card_image_path) return null;
 		const { data } = supabase.storage.from('game_assets').getPublicUrl(card.card_image_path);
@@ -216,12 +245,13 @@
 			throw new Error('Monster name is required.');
 		}
 
-		let monsterId: string;
+			let monsterId: string;
+			const rewardTrack = normalizeRewardTrack(formData.barrier ?? 0, (formData as any).reward_track);
 
-		if (id) {
-			const { error: err } = await supabase
-				.from('monsters')
-				.update({
+			if (id) {
+				const { error: err } = await supabase
+					.from('monsters')
+					.update({
 					name: formData.name,
 					damage: formData.damage,
 					barrier: formData.barrier,
@@ -229,33 +259,35 @@
 					monster_classification: formData.monster_classification,
 					icon: formData.icon,
 					image_path: formData.image_path,
-					invade_location_id: formData.invade_location_id,
-					order_num: formData.order_num,
-					reward_rows: formData.reward_rows,
-					quantity: formData.quantity,
-					updated_at: new Date().toISOString()
-				})
-				.eq('id', id);
+					show_tutorial: (formData as any).show_tutorial ?? true,
+						invade_location_id: formData.invade_location_id,
+						order_num: formData.order_num,
+						reward_track: rewardTrack,
+						quantity: formData.quantity,
+						updated_at: new Date().toISOString()
+					})
+					.eq('id', id);
 			if (err) throw err;
 			monsterId = id;
-		} else {
-			const { data, error: err } = await supabase
-				.from('monsters')
-				.insert({
-					name: formData.name,
-					damage: formData.damage,
-					barrier: formData.barrier,
+			} else {
+				const { data, error: err } = await supabase
+					.from('monsters')
+					.insert({
+						name: formData.name,
+						damage: formData.damage,
+						barrier: formData.barrier,
 					state: formData.state,
 					monster_classification: formData.monster_classification,
 					icon: formData.icon,
 					image_path: formData.image_path,
-					invade_location_id: formData.invade_location_id,
-					order_num: formData.order_num,
-					reward_rows: formData.reward_rows,
-					quantity: formData.quantity
-				})
-				.select('id')
-				.single();
+					show_tutorial: (formData as any).show_tutorial ?? true,
+						invade_location_id: formData.invade_location_id,
+						order_num: formData.order_num,
+						reward_track: rewardTrack,
+						quantity: formData.quantity
+					})
+					.select('id')
+					.single();
 			if (err) throw err;
 			monsterId = data.id;
 		}
@@ -295,7 +327,8 @@
 			name: '',
 			description: null,
 			icon: null,
-			color: '#a855f7'
+			color: '#a855f7',
+			effect_type: 'during_combat'
 		};
 		showEffectDrawer = true;
 	}
@@ -306,7 +339,8 @@
 			name: effect.name,
 			description: effect.description,
 			icon: effect.icon,
-			color: effect.color || '#a855f7'
+			color: effect.color || '#a855f7',
+			effect_type: effect.effect_type || 'during_combat'
 		};
 		showEffectDrawer = true;
 	}
@@ -326,6 +360,7 @@
 						description: effectFormData.description,
 						icon: effectFormData.icon,
 						color: effectFormData.color,
+						effect_type: effectFormData.effect_type,
 						updated_at: new Date().toISOString()
 					})
 					.eq('id', editingEffectId);
@@ -337,7 +372,8 @@
 						name: effectFormData.name,
 						description: effectFormData.description,
 						icon: effectFormData.icon,
-						color: effectFormData.color
+						color: effectFormData.color,
+						effect_type: effectFormData.effect_type
 					});
 				if (err) throw err;
 			}
@@ -416,11 +452,17 @@
 
 		try {
 			const monster = card.data;
+			const rewardTrackIds = normalizeRewardTrack(monster.barrier ?? 0, (monster as any).reward_track);
+			const rewardTrackIconUrls = rewardTrackIds.map((slot) =>
+				slot
+					.map((id) => getIconPoolUrl(id))
+					.filter((url): url is string => typeof url === 'string' && url.length > 0)
+			);
 			const blob = await generateMonsterCardPNG(
 				monster,
 				monster.art_url,
 				monster.icon_url,
-				monster.resolved_reward_rows
+				rewardTrackIconUrls
 			);
 
 			const { data, error: uploadError } = await processAndUploadImage(blob, {
@@ -537,7 +579,12 @@
 	{:else if activeTab === 'special-effects'}
 		<div class="effects-grid">
 			{#each specialEffects as effect (effect.id)}
+				{@const typeLabel = effectTypeOptions.find(o => o.value === effect.effect_type)?.label ?? 'During Combat'}
+				{@const typeColor = effectTypeColors[effect.effect_type] ?? effectTypeColors.during_combat}
 				<div class="effect-card" style="--effect-color: {effect.color || '#a855f7'}">
+					<div class="effect-card__type-badge" style="--type-color: {typeColor}">
+						{typeLabel}
+					</div>
 					<div class="effect-card__header">
 						{#if effect.icon}
 							<span class="effect-card__icon">{effect.icon}</span>
@@ -717,6 +764,13 @@
 							<Input type="text" bind:value={effectFormData.name} required />
 						</FormField>
 					</div>
+					<FormField label="Effect Type">
+						<select bind:value={effectFormData.effect_type} class="effect-type-select">
+							{#each effectTypeOptions as option (option.value)}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+					</FormField>
 					<FormField label="Icon (emoji)">
 						<Input type="text" bind:value={effectFormData.icon} placeholder="✨" />
 					</FormField>
@@ -1035,6 +1089,19 @@
 		background: color-mix(in srgb, var(--effect-color) 5%, rgba(30, 41, 59, 0.8));
 	}
 
+	.effect-card__type-badge {
+		align-self: flex-start;
+		padding: 0.2rem 0.5rem;
+		border-radius: 4px;
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: var(--type-color);
+		background: color-mix(in srgb, var(--type-color) 15%, transparent);
+		border: 1px solid color-mix(in srgb, var(--type-color) 30%, transparent);
+	}
+
 	.effect-card__header {
 		display: flex;
 		align-items: center;
@@ -1192,5 +1259,21 @@
 
 	.form-grid .full-width {
 		grid-column: 1 / -1;
+	}
+
+	.effect-type-select {
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		border-radius: 6px;
+		border: 1px solid rgba(148, 163, 184, 0.3);
+		background: rgba(15, 23, 42, 0.65);
+		color: #f8fafc;
+		font-size: 0.875rem;
+		cursor: pointer;
+	}
+
+	.effect-type-select:focus {
+		outline: none;
+		border-color: rgba(168, 85, 247, 0.75);
 	}
 </style>

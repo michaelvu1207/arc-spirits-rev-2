@@ -3,6 +3,9 @@
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
 
+	type ArtifactLanguage = 'base' | string;
+	const BASE_LANGUAGE: ArtifactLanguage = 'base';
+
 	type LookupService = {
 		getLabel: (id: string | null, defaultValue?: string) => string;
 		get: (id: string | null) => any;
@@ -10,6 +13,7 @@
 
 	type Props = {
 		artifacts: ArtifactRow[];
+		language?: ArtifactLanguage;
 		tagLookup: LookupService;
 		guardianLookup: LookupService;
 		runeLookup: LookupService;
@@ -18,7 +22,49 @@
 		onDeleteMultiple?: (ids: string[]) => void;
 	};
 
-	let { artifacts, tagLookup, guardianLookup, runeLookup, onEdit, onDelete, onDeleteMultiple }: Props = $props();
+	let {
+		artifacts,
+		language = BASE_LANGUAGE,
+		tagLookup,
+		guardianLookup,
+		runeLookup,
+		onEdit,
+		onDelete,
+		onDeleteMultiple
+	}: Props = $props();
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function getArtifactName(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.name;
+		return getTranslationValue(artifact.name_translations, language) ?? artifact.name;
+	}
+
+	function getArtifactBenefit(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.benefit ?? '';
+		return getTranslationValue(artifact.benefit_translations, language) ?? artifact.benefit ?? '';
+	}
 
 	// Multi-select state
 	let selectedIds = $state<Set<string>>(new Set());
@@ -69,6 +115,8 @@
 <section class="card-grid">
 	{#each artifacts as artifact (artifact.id)}
 		{@const isSelected = selectedIds.has(artifact.id)}
+		{@const displayName = getArtifactName(artifact)}
+		{@const displayBenefit = getArtifactBenefit(artifact)}
 
 		<article class="card artifact-card" class:selected={isSelected}>
 			<header>
@@ -80,7 +128,7 @@
 					/>
 				</label>
 				<div class="header-content">
-					<h2>{artifact.name}</h2>
+					<h2>{displayName}</h2>
 					<small>
 						{#if artifact.guardian_id}
 							Guardian: {guardianLookup.getLabel(artifact.guardian_id, 'None')}
@@ -98,10 +146,10 @@
 			</header>
 
 			<div class="artifact-details">
-				{#if artifact.benefit}
+				{#if displayBenefit}
 					<div class="detail-section">
 						<h3>Benefit</h3>
-						<p class="benefit-text">{artifact.benefit}</p>
+						<p class="benefit-text">{displayBenefit}</p>
 					</div>
 				{/if}
 

@@ -2,6 +2,9 @@
 	import type { ArtifactRow } from '$lib/types/gameData';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 
+	type ArtifactLanguage = 'base' | string;
+	const BASE_LANGUAGE: ArtifactLanguage = 'base';
+
 	type LookupService = {
 		getLabel: (id: string | null, defaultValue?: string) => string;
 		get: (id: string | null) => any;
@@ -9,13 +12,47 @@
 
 	type Props = {
 		artifacts: ArtifactRow[];
+		language?: ArtifactLanguage;
 		tagLookup: LookupService;
 		guardianLookup: LookupService;
 		runeLookup: LookupService;
 		onEdit: (artifact: ArtifactRow) => void;
 	};
 
-	let { artifacts, tagLookup, guardianLookup, runeLookup, onEdit }: Props = $props();
+	let { artifacts, language = BASE_LANGUAGE, tagLookup, guardianLookup, runeLookup, onEdit }: Props = $props();
+
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function getArtifactName(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.name;
+		return getTranslationValue(artifact.name_translations, language) ?? artifact.name;
+	}
+
+	function getArtifactBenefit(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.benefit ?? '';
+		return getTranslationValue(artifact.benefit_translations, language) ?? artifact.benefit ?? '';
+	}
 </script>
 
 <div class="table-container">
@@ -32,12 +69,14 @@
 		</thead>
 		<tbody>
 			{#each artifacts as artifact (artifact.id)}
+				{@const displayName = getArtifactName(artifact)}
+				{@const displayBenefit = getArtifactBenefit(artifact)}
 				<tr>
 					<td class="name-cell">
 						<div class="name-content">
-							{artifact.name}
-							{#if artifact.benefit}
-								<small>{artifact.benefit}</small>
+							{displayName}
+							{#if displayBenefit}
+								<small>{displayBenefit}</small>
 							{/if}
 						</div>
 					</td>

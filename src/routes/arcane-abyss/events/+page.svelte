@@ -264,11 +264,11 @@
 		progressMessage = `✓ Generated ${filteredCards.length} cards`;
 	}
 
-	async function handleWorkspaceMonsterSave(): Promise<string> {
+	async function handleWorkspaceMonsterSave(_formData: unknown, _id: string | null): Promise<string> {
 		throw new Error('Monsters are managed on the Arcane Abyss page.');
 	}
 
-	async function handleWorkspaceMonsterDelete(): Promise<void> {
+	async function handleWorkspaceMonsterDelete(_id: string): Promise<void> {
 		throw new Error('Monsters are managed on the Arcane Abyss page.');
 	}
 
@@ -687,4 +687,3 @@
 		font-size: 0.75rem;
 	}
 </style>
-

@@ -121,6 +121,8 @@ export type RuneRow = {
 export type HexSpiritRow = {
 	id: string;
 	name: string;
+	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	cost: number;
 	traits: {
 		origin_ids: string[];
@@ -159,7 +161,11 @@ export type ArtifactRecipeEntry = {
 export type ArtifactRow = {
 	id: string;
 	name: string;
+	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	benefit: string;
+	/** Optional localized benefit text keyed by language tag (e.g. 'es', 'fr-CA'). */
+	benefit_translations?: Record<string, string> | null;
 	recipe_box: ArtifactRecipeEntry[];
 	guardian_id: string | null;
 	/** legacy fields kept optional for UI compatibility (removed in DB) */
@@ -169,6 +175,8 @@ export type ArtifactRow = {
 	tag_ids: string[] | null;
 	quantity: number;
 	card_image_path: string | null;
+	/** Optional per-language card image path keyed by language tag (e.g. 'es', 'fr-CA'). */
+	card_image_path_translations?: Record<string, string> | null;
 	created_at: string | null;
 	updated_at: string | null;
 	template_id: string | null;
@@ -212,6 +220,15 @@ export type IconPoolRow = {
 	id: string;
 	name: string;
 	description?: string | null;
+	/** Optional localized icon descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
+	icon_guide_name?: string | null;
+	/** Optional localized Icon Guide name keyed by language tag (e.g. 'es', 'fr-CA'). */
+	icon_guide_name_translations?: Record<string, string> | null;
+	icon_guide_group?: string | null;
+	/** Optional localized Icon Guide group label keyed by language tag (e.g. 'es', 'fr-CA'). */
+	icon_guide_group_translations?: Record<string, string> | null;
+	icon_guide_position?: number | null;
 	source_type: IconPoolSourceType;
 	source_id: string | null;
 	source_table: string | null; // 'origins' | 'classes' | 'runes' | 'dice_sides' | null (for uploaded)
@@ -265,8 +282,19 @@ export type MonsterRow = {
 	name: string;
 	damage: number;
 	barrier: number;
+	/**
+	 * Unified reward-track structure. JSONB array of slots, each slot is a list of icon_pool UUIDs.
+	 * Semantics:
+	 * - slot 0: participation (reserved)
+	 * - slot i (1..killed_index-1): Damage i
+	 * - slot killed_index: KILLED
+	 * where killed_index = max(1, barrier).
+	 */
+	reward_track?: string[][];
 	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
 	monster_classification: 'monster' | 'abyss_guardian' | 'boss';
+	/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
+	show_tutorial?: boolean | null;
 	icon: string | null;
 	image_path: string | null;
 	reward_rows: RewardRow[];
@@ -321,6 +349,22 @@ export type TravelerQuestRow = {
 	tags: string[];
 	order_num: number;
 	/** Number of copies of this quest to export. Defaults to 1. */
+	quantity: number;
+	card_image_path: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type VengeanceCardRow = {
+	id: string;
+	title: string;
+	description: string | null;
+	reward_text: string | null;
+	/** JSON array of icon_pool UUIDs */
+	reward_icon_ids: string[];
+	tags: string[];
+	order_num: number;
+	/** Number of copies of this vengeance card to export. Defaults to 1. */
 	quantity: number;
 	card_image_path: string | null;
 	created_at: string | null;
@@ -461,12 +505,15 @@ export type GameLocationRowCompositionRow = {
 	updated_at: string | null;
 };
 
+export type SpecialEffectType = 'before_combat' | 'during_combat' | 'after_combat' | 'combat_type';
+
 export type SpecialEffectRow = {
 	id: string;
 	name: string;
 	description: string | null;
 	icon: string | null;
 	color: string;
+	effect_type: SpecialEffectType;
 	created_at: string | null;
 	updated_at: string | null;
 };

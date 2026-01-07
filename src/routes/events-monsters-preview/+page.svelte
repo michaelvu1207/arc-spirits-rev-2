@@ -73,6 +73,7 @@
 						description: 'Heals 2 HP on kill',
 						icon: null,
 						color: '#dc2626',
+						effect_type: 'after_combat' as const,
 						created_at: null,
 						updated_at: null
 					},
@@ -82,6 +83,7 @@
 						description: 'Gains +1 damage when below 50% HP',
 						icon: null,
 						color: '#dc2626',
+						effect_type: 'during_combat' as const,
 						created_at: null,
 						updated_at: null
 					}

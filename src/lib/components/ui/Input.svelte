@@ -2,6 +2,7 @@
 	interface Props {
 		type?: string;
 		placeholder?: string;
+		list?: string;
 		value?: string | number | null;
 		disabled?: boolean;
 		error?: boolean;
@@ -18,6 +19,7 @@
 	let {
 		type = 'text',
 		placeholder,
+		list,
 		value = $bindable<string | number | null>(''),
 		disabled = false,
 		error = false,
@@ -37,6 +39,7 @@
 <input
 	{type}
 	{placeholder}
+	{list}
 	{disabled}
 	{required}
 	{min}

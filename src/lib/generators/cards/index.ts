@@ -7,3 +7,4 @@ export { generateEventCardPNG } from './eventCardGenerator';
 export { generateMonsterCardPNG } from './monsterCardGenerator';
 export { generateQuestCardPNG } from './questCardGenerator';
 export { generateTravelerCardPNG } from './travelerCardGenerator';
+export { generateVengeanceCardPNG } from './vengeanceCardGenerator';

@@ -14,6 +14,7 @@
 
 export let isOpen = false;
 export let artifact: Partial<ArtifactRow> = {};
+export let language: 'base' | string = 'base';
 export let origins: OriginRow[] = [];
 export let guardians: Pick<GuardianRow, 'id' | 'name'>[] = [];
 export let runes: RuneRow[] = [];
@@ -23,28 +24,101 @@ export let tags: ArtifactTagRow[] = [];
 
 let selectedTagIds: string[] = [];
 let generatingCard = false;
+let nameDraft = '';
+let benefitDraft = '';
+let lastInitKey = '';
+
+const BASE_LANGUAGE: 'base' = 'base';
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+	const trimmed = (value ?? '').trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeLanguageCode(value: string): string {
+	return value.trim().replace(/_/g, '-').toLowerCase();
+}
+
+function getTranslationValue(input: unknown, lang: string): string | null {
+	if (!lang || lang === BASE_LANGUAGE) return null;
+	if (!input || typeof input !== 'object') return null;
+	const record = input as Record<string, unknown>;
+	const direct = record[lang];
+	if (typeof direct === 'string') return normalizeOptionalText(direct);
+	for (const [key, value] of Object.entries(record)) {
+		if (normalizeLanguageCode(key) !== lang) continue;
+		if (typeof value !== 'string') continue;
+		return normalizeOptionalText(value);
+	}
+	return null;
+}
+
+function getArtifactNameForLanguage(row: Partial<ArtifactRow>): string {
+	const baseName = (row.name ?? '').trim();
+	if (language === BASE_LANGUAGE) return baseName;
+	return getTranslationValue((row as any).name_translations, language) ?? baseName;
+}
+
+function getArtifactBenefitForLanguage(row: Partial<ArtifactRow>): string {
+	const baseBenefit = (row.benefit ?? '').trim();
+	if (language === BASE_LANGUAGE) return baseBenefit;
+	return getTranslationValue((row as any).benefit_translations, language) ?? baseBenefit;
+}
+
+function sanitizeLanguageForPath(lang: string): string {
+	return lang.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+}
 
 	// Computed card image URL
-	$: cardImageUrl = artifact.card_image_path
-		? supabase.storage.from('game_assets').getPublicUrl(artifact.card_image_path).data?.publicUrl
-		: null;
+	$: cardImageUrl = (() => {
+		const basePath = (artifact as any)?.card_image_path ?? null;
+		const translatedPath = getTranslationValue((artifact as any)?.card_image_path_translations, language);
+		const path = language === BASE_LANGUAGE ? basePath : translatedPath ?? basePath;
+		return path ? supabase.storage.from('game_assets').getPublicUrl(path).data?.publicUrl : null;
+	})();
 
-	$: if (isOpen && artifact) {
-		selectedTagIds = artifact.tag_ids || [];
-		
+	$: if (isOpen) {
+		selectedTagIds = (artifact as any).tag_ids || [];
+
 		// Ensure quantity has a default value
-		if (artifact.quantity === undefined || artifact.quantity === null) {
-			artifact.quantity = 1;
+		if ((artifact as any).quantity === undefined || (artifact as any).quantity === null) {
+			(artifact as any).quantity = 1;
+		}
+
+		const initKey = `${(artifact as any)?.id ?? 'new'}|${language}`;
+		if (initKey !== lastInitKey) {
+			lastInitKey = initKey;
+			nameDraft = language === BASE_LANGUAGE ? ((artifact as any).name ?? '') : (getTranslationValue((artifact as any).name_translations, language) ?? '');
+			benefitDraft = language === BASE_LANGUAGE ? ((artifact as any).benefit ?? '') : (getTranslationValue((artifact as any).benefit_translations, language) ?? '');
 		}
 	}
 
 	function save() {
 		// Prepare artifact object for saving
-		const toSave = {
+		const toSave: Partial<ArtifactRow> & Record<string, unknown> = {
 			...artifact,
 			tag_ids: selectedTagIds,
-			guardian_id: artifact.guardian_id ?? null
+			guardian_id: (artifact as any).guardian_id ?? null
 		};
+
+		if (language === BASE_LANGUAGE) {
+			toSave.name = (nameDraft ?? '').trim();
+			toSave.benefit = benefitDraft ?? '';
+		} else {
+			const nextName = normalizeOptionalText(nameDraft);
+			const currentNameTranslations = ((artifact as any).name_translations ?? {}) as Record<string, string>;
+			const nextNameTranslations = { ...currentNameTranslations };
+			if (nextName) nextNameTranslations[language] = nextName;
+			else delete nextNameTranslations[language];
+			toSave.name_translations = nextNameTranslations;
+
+			const nextBenefit = normalizeOptionalText(benefitDraft);
+			const currentBenefitTranslations = ((artifact as any).benefit_translations ?? {}) as Record<string, string>;
+			const nextBenefitTranslations = { ...currentBenefitTranslations };
+			if (nextBenefit) nextBenefitTranslations[language] = nextBenefit;
+			else delete nextBenefitTranslations[language];
+			toSave.benefit_translations = nextBenefitTranslations;
+		}
 		dispatch('save', toSave);
 	}
 
@@ -70,13 +144,22 @@ let generatingCard = false;
 
 		generatingCard = true;
 		try {
+			const renderArtifact = {
+				...(artifact as ArtifactRow),
+				name: getArtifactNameForLanguage(artifact),
+				benefit: getArtifactBenefitForLanguage(artifact)
+			};
+
+			const safeLang = language === BASE_LANGUAGE ? '' : sanitizeLanguageForPath(language);
+			const filename = safeLang ? `card_${safeLang}` : 'card';
+
 			// Generate PNG directly using Canvas API
-			const pngBlob = await generateArtifactCardPNG(artifact as ArtifactRow, origins, runes, tags, guardians);
+			const pngBlob = await generateArtifactCardPNG(renderArtifact as ArtifactRow, origins, runes, tags, guardians);
 
 			// Upload with transparent area cropping
 			const { data, error: uploadError } = await processAndUploadImage(pngBlob, {
 				folder: `artifacts/${artifact.id}`,
-				filename: 'card',
+				filename,
 				cropTransparent: true,
 				upsert: true
 			});
@@ -87,21 +170,30 @@ let generatingCard = false;
 
 			const uploadedPath = data?.path ?? '';
 
-			// Update artifact with card_image_path
-			const { error: updateError } = await supabase
-				.from('artifacts')
-				.update({
-					card_image_path: uploadedPath,
-					updated_at: new Date().toISOString(),
-				})
-				.eq('id', artifact.id);
+			const updatePayload: Record<string, unknown> = {
+				updated_at: new Date().toISOString(),
+			};
+
+			if (language === BASE_LANGUAGE) {
+				updatePayload.card_image_path = uploadedPath;
+			} else {
+				const current = ((artifact as any).card_image_path_translations ?? {}) as Record<string, string>;
+				updatePayload.card_image_path_translations = { ...current, [language]: uploadedPath };
+			}
+
+			const { error: updateError } = await supabase.from('artifacts').update(updatePayload).eq('id', artifact.id);
 
 			if (updateError) {
 				throw new Error(`Failed to update artifact: ${updateError.message}`);
 			}
 
 			// Update local artifact object
-			artifact.card_image_path = uploadedPath;
+			if (language === BASE_LANGUAGE) {
+				(artifact as any).card_image_path = uploadedPath;
+			} else {
+				const current = ((artifact as any).card_image_path_translations ?? {}) as Record<string, string>;
+				(artifact as any).card_image_path_translations = { ...current, [language]: uploadedPath };
+			}
 
 			alert('Card image generated successfully!');
 		} catch (error) {
@@ -123,8 +215,14 @@ let generatingCard = false;
 
 		<div class="drawer-content">
 			<div class="form-group">
-				<label for="name">Name</label>
-				<input type="text" id="name" bind:value={artifact.name} placeholder="Artifact Name" />
+				<label for="name">Name{language === BASE_LANGUAGE ? '' : ` (${language})`}</label>
+				<input
+					type="text"
+					id="name"
+					value={nameDraft}
+					on:input={(e) => (nameDraft = (e.currentTarget as HTMLInputElement).value)}
+					placeholder={language === BASE_LANGUAGE ? 'Artifact Name' : ((artifact as any).name ?? 'Artifact Name')}
+				/>
 			</div>
 
 			<div class="form-group">
@@ -138,12 +236,13 @@ let generatingCard = false;
 			</div>
 
 			<div class="form-group">
-				<label for="benefit">Benefit</label>
+				<label for="benefit">Benefit{language === BASE_LANGUAGE ? '' : ` (${language})`}</label>
 				<textarea
 					id="benefit"
-					bind:value={artifact.benefit}
+					value={benefitDraft}
+					on:input={(e) => (benefitDraft = (e.currentTarget as HTMLTextAreaElement).value)}
 					rows="3"
-					placeholder="Describe the artifact's effect..."
+					placeholder={language === BASE_LANGUAGE ? "Describe the artifact's effect..." : ((artifact as any).benefit ?? "Describe the artifact's effect...")}
 				></textarea>
 			</div>
 
@@ -181,7 +280,7 @@ let generatingCard = false;
 				<div class="form-group">
 					<label for="card-image-btn">Card Image</label>
 					<div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-						{#if artifact.card_image_path && cardImageUrl}
+						{#if cardImageUrl}
 							<a 
 								href={cardImageUrl}
 								target="_blank"

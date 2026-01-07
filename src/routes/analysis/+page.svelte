@@ -92,14 +92,14 @@
 		activeTab = tabId;
 	}
 
-	// =====================
-	// CLASS ANALYSIS STATE
-	// =====================
-	const TARGET_CLASSES = ['Fighter'];
-	let classLoading = true;
-	let classError: string | null = null;
-	let classes: ClassRow[] = [];
-	let diceRecords: CustomDiceWithSides[] = [];
+		// =====================
+		// CLASS ANALYSIS STATE
+		// =====================
+		const TARGET_CLASSES = ['Fighter'];
+		let classLoading = $state(true);
+		let classError: string | null = $state(null);
+		let classes: ClassRow[] = $state([]);
+		let diceRecords: CustomDiceWithSides[] = $state([]);
 	type ClassSimulationVariant = {
 		key: string;
 		label: string;
@@ -108,16 +108,16 @@
 		breakdown: EffectBreakdownRow[];
 	};
 	type EffectBreakdownRow = { label: string; items: string[] };
-	let classStats = new Map<string, ClassSimulationVariant[]>();
+		let classStats: Map<string, ClassSimulationVariant[]> = $state(new Map());
 	const sorcererName = 'Sorcerer';
 	const sorcererRuneOptions = [1, 2, 3, 4];
-	let selectedRuneCounts = [3];
-	let diceNameLookup = new Map<string, string>();
-	const MIN_BREAKPOINTS = 3;
-	const MAX_BREAKPOINTS = 9;
-	let breakpointLimit = MAX_BREAKPOINTS;
-	let classChartCanvas: HTMLCanvasElement;
-	let classChart: Chart<'line', { x: number; y: number }[]> | null = null;
+		let selectedRuneCounts = $state<number[]>([3]);
+		let diceNameLookup: Map<string, string> = $state(new Map());
+		const MIN_BREAKPOINTS = 3;
+		const MAX_BREAKPOINTS = 9;
+		let breakpointLimit = $state(MAX_BREAKPOINTS);
+		let classChartCanvas: HTMLCanvasElement | null = $state(null);
+		let classChart: Chart<'line', { x: number; y: number }[]> | null = null;
 
 	// =====================
 	// SPIRITS ANALYSIS STATE
@@ -510,13 +510,71 @@
 		}
 	}
 
-	function formatNumber(value: number): string {
-		return value.toFixed(2);
-	}
+		function formatNumber(value: number): string {
+			return value.toFixed(2);
+		}
 
-	// =====================
-	// SPIRITS ANALYSIS FUNCTIONS
-	// =====================
+		type LinearFit = { slope: number; intercept: number; r2: number | null };
+
+		function fitLinear(points: { x: number; y: number }[]): LinearFit | null {
+			if (points.length < 2) return null;
+
+			const n = points.length;
+			let sumX = 0;
+			let sumY = 0;
+			let sumXX = 0;
+			let sumXY = 0;
+
+			for (const point of points) {
+				sumX += point.x;
+				sumY += point.y;
+				sumXX += point.x * point.x;
+				sumXY += point.x * point.y;
+			}
+
+			const denom = n * sumXX - sumX * sumX;
+			if (denom === 0) return null;
+
+			const slope = (n * sumXY - sumX * sumY) / denom;
+			const intercept = (sumY - slope * sumX) / n;
+
+			const meanY = sumY / n;
+			let ssTot = 0;
+			let ssRes = 0;
+			for (const point of points) {
+				const predicted = slope * point.x + intercept;
+				const residual = point.y - predicted;
+				ssRes += residual * residual;
+				const centered = point.y - meanY;
+				ssTot += centered * centered;
+			}
+			const r2 = ssTot === 0 ? null : 1 - ssRes / ssTot;
+
+			return { slope, intercept, r2 };
+		}
+
+		function getVariantFit(results: BreakpointSimulationResult[]): LinearFit | null {
+			const points = results
+				.filter(
+					(stat): stat is BreakpointSimulationResult & { numericCount: number } =>
+						stat.numericCount !== null
+				)
+				.map((stat) => ({ x: Number(stat.numericCount), y: stat.mean }));
+			return fitLinear(points);
+		}
+
+		function formatFitEquation(fit: LinearFit): string {
+			const slope = fit.slope.toFixed(3);
+			const interceptAbs = Math.abs(fit.intercept).toFixed(3);
+			const interceptSign = fit.intercept < 0 ? '-' : '+';
+			const equation = `y = ${slope}x ${interceptSign} ${interceptAbs}`;
+			if (fit.r2 === null) return equation;
+			return `${equation} (R² ${fit.r2.toFixed(3)})`;
+		}
+
+		// =====================
+		// SPIRITS ANALYSIS FUNCTIONS
+		// =====================
 	async function loadSpiritsData() {
 		spiritsLoading = true;
 		spiritsError = null;
@@ -1723,10 +1781,15 @@
 							{@const variants = classStats.get(entry.id) ?? []}
 							<article class="card stats-card">
 								<h2>{entry.name}</h2>
-								{#if variants.length === 0}
+								{#if diceRecords.length === 0}
+									<p class="muted">
+										No dice records available. Add dice to run breakpoint simulations.
+									</p>
+								{:else if variants.length === 0}
 									<p class="muted">No breakpoint data available.</p>
 								{:else}
 									{#each variants as variant (variant.key)}
+										{@const fit = getVariantFit(variant.results)}
 										{#if variants.length > 1}
 											<h3 class="variant-label">{variant.label}</h3>
 										{/if}
@@ -1748,12 +1811,16 @@
 												{/each}
 											</tbody>
 										</table>
+										{#if fit}
+											<p class="muted fit-line">{formatFitEquation(fit)}</p>
+										{/if}
 										{#if variant.breakdown.some((row) => row.items.length)}
 											<div class="effect-breakdown">
 												{#each variant.breakdown as row, rowIndex}
 													<div class="effect-breakdown__row">
 														<span class="effect-breakdown__label">
-															{row.label || (variant.results[rowIndex]?.numericCount ?? rowIndex + 1)}
+															{row.label ||
+																(variant.results[rowIndex]?.numericCount ?? rowIndex + 1)}
 														</span>
 														<ul>
 															{#each row.items as item}
@@ -2627,6 +2694,11 @@
 
 	.stats-card td {
 		color: #e2e8f0;
+	}
+
+	.fit-line {
+		margin: 0.25rem 0 0;
+		font-size: 0.85rem;
 	}
 
 	.effect-breakdown {

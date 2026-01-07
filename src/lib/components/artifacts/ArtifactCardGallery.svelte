@@ -4,9 +4,13 @@
 	import type { ArtifactRow, OriginRow, RuneRow, ArtifactTagRow, GuardianRow } from '$lib/types/gameData';
 	import ArtifactCard from './ArtifactCard.svelte';
 
+	type ArtifactLanguage = 'base' | string;
+	const BASE_LANGUAGE: ArtifactLanguage = 'base';
+
 	interface Props {
 		isOpen: boolean;
 		artifacts: ArtifactRow[];
+		language?: ArtifactLanguage;
 		origins?: OriginRow[];
 		runes?: RuneRow[];
 		tags?: ArtifactTagRow[];
@@ -16,6 +20,7 @@
 	let {
 		isOpen = $bindable(false),
 		artifacts = [],
+		language = BASE_LANGUAGE,
 		origins = [],
 		runes = [],
 		tags = [],
@@ -25,13 +30,52 @@
 	// View mode: 'live' for HTML preview, 'generated' for PNG images
 	let viewMode = $state<'live' | 'generated'>('live');
 
+	function normalizeOptionalText(value: string | null | undefined): string | null {
+		const trimmed = (value ?? '').trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	function normalizeLanguageCode(value: string): string {
+		return value.trim().replace(/_/g, '-').toLowerCase();
+	}
+
+	function getTranslationValue(input: unknown, lang: string): string | null {
+		if (!lang || lang === BASE_LANGUAGE) return null;
+		if (!input || typeof input !== 'object') return null;
+		const record = input as Record<string, unknown>;
+		const direct = record[lang];
+		if (typeof direct === 'string') return normalizeOptionalText(direct);
+		for (const [key, value] of Object.entries(record)) {
+			if (normalizeLanguageCode(key) !== lang) continue;
+			if (typeof value !== 'string') continue;
+			return normalizeOptionalText(value);
+		}
+		return null;
+	}
+
+	function getArtifactName(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.name;
+		return getTranslationValue(artifact.name_translations, language) ?? artifact.name;
+	}
+
+	function getArtifactBenefit(artifact: ArtifactRow): string {
+		if (language === BASE_LANGUAGE) return artifact.benefit ?? '';
+		return getTranslationValue(artifact.benefit_translations, language) ?? artifact.benefit ?? '';
+	}
+
+	function getArtifactCardImagePath(artifact: ArtifactRow): string | null {
+		if (language === BASE_LANGUAGE) return artifact.card_image_path ?? null;
+		return getTranslationValue(artifact.card_image_path_translations, language) ?? null;
+	}
+
 	// Filter artifacts that have card images (for generated view)
-	const artifactsWithCards = $derived(artifacts.filter((a) => a.card_image_path));
+	const artifactsWithCards = $derived(artifacts.filter((a) => Boolean(getArtifactCardImagePath(a))));
 
 	// Get public URL for card image
 	function getCardImageUrl(artifact: ArtifactRow): string | null {
-		if (!artifact.card_image_path) return null;
-		const { data } = supabase.storage.from('game_assets').getPublicUrl(artifact.card_image_path);
+		const path = getArtifactCardImagePath(artifact);
+		if (!path) return null;
+		const { data } = supabase.storage.from('game_assets').getPublicUrl(path);
 		return data?.publicUrl || null;
 	}
 
@@ -136,14 +180,16 @@
 					{:else}
 						<div class="gallery-grid live-grid">
 							{#each artifacts as artifact (artifact.id)}
+								{@const displayName = getArtifactName(artifact)}
+								{@const displayBenefit = getArtifactBenefit(artifact)}
 								<div class="card-item live-card">
 									<ArtifactCard
-										artifact={{ name: artifact.name || '', benefit: artifact.benefit || '' }}
+										artifact={{ name: displayName || '', benefit: displayBenefit || '' }}
 										recipeIcons={getRecipeIcons(artifact)}
 										tagNames={getTagNames(artifact)}
 										guardianName={getGuardianName(artifact)}
 									/>
-									<div class="card-name">{artifact.name || 'Unnamed Artifact'}</div>
+									<div class="card-name">{displayName || 'Unnamed Artifact'}</div>
 								</div>
 							{/each}
 						</div>
@@ -157,13 +203,14 @@
 					{:else}
 						<div class="gallery-grid">
 							{#each artifactsWithCards as artifact (artifact.id)}
+								{@const displayName = getArtifactName(artifact)}
 								{@const imageUrl = getCardImageUrl(artifact)}
 								{#if imageUrl}
 									<div class="card-item">
 										<div class="card-image-wrapper">
-											<img src={imageUrl} alt={artifact.name || 'Artifact card'} loading="lazy" />
+											<img src={imageUrl} alt={displayName || 'Artifact card'} loading="lazy" />
 										</div>
-										<div class="card-name">{artifact.name || 'Unnamed Artifact'}</div>
+										<div class="card-name">{displayName || 'Unnamed Artifact'}</div>
 									</div>
 								{/if}
 							{/each}

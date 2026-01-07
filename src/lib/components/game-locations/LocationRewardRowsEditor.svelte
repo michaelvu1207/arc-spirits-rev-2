@@ -18,16 +18,18 @@
 		maxIconsPerList = 5
 	}: Props = $props();
 
+	const MAX_REWARD_ROWS = 3;
+
 	let iconPoolLoaded = $state(false);
 	let picking = $state<{ rowIndex: number; list: 'gain' | 'cost' } | null>(null);
-	let slotLimits = $state({ gain: 4, trade_cost: 2, trade_gain: 3 });
+	let slotLimits = $state({ gain: 4, trade_cost: 3, trade_gain: 3 });
 
 	function refreshSlotLimits() {
 		const cfg = loadLocationIconPlacementConfig();
 		const tpl = cfg.rows?.[0];
 		slotLimits = {
 			gain: Math.max(0, tpl?.gain_slots?.length ?? 4),
-			trade_cost: Math.max(0, tpl?.trade_cost_slots?.length ?? 2),
+			trade_cost: Math.max(0, tpl?.trade_cost_slots?.length ?? 3),
 			trade_gain: Math.max(0, tpl?.trade_gain_slots?.length ?? 3)
 		};
 	}
@@ -54,16 +56,19 @@
 	}
 
 	function addGainRow() {
+		if (rewardRows.length >= MAX_REWARD_ROWS) return;
 		rewardRows = [...rewardRows, { type: 'gain', gain_icon_ids: [] }];
 		onchange?.(rewardRows);
 	}
 
 	function addTradeRow() {
+		if (rewardRows.length >= MAX_REWARD_ROWS) return;
 		rewardRows = [...rewardRows, { type: 'trade', cost_icon_ids: [], gain_icon_ids: [] }];
 		onchange?.(rewardRows);
 	}
 
 	function addTextRow() {
+		if (rewardRows.length >= MAX_REWARD_ROWS) return;
 		rewardRows = [...rewardRows, { type: 'text', text: '' }];
 		onchange?.(rewardRows);
 	}
@@ -151,11 +156,11 @@
 
 <div class="location-reward-rows">
 	<div class="location-reward-rows__header">
-		<h4>Rewards</h4>
+		<h4>Rewards ({rewardRows.length}/{MAX_REWARD_ROWS})</h4>
 		<div class="location-reward-rows__header-actions">
-			<Button variant="secondary" onclick={addGainRow}>+ Gain Row</Button>
-			<Button variant="secondary" onclick={addTradeRow}>+ Trade Row</Button>
-			<Button variant="secondary" onclick={addTextRow}>+ Text Row</Button>
+			<Button variant="secondary" onclick={addGainRow} disabled={rewardRows.length >= MAX_REWARD_ROWS}>+ Gain Row</Button>
+			<Button variant="secondary" onclick={addTradeRow} disabled={rewardRows.length >= MAX_REWARD_ROWS}>+ Trade Row</Button>
+			<Button variant="secondary" onclick={addTextRow} disabled={rewardRows.length >= MAX_REWARD_ROWS}>+ Text Row</Button>
 		</div>
 	</div>
 

@@ -25,7 +25,6 @@ export type ResolvedRewardRow = RewardRow & {
 export type Monster = MonsterRow & {
 	icon_url: string | null;
 	art_url: string | null;
-	resolved_reward_rows: ResolvedRewardRow[];
 	effects?: SpecialEffectRow[];
 	traveler_subtext?: string | null;
 	traveler_description?: string | null;

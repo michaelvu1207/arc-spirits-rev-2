@@ -41,6 +41,28 @@ function updateClassQuantity(classId: string, quantity: number) {
   };
 }
 
+function addNameTranslationRow() {
+  const current = formData.name_translations ?? [];
+  formData = {
+    ...formData,
+    name_translations: [...current, { lang: '', name: '' }]
+  };
+}
+
+function updateNameTranslationRow(index: number, patch: Partial<{ lang: string; name: string }>) {
+  const current = formData.name_translations ?? [];
+  if (index < 0 || index >= current.length) return;
+  const next = current.map((row, idx) => (idx === index ? { ...row, ...patch } : row));
+  formData = { ...formData, name_translations: next };
+}
+
+function removeNameTranslationRow(index: number) {
+  const current = formData.name_translations ?? [];
+  if (index < 0 || index >= current.length) return;
+  const next = current.filter((_, idx) => idx !== index);
+  formData = { ...formData, name_translations: next };
+}
+
 	import gamePrintScript from '../../../../scripts/hex-spirit-game-print.jsx?raw';
 	import templateUpdaterScript from '../../../../scripts/update_photoshop_template_path.py?raw';
 	import type { PageData } from './$types';
@@ -1709,6 +1731,45 @@ async function deleteSpirit(spirit: HexSpirit) {
 					Name
 					<input type="text" bind:value={formData.name} required />
 				</label>
+				<div class="span-full translations-editor">
+					<div class="translations-editor__header">
+						<div class="translations-editor__title">Alternate Names (Languages)</div>
+						<button type="button" class="btn translations-editor__add" onclick={addNameTranslationRow}>+ Add</button>
+					</div>
+					{#if (formData.name_translations ?? []).length === 0}
+						<div class="translations-editor__empty">No alternate names.</div>
+					{:else}
+						<div class="translations-editor__rows">
+							{#each formData.name_translations ?? [] as row, idx (idx)}
+								<div class="translations-row">
+									<input
+										class="translations-row__lang"
+										type="text"
+										placeholder="lang (e.g. es, fr-CA)"
+										value={row.lang}
+										oninput={(e) => updateNameTranslationRow(idx, { lang: (e.currentTarget as HTMLInputElement).value })}
+									/>
+									<input
+										class="translations-row__name"
+										type="text"
+										placeholder="translated name"
+										value={row.name}
+										oninput={(e) => updateNameTranslationRow(idx, { name: (e.currentTarget as HTMLInputElement).value })}
+									/>
+									<button
+										type="button"
+										class="btn translations-row__remove"
+										onclick={() => removeNameTranslationRow(idx)}
+										aria-label="Remove alternate name"
+									>
+										Remove
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					<small class="translations-editor__hint">Primary name stays in “Name” above; these are optional.</small>
+				</div>
 		<label>
 			Cost
 			<input type="number" min="0" bind:value={formData.cost} />
@@ -1859,6 +1920,76 @@ async function deleteSpirit(spirit: HexSpirit) {
 		border-radius: 6px;
 		border: 1px dashed rgba(148, 163, 184, 0.3);
 		text-align: center;
+		margin: 0;
+	}
+
+	.translations-editor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding: 0.5rem;
+		border: 1px solid rgba(148, 163, 184, 0.14);
+		background: rgba(15, 23, 42, 0.25);
+		border-radius: 6px;
+	}
+
+	.translations-editor__header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
+	.translations-editor__title {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #cbd5e1;
+	}
+
+	.translations-editor__add {
+		font-size: 0.75rem;
+		padding: 0.25rem 0.45rem;
+	}
+
+	.translations-editor__empty {
+		color: #94a3b8;
+		font-size: 0.8rem;
+		padding: 0.1rem 0;
+	}
+
+	.translations-editor__rows {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+
+	.translations-row {
+		display: grid;
+		grid-template-columns: 120px 1fr auto;
+		gap: 0.45rem;
+		align-items: center;
+	}
+
+	.translations-row input {
+		width: 100%;
+		padding: 0.45rem 0.55rem;
+		border-radius: 6px;
+		background: rgba(30, 41, 59, 0.5);
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		color: inherit;
+	}
+
+	.translations-row__remove {
+		font-size: 0.75rem;
+		padding: 0.35rem 0.55rem;
+		background: rgba(248, 113, 113, 0.12);
+		border: 1px solid rgba(248, 113, 113, 0.28);
+		color: #fecaca;
+	}
+
+	.translations-editor__hint {
+		color: #94a3b8;
+		font-size: 0.75rem;
 		margin: 0;
 	}
 
