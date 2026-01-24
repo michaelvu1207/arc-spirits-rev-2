@@ -1,8 +1,8 @@
 	<script lang="ts">
 		import { onMount } from 'svelte';
-		import type { GameLocationRewardRow } from '$lib/types/gameData';
-		import { loadLocationIconPlacementConfig } from '$lib/generators/locations/locationIconPlacer';
+		import type { GameLocationRewardRow, RewardIconToken } from '$lib/types/gameData';
 		import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
+		import { clampRewardIconTokensBySlots, isRewardOrIconToken, rewardIconTokenSlotCost, rewardIconTokensSlotsUsed } from '$lib/utils/rewardIconTokens';
 		import { IconPicker } from '$lib/components/shared';
 		import { Button, Select, Textarea } from '$lib/components/ui';
 
@@ -17,34 +17,21 @@
 		onchange,
 		maxIconsPerList = 5
 	}: Props = $props();
-
+	
 	const MAX_REWARD_ROWS = 3;
 
 	let iconPoolLoaded = $state(false);
-	let picking = $state<{ rowIndex: number; list: 'gain' | 'cost' } | null>(null);
-	let slotLimits = $state({ gain: 4, trade_cost: 3, trade_gain: 3 });
-
-	function refreshSlotLimits() {
-		const cfg = loadLocationIconPlacementConfig();
-		const tpl = cfg.rows?.[0];
-		slotLimits = {
-			gain: Math.max(0, tpl?.gain_slots?.length ?? 4),
-			trade_cost: Math.max(0, tpl?.trade_cost_slots?.length ?? 3),
-			trade_gain: Math.max(0, tpl?.trade_gain_slots?.length ?? 3)
-		};
-	}
+	type PickingState =
+		| { rowIndex: number; list: 'gain' | 'cost'; mode: 'append' }
+		| { rowIndex: number; list: 'gain' | 'cost'; mode: 'edit'; tokenIndex: number };
+	let picking = $state<PickingState | null>(null);
+	const slotLimits = { gain: 6, trade_cost: 3, trade_gain: 6 };
 
 	onMount(() => {
-		refreshSlotLimits();
-		const handler = () => refreshSlotLimits();
-		window.addEventListener('location-icon-template-updated', handler);
-
 		void (async () => {
 			await loadIconPool();
 			iconPoolLoaded = true;
 		})();
-
-		return () => window.removeEventListener('location-icon-template-updated', handler);
 	});
 
 	function maxFor(row: GameLocationRewardRow, list: 'gain' | 'cost'): number {
@@ -53,6 +40,30 @@
 			return list === 'cost' ? slotLimits.trade_cost : slotLimits.trade_gain;
 		}
 		return slotLimits.gain;
+	}
+
+	function getTokens(row: GameLocationRewardRow, list: 'gain' | 'cost'): RewardIconToken[] {
+		if (row.type === 'text') return [];
+		if (list === 'gain') return row.gain_icon_ids ?? [];
+		if (row.type !== 'trade') return [];
+		return row.cost_icon_ids ?? [];
+	}
+
+	function setTokens(index: number, list: 'gain' | 'cost', tokens: RewardIconToken[]) {
+		const row = rewardRows[index];
+		if (!row || row.type === 'text') return;
+
+		if (list === 'gain') {
+			updateRow(index, { ...row, gain_icon_ids: clampRewardIconTokensBySlots(tokens, maxFor(row, 'gain')) } as GameLocationRewardRow);
+			return;
+		}
+
+		if (row.type !== 'trade') return;
+		updateRow(index, { ...row, cost_icon_ids: clampRewardIconTokensBySlots(tokens, maxFor(row, 'cost')) } as GameLocationRewardRow);
+	}
+
+	function remainingSlots(row: GameLocationRewardRow, list: 'gain' | 'cost'): number {
+		return Math.max(0, maxFor(row, list) - rewardIconTokensSlotsUsed(getTokens(row, list)));
 	}
 
 	function addGainRow() {
@@ -97,16 +108,33 @@
 		else if (picking?.rowIndex === newIndex) picking = { ...picking, rowIndex: index };
 	}
 
-	function setGainIcons(index: number, iconIds: string[]) {
+	function appendIcons(index: number, list: 'gain' | 'cost', iconIds: string[]) {
 		const row = rewardRows[index];
-		if (row.type === 'text') return;
-		updateRow(index, { ...row, gain_icon_ids: iconIds.slice(0, maxFor(row, 'gain')) } as GameLocationRewardRow);
+		if (!row || row.type === 'text') return;
+
+		const existing = getTokens(row, list);
+		const toAdd = iconIds.slice(0, remainingSlots(row, list)).map((id) => String(id));
+		setTokens(index, list, [...existing, ...toAdd]);
 	}
 
-	function setCostIcons(index: number, iconIds: string[]) {
+	function replaceTokenAt(index: number, list: 'gain' | 'cost', tokenIndex: number, next: RewardIconToken) {
 		const row = rewardRows[index];
-		if (row.type !== 'trade') return;
-		updateRow(index, { ...row, cost_icon_ids: iconIds.slice(0, maxFor(row, 'cost')) });
+		if (!row || row.type === 'text') return;
+		const tokens = getTokens(row, list);
+		if (tokenIndex < 0 || tokenIndex >= tokens.length) return;
+		const updated = tokens.map((t, i) => (i === tokenIndex ? next : t));
+		setTokens(index, list, updated);
+	}
+
+	function addOrSlot(index: number, list: 'gain' | 'cost') {
+		const row = rewardRows[index];
+		if (!row || row.type === 'text') return;
+		if (remainingSlots(row, list) < 2) return;
+
+		const tokens = getTokens(row, list);
+		const tokenIndex = tokens.length;
+		setTokens(index, list, [...tokens, { kind: 'or', icon_ids: [] }]);
+		picking = { rowIndex: index, list, mode: 'edit', tokenIndex };
 	}
 
 	function setText(index: number, text: string) {
@@ -115,18 +143,11 @@
 		updateRow(index, { ...row, text });
 	}
 
-	function removeGainIconAt(index: number, iconIndex: number) {
+	function removeTokenAt(index: number, list: 'gain' | 'cost', tokenIndex: number) {
 		const row = rewardRows[index];
-		if (row.type === 'text') return;
-		const next = row.gain_icon_ids.filter((_, i) => i !== iconIndex);
-		setGainIcons(index, next);
-	}
-
-	function removeCostIconAt(index: number, iconIndex: number) {
-		const row = rewardRows[index];
-		if (row.type !== 'trade') return;
-		const next = row.cost_icon_ids.filter((_, i) => i !== iconIndex);
-		setCostIcons(index, next);
+		if (!row || row.type === 'text') return;
+		const tokens = getTokens(row, list).filter((_, i) => i !== tokenIndex);
+		setTokens(index, list, tokens);
 	}
 
 	function setRowType(index: number, type: 'gain' | 'trade' | 'text') {
@@ -210,138 +231,291 @@
 							<Button variant="ghost" onclick={() => removeRow(index)} class="location-reward-rows__remove">
 								✕
 							</Button>
-						</div>
 					</div>
+				</div>
 
-					{#if row.type === 'gain'}
-						<div class="location-reward-rows__icons">
-							<div class="location-reward-rows__section-title">Gain</div>
-							{#if row.gain_icon_ids.length === 0}
+				{#if row.type === 'gain'}
+					{@const gainTokens = row.gain_icon_ids ?? []}
+					<div class="location-reward-rows__icons">
+						<div class="location-reward-rows__section-title">Gain</div>
+						{#if gainTokens.length === 0}
+							<div class="location-reward-rows__add-actions">
 								<button
 									type="button"
 									class="location-reward-rows__add-icon"
-									onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+									onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'append' })}
 								>
 									+ Add Icons
 								</button>
-							{:else}
-								<div class="location-reward-rows__icon-list">
-									{#each row.gain_icon_ids as iconId, iconIndex (iconIndex)}
-										{@const url = getIconPoolUrl(iconId)}
-										<div class="location-reward-rows__icon">
+								<button
+									type="button"
+									class="location-reward-rows__add-or"
+									onclick={() => addOrSlot(index, 'gain')}
+									disabled={remainingSlots(row, 'gain') < 2}
+								>
+									+ OR Slot
+								</button>
+							</div>
+						{:else}
+							<div class="location-reward-rows__icon-list">
+								{#each gainTokens as token, tokenIndex (tokenIndex)}
+									<div class="location-reward-rows__icon">
+										<button
+											type="button"
+											class="location-reward-rows__icon-edit"
+											title="Edit slot"
+											onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'edit', tokenIndex })}
+										>
+											✎
+										</button>
+
+										{#if typeof token === 'string'}
+											{@const url = getIconPoolUrl(token)}
 											{#if url}
 												<img src={url} alt="Gain icon" />
 											{:else}
 												<span class="location-reward-rows__icon-placeholder">?</span>
 											{/if}
-											<button
-												type="button"
-												class="location-reward-rows__icon-remove"
-												onclick={() => removeGainIconAt(index, iconIndex)}
-											>
-												✕
-											</button>
-										</div>
-									{/each}
-									{#if row.gain_icon_ids.length < maxFor(row, 'gain')}
+										{:else if isRewardOrIconToken(token)}
+											{#if token.icon_ids.length === 0}
+												<span class="location-reward-rows__icon-placeholder">OR</span>
+											{:else}
+												<div class="location-reward-rows__or-group">
+													{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+														{@const url = getIconPoolUrl(iconId)}
+														{#if url}
+															<img src={url} alt="OR icon" />
+														{:else}
+															<span class="location-reward-rows__icon-placeholder">?</span>
+														{/if}
+														{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+															<span class="location-reward-rows__or-slash">/</span>
+														{/if}
+													{/each}
+												</div>
+											{/if}
+										{/if}
+
+										<button
+											type="button"
+											class="location-reward-rows__icon-remove"
+											onclick={() => removeTokenAt(index, 'gain', tokenIndex)}
+										>
+											✕
+										</button>
+									</div>
+								{/each}
+								{#if remainingSlots(row, 'gain') > 0}
+									<div class="location-reward-rows__add-more-group">
 										<button
 											type="button"
 											class="location-reward-rows__add-more"
-											onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+											onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'append' })}
 										>
 											+
 										</button>
-									{/if}
-								</div>
-							{/if}
-						</div>
-					{:else if row.type === 'trade'}
-						<div class="location-reward-rows__trade">
-							<div class="location-reward-rows__trade-col">
-								<div class="location-reward-rows__section-title">Spend</div>
-								{#if row.cost_icon_ids.length === 0}
+										<button
+											type="button"
+											class="location-reward-rows__add-or-mini"
+											onclick={() => addOrSlot(index, 'gain')}
+											disabled={remainingSlots(row, 'gain') < 2}
+										>
+											OR
+										</button>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{:else if row.type === 'trade'}
+					{@const costTokens = row.cost_icon_ids ?? []}
+					{@const gainTokens = row.gain_icon_ids ?? []}
+					<div class="location-reward-rows__trade">
+						<div class="location-reward-rows__trade-col">
+							<div class="location-reward-rows__section-title">Spend</div>
+							{#if costTokens.length === 0}
+								<div class="location-reward-rows__add-actions">
 									<button
 										type="button"
 										class="location-reward-rows__add-icon"
-										onclick={() => (picking = { rowIndex: index, list: 'cost' })}
+										onclick={() => (picking = { rowIndex: index, list: 'cost', mode: 'append' })}
 									>
 										+ Add Cost Icons
 									</button>
-								{:else}
-									<div class="location-reward-rows__icon-list">
-										{#each row.cost_icon_ids as iconId, iconIndex (iconIndex)}
-											{@const url = getIconPoolUrl(iconId)}
-											<div class="location-reward-rows__icon">
+									<button
+										type="button"
+										class="location-reward-rows__add-or"
+										onclick={() => addOrSlot(index, 'cost')}
+										disabled={remainingSlots(row, 'cost') < 2}
+									>
+										+ OR Slot
+									</button>
+								</div>
+							{:else}
+								<div class="location-reward-rows__icon-list">
+									{#each costTokens as token, tokenIndex (tokenIndex)}
+										<div class="location-reward-rows__icon">
+											<button
+												type="button"
+												class="location-reward-rows__icon-edit"
+												title="Edit slot"
+												onclick={() => (picking = { rowIndex: index, list: 'cost', mode: 'edit', tokenIndex })}
+											>
+												✎
+											</button>
+
+											{#if typeof token === 'string'}
+												{@const url = getIconPoolUrl(token)}
 												{#if url}
 													<img src={url} alt="Cost icon" />
 												{:else}
 													<span class="location-reward-rows__icon-placeholder">?</span>
 												{/if}
-												<button
-													type="button"
-													class="location-reward-rows__icon-remove"
-													onclick={() => removeCostIconAt(index, iconIndex)}
-												>
-													✕
-												</button>
-											</div>
-										{/each}
-										{#if row.cost_icon_ids.length < maxFor(row, 'cost')}
+											{:else if isRewardOrIconToken(token)}
+												{#if token.icon_ids.length === 0}
+													<span class="location-reward-rows__icon-placeholder">OR</span>
+												{:else}
+													<div class="location-reward-rows__or-group">
+														{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+															{@const url = getIconPoolUrl(iconId)}
+															{#if url}
+																<img src={url} alt="OR icon" />
+															{:else}
+																<span class="location-reward-rows__icon-placeholder">?</span>
+															{/if}
+															{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+																<span class="location-reward-rows__or-slash">/</span>
+															{/if}
+														{/each}
+													</div>
+												{/if}
+											{/if}
+
+											<button
+												type="button"
+												class="location-reward-rows__icon-remove"
+												onclick={() => removeTokenAt(index, 'cost', tokenIndex)}
+											>
+												✕
+											</button>
+										</div>
+									{/each}
+									{#if remainingSlots(row, 'cost') > 0}
+										<div class="location-reward-rows__add-more-group">
 											<button
 												type="button"
 												class="location-reward-rows__add-more"
-												onclick={() => (picking = { rowIndex: index, list: 'cost' })}
+												onclick={() => (picking = { rowIndex: index, list: 'cost', mode: 'append' })}
 											>
 												+
 											</button>
-										{/if}
-									</div>
-								{/if}
-							</div>
+											<button
+												type="button"
+												class="location-reward-rows__add-or-mini"
+												onclick={() => addOrSlot(index, 'cost')}
+												disabled={remainingSlots(row, 'cost') < 2}
+											>
+												OR
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
 
 							<div class="location-reward-rows__trade-arrow">→</div>
 
-							<div class="location-reward-rows__trade-col">
-								<div class="location-reward-rows__section-title">Gain</div>
-								{#if row.gain_icon_ids.length === 0}
+						<div class="location-reward-rows__trade-col">
+							<div class="location-reward-rows__section-title">Gain</div>
+							{#if gainTokens.length === 0}
+								<div class="location-reward-rows__add-actions">
 									<button
 										type="button"
 										class="location-reward-rows__add-icon"
-										onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+										onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'append' })}
 									>
 										+ Add Reward Icons
 									</button>
-								{:else}
-									<div class="location-reward-rows__icon-list">
-										{#each row.gain_icon_ids as iconId, iconIndex (iconIndex)}
-											{@const url = getIconPoolUrl(iconId)}
-											<div class="location-reward-rows__icon">
+									<button
+										type="button"
+										class="location-reward-rows__add-or"
+										onclick={() => addOrSlot(index, 'gain')}
+										disabled={remainingSlots(row, 'gain') < 2}
+									>
+										+ OR Slot
+									</button>
+								</div>
+							{:else}
+								<div class="location-reward-rows__icon-list">
+									{#each gainTokens as token, tokenIndex (tokenIndex)}
+										<div class="location-reward-rows__icon">
+											<button
+												type="button"
+												class="location-reward-rows__icon-edit"
+												title="Edit slot"
+												onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'edit', tokenIndex })}
+											>
+												✎
+											</button>
+
+											{#if typeof token === 'string'}
+												{@const url = getIconPoolUrl(token)}
 												{#if url}
 													<img src={url} alt="Reward icon" />
 												{:else}
 													<span class="location-reward-rows__icon-placeholder">?</span>
 												{/if}
-												<button
-													type="button"
-													class="location-reward-rows__icon-remove"
-													onclick={() => removeGainIconAt(index, iconIndex)}
-												>
-													✕
-												</button>
-											</div>
-										{/each}
-										{#if row.gain_icon_ids.length < maxFor(row, 'gain')}
+											{:else if isRewardOrIconToken(token)}
+												{#if token.icon_ids.length === 0}
+													<span class="location-reward-rows__icon-placeholder">OR</span>
+												{:else}
+													<div class="location-reward-rows__or-group">
+														{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+															{@const url = getIconPoolUrl(iconId)}
+															{#if url}
+																<img src={url} alt="OR icon" />
+															{:else}
+																<span class="location-reward-rows__icon-placeholder">?</span>
+															{/if}
+															{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+																<span class="location-reward-rows__or-slash">/</span>
+															{/if}
+														{/each}
+													</div>
+												{/if}
+											{/if}
+
+											<button
+												type="button"
+												class="location-reward-rows__icon-remove"
+												onclick={() => removeTokenAt(index, 'gain', tokenIndex)}
+											>
+												✕
+											</button>
+										</div>
+									{/each}
+									{#if remainingSlots(row, 'gain') > 0}
+										<div class="location-reward-rows__add-more-group">
 											<button
 												type="button"
 												class="location-reward-rows__add-more"
-												onclick={() => (picking = { rowIndex: index, list: 'gain' })}
+												onclick={() => (picking = { rowIndex: index, list: 'gain', mode: 'append' })}
 											>
 												+
 											</button>
-										{/if}
-									</div>
-								{/if}
-							</div>
+											<button
+												type="button"
+												class="location-reward-rows__add-or-mini"
+												onclick={() => addOrSlot(index, 'gain')}
+												disabled={remainingSlots(row, 'gain') < 2}
+											>
+												OR
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
 						</div>
 					{:else}
 						<div class="location-reward-rows__text">
@@ -353,21 +527,56 @@
 								oninput={(e) => setText(index, (e.currentTarget as HTMLTextAreaElement).value)}
 							/>
 						</div>
-					{/if}
+				{/if}
 
-					{#if picking?.rowIndex === index && row.type !== 'text'}
-						{@const activePicking = picking as NonNullable<typeof picking>}
-						<div class="location-reward-rows__picker">
-							<IconPicker
-								selected={activePicking.list === 'cost' && row.type === 'trade' ? row.cost_icon_ids : row.gain_icon_ids}
-								onselect={(ids) => (activePicking.list === 'cost' ? setCostIcons(index, ids) : setGainIcons(index, ids))}
-								multiple={true}
-								maxSelection={maxFor(row, activePicking.list)}
-								allowDuplicates={true}
-							/>
-							<Button variant="secondary" onclick={() => (picking = null)}>Done</Button>
-						</div>
-					{/if}
+				{#if picking?.rowIndex === index && row.type !== 'text'}
+					{@const activePicking = picking as NonNullable<typeof picking>}
+					{@const tokenList = getTokens(row, activePicking.list)}
+					{@const activeToken = activePicking.mode === 'edit' ? tokenList[activePicking.tokenIndex] : null}
+					{@const pickerSelected = activePicking.mode === 'edit'
+						? (typeof activeToken === 'string'
+							? [activeToken]
+							: (activeToken && isRewardOrIconToken(activeToken) ? activeToken.icon_ids : []))
+						: []}
+					{@const pickerMax = (() => {
+						if (activePicking.mode === 'append') return remainingSlots(row, activePicking.list);
+						if (!activeToken || typeof activeToken === 'string' || !isRewardOrIconToken(activeToken)) return 1;
+
+						const otherTokens = tokenList.filter((_, i) => i !== activePicking.tokenIndex);
+						const usedElsewhere = rewardIconTokensSlotsUsed(otherTokens);
+						const budget = Math.max(0, maxFor(row, activePicking.list) - usedElsewhere);
+						const currentCost = rewardIconTokenSlotCost(activeToken);
+						const maxPossible = Math.min(2, Math.max(budget, currentCost));
+						return maxPossible;
+					})()}
+					{@const pickerMultiple = activePicking.mode === 'append' || (!!activeToken && isRewardOrIconToken(activeToken))}
+					<div class="location-reward-rows__picker">
+						<IconPicker
+							selected={pickerSelected}
+							onselect={(ids) => {
+								if (activePicking.mode === 'append') {
+									appendIcons(index, activePicking.list, ids);
+									return;
+								}
+
+								const token = tokenList[activePicking.tokenIndex];
+								if (typeof token === 'string') {
+									const next = ids[0] ?? token;
+									replaceTokenAt(index, activePicking.list, activePicking.tokenIndex, next);
+									return;
+								}
+
+								if (token && isRewardOrIconToken(token)) {
+									replaceTokenAt(index, activePicking.list, activePicking.tokenIndex, { kind: 'or', icon_ids: ids });
+								}
+							}}
+							multiple={pickerMultiple}
+							maxSelection={pickerMax}
+							allowDuplicates={true}
+						/>
+						<Button variant="secondary" onclick={() => (picking = null)}>Done</Button>
+					</div>
+				{/if}
 				</div>
 			{/each}
 		</div>
@@ -538,6 +747,43 @@
 		color: #93c5fd;
 	}
 
+	.location-reward-rows__add-actions {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.5rem;
+	}
+
+	.location-reward-rows__add-or {
+		width: 100%;
+		padding: 0.75rem;
+		border: 2px dashed rgba(148, 163, 184, 0.3);
+		border-radius: 8px;
+		background: transparent;
+		color: #94a3b8;
+		cursor: pointer;
+		font-size: 0.875rem;
+		transition: all 0.15s ease;
+	}
+
+	.location-reward-rows__add-or:hover {
+		border-color: rgba(96, 165, 250, 0.75);
+		color: #93c5fd;
+	}
+
+	.location-reward-rows__add-or:disabled,
+	.location-reward-rows__add-more:disabled,
+	.location-reward-rows__add-or-mini:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.location-reward-rows__add-or:disabled:hover,
+	.location-reward-rows__add-more:disabled:hover,
+	.location-reward-rows__add-or-mini:disabled:hover {
+		border-color: rgba(148, 163, 184, 0.3);
+		color: #94a3b8;
+	}
+
 	.location-reward-rows__icon-list {
 		display: flex;
 		flex-wrap: wrap;
@@ -555,10 +801,34 @@
 		border: 1px solid rgba(148, 163, 184, 0.15);
 	}
 
-	.location-reward-rows__icon img {
+	.location-reward-rows__icon > img {
 		width: 100%;
 		height: 100%;
 		object-fit: contain;
+	}
+
+	.location-reward-rows__or-group {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		gap: 0;
+		padding: 0.1rem;
+	}
+
+	.location-reward-rows__or-group img {
+		width: 12px;
+		height: 12px;
+		object-fit: contain;
+	}
+
+	.location-reward-rows__or-slash {
+		color: rgba(226, 232, 240, 0.9);
+		font-weight: 800;
+		font-size: 1.1rem;
+		line-height: 1;
+		margin: 0 0.16rem;
 	}
 
 	.location-reward-rows__icon-placeholder {
@@ -589,6 +859,54 @@
 
 	.location-reward-rows__icon:hover .location-reward-rows__icon-remove {
 		opacity: 1;
+	}
+
+	.location-reward-rows__icon-edit {
+		position: absolute;
+		top: -4px;
+		left: -4px;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		border: none;
+		background: rgba(96, 165, 250, 0.9);
+		color: white;
+		font-size: 0.6rem;
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		opacity: 0;
+		transition: opacity 0.15s;
+	}
+
+	.location-reward-rows__icon:hover .location-reward-rows__icon-edit {
+		opacity: 1;
+	}
+
+	.location-reward-rows__add-more-group {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.location-reward-rows__add-or-mini {
+		width: 40px;
+		height: 40px;
+		border-radius: 8px;
+		border: 2px dashed rgba(148, 163, 184, 0.3);
+		background: transparent;
+		color: #94a3b8;
+		cursor: pointer;
+		font-size: 0.8rem;
+		font-weight: 700;
+		display: grid;
+		place-items: center;
+		transition: all 0.15s;
+	}
+
+	.location-reward-rows__add-or-mini:hover {
+		border-color: rgba(96, 165, 250, 0.75);
+		color: #93c5fd;
 	}
 
 	.location-reward-rows__add-more {

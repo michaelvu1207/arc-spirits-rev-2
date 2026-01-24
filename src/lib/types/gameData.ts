@@ -9,7 +9,11 @@ export type Json =
 export type CustomDiceRow = {
 	id: string;
 	name: string;
+	/** Optional localized dice names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	description: string | null;
+	/** Optional localized dice descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 	icon: string | null;
 	color: string | null;
 	category: string | null;
@@ -28,6 +32,8 @@ export type DiceSideRow = {
 	reward_type: 'attack' | 'special';
 	reward_value: string;
 	reward_description: string | null;
+	/** Optional localized reward descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	reward_description_translations?: Record<string, string> | null;
 	icon: string | null;
 	image_path: string | null;
 	template_x: number | null;
@@ -92,16 +98,22 @@ export type CallingOrbImageRow = {
 export type ClassRow = {
 	id: string;
 	name: string;
+	/** Optional localized class names keyed by language tag (e.g. 'es', 'fr-CA'). */
+	name_translations?: Record<string, string> | null;
 	position: number;
 	icon_emoji: string | null;
 	icon_png: string | null;
 	color: string | null;
 	description: string | null;
+	/** Optional localized class descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 	breakpoints: Json | null;
 	prismatic: Json | null;
 	tags: string[] | null;
 	effect_schema: Json | null;
 	footer: string | null;
+	/** Optional localized class footers keyed by language tag (e.g. 'es', 'fr-CA'). */
+	footer_translations?: Record<string, string> | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
@@ -123,6 +135,8 @@ export type HexSpiritRow = {
 	name: string;
 	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
 	name_translations?: Record<string, string> | null;
+	/** When false, this spirit is excluded from editions and exports. */
+	is_enabled: boolean;
 	cost: number;
 	traits: {
 		origin_ids: string[];
@@ -244,6 +258,7 @@ export type IconPoolRow = {
 
 // Reward row types for monster cards
 export type RewardRowType =
+	| 'all_players'
 	| 'all_in_combat'
 	| 'all_in_combat_pick_one'
 	| 'all_losers'
@@ -271,6 +286,7 @@ export type GainRow = {
 
 // Display configuration for each reward row type
 export const REWARD_ROW_CONFIG: Record<RewardRowType, { label: string; color: string; bgColor: string; borderColor: string }> = {
+	all_players: { label: 'ALL PLAYERS GAIN', color: '#f472b6', bgColor: 'rgba(244, 114, 182, 0.12)', borderColor: 'rgba(244, 114, 182, 0.4)' },
 	all_in_combat: { label: 'ALL IN COMBAT GAIN', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.12)', borderColor: 'rgba(251, 191, 36, 0.4)' },
 	all_in_combat_pick_one: { label: 'ALL IN COMBAT PICK 1', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.12)', borderColor: 'rgba(251, 191, 36, 0.4)' },
 	all_losers: { label: 'ALL LOSERS GAIN', color: '#f87171', bgColor: 'rgba(248, 113, 113, 0.12)', borderColor: 'rgba(248, 113, 113, 0.4)' },
@@ -295,8 +311,8 @@ export type MonsterRow = {
 	 * where killed_index = max(1, barrier).
 	 */
 	reward_track?: string[][];
-	state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
-	monster_classification: 'monster' | 'abyss_guardian' | 'boss';
+	stage: 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
+	monster_classification: 'monster' | 'abyss_guardian' | 'boss' | 'final_boss';
 	/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
 	show_tutorial?: boolean | null;
 	icon: string | null;
@@ -310,8 +326,6 @@ export type MonsterRow = {
 	/** Optional localized special_conditions keyed by language tag (e.g. 'es', 'fr-CA'). */
 	special_conditions_translations?: Record<string, string> | null;
 	invade_location_id: string | null;
-	/** Number of copies of this monster in the deck. Defaults to 1. */
-	quantity: number;
 	created_at: string | null;
 	updated_at: string | null;
 	// Legacy fields kept for migration compatibility
@@ -426,9 +440,16 @@ export type SimulationSettingsInsert = {
 
 export type SimulationSettingsUpdate = Partial<SimulationSettingsInsert>;
 
-export type EventRow = {
+export type StageCardKind = 'event' | 'stage_location' | (string & {});
+
+export type StageCardRowBase = {
 	id: string;
+	/** Legacy internal identifier (historically set to id). */
 	name: string;
+	/** Stage card discriminator (e.g. event, stage_location, guide). */
+	card_kind: StageCardKind;
+	/** Narrative stage metadata (stage_1..endgame). */
+	stage: import('./eventTypes').EventType;
 	title: string;
 	description: string | null;
 	image_path: string | null;
@@ -436,15 +457,56 @@ export type EventRow = {
 	order_num: number;
 	created_at: string | null;
 	updated_at: string | null;
+	/** Extensible payload for future card kinds. */
+	data: Json;
+	/** Optional location backing this stage card (stage_location cards). */
+	game_location_id: string | null;
+	/** Optional traveler backing this stage card (traveler cards). */
+	traveler_id: string | null;
 };
+
+export type StageEventCardRow = StageCardRowBase & {
+	card_kind: 'event';
+	/** When this stage should end (shown on the event card). */
+	stage_completion: string | null;
+	reward_rows: RewardRow[];
+	game_location_id: null;
+	traveler_id: null;
+};
+
+export type StageLocationCardRow = StageCardRowBase & {
+	card_kind: 'stage_location';
+	stage_completion: null;
+	/** Not used for stage_location cards (reward rows come from game_locations). */
+	reward_rows: RewardRow[];
+	game_location_id: string;
+	traveler_id: null;
+};
+
+export type TravelerStageCardRow = StageCardRowBase & {
+	card_kind: 'traveler';
+	stage_completion: null;
+	reward_rows: RewardRow[];
+	game_location_id: null;
+	traveler_id: string;
+};
+
+export type StageCardRow = StageEventCardRow | StageLocationCardRow | TravelerStageCardRow;
+
+export type RewardIconToken =
+	| string
+	| {
+			kind: 'or';
+			icon_ids: string[];
+	  };
 
 export type GameLocationRewardRow = {
 	type: 'gain';
-	gain_icon_ids: string[];
+	gain_icon_ids: RewardIconToken[];
 } | {
 	type: 'trade';
-	cost_icon_ids: string[];
-	gain_icon_ids: string[];
+	cost_icon_ids: RewardIconToken[];
+	gain_icon_ids: RewardIconToken[];
 } | {
 	type: 'text';
 	text: string;
@@ -573,20 +635,75 @@ export type SpecialCategoryRow = {
 
 export type AbyssScenarioRow = {
 	id: string;
+	edition_id: string;
 	name: string;
+	/** Optional user-facing scenario name (fallback to `name`). */
+	display_name: string | null;
 	description: string | null;
+	/** Optional curated list of game locations referenced by this scenario (separate from deck entries). */
+	game_location_ids: string[];
+	/** Optional display image path in storage (bucket-relative). */
+	display_image_path: string | null;
 	order_num: number;
 	created_at: string | null;
 	updated_at: string | null;
 };
 
+/** Current canonical table name for scenarios (abyss_scenarios is a compatibility view). */
+export type ScenarioRow = AbyssScenarioRow;
+
 export type ScenarioCardRow = {
 	id: string;
 	scenario_id: string;
-	card_type: 'monster' | 'event';
+	card_type: 'monster' | 'stage_card';
 	card_id: string;
 	order_num: number;
+	quantity: number;
 	created_at: string | null;
 };
+
+export type EventCardRow = {
+	id: string;
+	internal_name: string;
+	stage: import('./eventTypes').EventType;
+	title: string;
+	description: string | null;
+	stage_completion: string | null;
+	reward_rows: RewardRow[];
+	image_path: string | null;
+	card_image_path: string | null;
+	data: Json;
+	order_num: number;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type ScenarioDeckEntryKind = 'monster' | 'location' | 'traveler' | 'event';
+
+export type ScenarioDeckEntryRow = {
+	id: string;
+	scenario_id: string;
+	kind: ScenarioDeckEntryKind;
+	order_num: number;
+	quantity: number;
+	entry_stage: import('./eventTypes').EventType | null;
+	data: Json;
+	monster_id: string | null;
+	game_location_id: string | null;
+	traveler_id: string | null;
+	event_id: string | null;
+	legacy_scenario_card_id: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+/** Current canonical table name for mission cards (quests/traveler_quests remain compatibility views). */
+export type MissionCardRow = TravelerQuestRow;
+
+/**
+ * Back-compat alias: older UI components still model mission cards as "quest cards".
+ * Prefer `MissionCardRow` in new code.
+ */
+export type QuestCardRow = MissionCardRow;
 
 // IconAsset type removed - consolidated into IconPoolRow with source_type='uploaded'

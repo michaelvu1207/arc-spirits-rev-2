@@ -23,17 +23,18 @@
 	let ui = getMonsterCardUi(language);
 	$: ui = getMonsterCardUi(language);
 
-	const stateColors: Record<string, string> = {
-		tainted: '#dc2626',
-		corrupt: '#991b1b',
-		fallen: '#7f1d1d',
-		arcane: '#0ea5e9',
+	const stageColors: Record<string, string> = {
+		stage_1: '#dc2626',
+		stage_2: '#991b1b',
+		stage_3: '#7f1d1d',
+		final_stage: '#a855f7',
 		inactive: '#64748b'
 	};
 
 	const classificationColors: Record<string, string> = {
 		abyss_guardian: '#0ea5e9',
-		boss: '#450a0a'
+		boss: '#450a0a',
+		final_boss: '#be123c'
 	};
 
 	const effectTypeColors: Record<SpecialEffectType, string> = {
@@ -43,16 +44,20 @@
 		combat_type: '#8b5cf6'
 	};
 
+	const effectTypeOrder: SpecialEffectType[] = ['before_combat', 'during_combat', 'after_combat', 'combat_type'];
+
 	let rewardSlots: string[][] = [];
 	let showTutorial = true;
+	let showCallout = true;
 	let participationIconIds: string[] = [];
 	let trackSlotCount = 0;
+	let effectGroups: Array<{ type: SpecialEffectType; effects: SpecialEffectRow[] }> = [];
 
-	$: stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
+	$: stageColor = stageColors[monster.stage ?? 'stage_1'] ?? '#dc2626';
 	$: classification = monster.monster_classification ?? 'monster';
 	$: classificationLabel = ui.classification[classification] ?? ui.classification.monster;
 	$: classificationColor = classificationColors[classification] ?? '#334155';
-	$: stateLabel = ui.state[monster.state ?? 'tainted'] ?? ui.state.tainted;
+	$: stageLabel = ui.stage[monster.stage ?? 'stage_1'] ?? ui.stage.stage_1;
 	$: barrierCount = Math.max(0, Math.round(monster.barrier ?? 0));
 	$: killedBarrierIndex = Math.max(1, barrierCount);
 
@@ -76,7 +81,23 @@
 	$: rewardSlots = normalizeRewardTrack((monster as { reward_track?: unknown }).reward_track, killedBarrierIndex);
 	$: showTutorial = (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true;
 	$: participationIconIds = rewardSlots[0] ?? [];
+	$: showCallout = showTutorial || participationIconIds.length > 0;
 	$: trackSlotCount = killedBarrierIndex; // excludes participation (slot 0), includes KILLED
+
+	$: {
+		const effects = (monster.effects ?? []).slice(0, 4);
+		const byType = new Map<SpecialEffectType, SpecialEffectRow[]>();
+		for (const effect of effects) {
+			const type = effect.effect_type ?? 'during_combat';
+			const arr = byType.get(type) ?? [];
+			arr.push(effect);
+			byType.set(type, arr);
+		}
+
+		effectGroups = effectTypeOrder
+			.map((type) => ({ type, effects: byType.get(type) ?? [] }))
+			.filter((g) => g.effects.length > 0);
+	}
 
 	// Calculate gradient color from red to black
 	// totalSteps = marker-start (0) to killed (killedBarrierIndex + 1)
@@ -117,8 +138,8 @@
 								{classificationLabel.toUpperCase()}
 							</span>
 						{/if}
-						<span class="state-badge" style="--state-color: {stateColor}">
-							{stateLabel.toUpperCase()}
+						<span class="state-badge" style="--state-color: {stageColor}">
+							{stageLabel.toUpperCase()}
 						</span>
 					</div>
 					{#if monster.invade_location_name}
@@ -129,28 +150,32 @@
 				</div>
 			</div>
 
-			<!-- Effects -->
-			<div class="effects-section">
-				{#if monster.effects && monster.effects.length > 0}
-					{#each monster.effects.slice(0, 2) as effect}
-						<div class="effect-item">
-							<span
-								class="effect-type-badge"
-								style="--type-color: {effectTypeColors[effect.effect_type] ?? effectTypeColors.during_combat}"
-							>
-								{ui.effectType[effect.effect_type] ?? ui.effectType.during_combat}
-							</span>
-							<div class="effect-content">
-								<span class="effect-bullet"></span>
-								<span class="effect-name">{effect.name}:</span>
-								<span class="effect-desc">{@html effect.description || ''}</span>
+				<!-- Effects -->
+				<div class="effects-section">
+					{#if monster.effects && monster.effects.length > 0}
+						{#each effectGroups as group (group.type)}
+							<div class="effect-item">
+								<span
+									class="effect-type-badge"
+									style="--type-color: {effectTypeColors[group.type] ?? effectTypeColors.during_combat}"
+								>
+									{ui.effectType[group.type] ?? ui.effectType.during_combat}
+								</span>
+								<div class="effect-item__list">
+									{#each group.effects as effect (effect.id)}
+										<div class="effect-content">
+											<span class="effect-bullet"></span>
+											<span class="effect-name">{effect.name}:</span>
+											<span class="effect-desc">{@html effect.description || ''}</span>
+										</div>
+									{/each}
+								</div>
 							</div>
-						</div>
-					{/each}
-				{:else}
-					<div class="effects-empty">{ui.noSpecialEffects}</div>
-				{/if}
-			</div>
+						{/each}
+					{:else}
+						<div class="effects-empty">{ui.noSpecialEffects}</div>
+					{/if}
+				</div>
 
 		</div>
 	</div>
@@ -203,16 +228,14 @@
 			</div>
 	</div>
 
-	<div class="tutorial-float">
-		<div class="tutorial-block">
-			{#if showTutorial}
-				<div class="tutorial-title">{ui.calloutTutorialTitle}</div>
-				<div class="tutorial-text">{ui.calloutTutorialText}</div>
-			{:else}
-				<div class="tutorial-title">{ui.calloutParticipationTitle}</div>
-				{#if participationIconIds.length === 0}
-					<div class="tutorial-text">{ui.calloutNoParticipationRewards}</div>
+	{#if showCallout}
+		<div class="tutorial-float">
+			<div class="tutorial-block">
+				{#if showTutorial}
+					<div class="tutorial-title">{ui.calloutTutorialTitle}</div>
+					<div class="tutorial-text">{ui.calloutTutorialText}</div>
 				{:else}
+					<div class="tutorial-title">{ui.calloutParticipationTitle}</div>
 					<div class="tutorial-icons">
 						{#each participationIconIds as iconId}
 							{@const url = getIconPoolUrl(iconId)}
@@ -222,9 +245,9 @@
 						{/each}
 					</div>
 				{/if}
-			{/if}
+			</div>
 		</div>
-	</div>
+	{/if}
 
 	<div class="damage-float">
 		<div class="stats-block">
@@ -414,6 +437,12 @@
 	}
 
 	.effect-item {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.effect-item__list {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;

@@ -10,6 +10,8 @@ export type FlatStatEffect = {
 	stat: 'attack' | 'defense';
 	value: number;
 	condition?: string;
+	/** Optional localized condition text keyed by language tag (e.g. 'es', 'fr-CA'). */
+	condition_translations?: Record<string, string> | null;
 };
 
 export type MultiplierEffect = {
@@ -26,6 +28,8 @@ export type BackupTrimEffect = {
 export type BenefitEffect = {
 	type: 'benefit';
 	description: string;
+	/** Optional localized benefit descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 	value?: number;
 	benefit_type?: string;
 };
@@ -41,9 +45,13 @@ export type BreakpointColor = 'bronze' | 'silver' | 'gold' | 'prismatic';
 
 export interface EffectBreakpoint {
 	count: number | string;
+	/** Optional localized count labels (for string counts like "Unique 1"). */
+	count_translations?: Record<string, string> | null;
 	effects: Effect[];
 	color?: BreakpointColor;
 	description?: string;
+	/** Optional localized breakpoint descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 }
 
 export interface TraitWithEffects {

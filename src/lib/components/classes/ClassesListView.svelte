@@ -1,9 +1,10 @@
 <script lang="ts">
 	import type { ClassRow, SpecialCategoryRow } from '$lib/types/gameData';
 	import type { Effect, EffectBreakpoint, DiceEffect } from '$lib/types/effects';
-	import { supabase } from '$lib/api/supabaseClient';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue } from '$lib/i18n/translations';
+	import { publicAssetUrl } from '$lib/utils';
 	import {
 		parseEffectSchema,
 		formatEffectSummary,
@@ -20,6 +21,7 @@
 		onDeleteMultiple?: (ids: string[]) => void;
 		onEditSpecial: (cat: SpecialCategoryRow) => void;
 		onDeleteSpecial: (cat: SpecialCategoryRow) => void;
+		language?: TranslationLanguage;
 	}
 
 	let {
@@ -30,10 +32,9 @@
 		onDelete,
 		onDeleteMultiple = () => {},
 		onEditSpecial,
-		onDeleteSpecial
+		onDeleteSpecial,
+		language = BASE_LANGUAGE
 	}: Props = $props();
-
-	const gameAssetsStorage = supabase.storage.from('game_assets');
 
 	let selectedIds = $state<Set<string>>(new Set());
 
@@ -60,11 +61,10 @@
 		selectedIds = new Set();
 	}
 
-	function getIconUrl(iconPng: string | null | undefined): string | null {
+	function getIconUrl(iconPng: string | null | undefined, updatedAt?: string | null): string | null {
 		if (!iconPng) return null;
 		const path = iconPng.startsWith('class_icons/') ? iconPng : `class_icons/${iconPng}`;
-		const { data } = gameAssetsStorage.getPublicUrl(path);
-		return data?.publicUrl ?? null;
+		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
 	const resolveDiceLabel = (id: string | null | undefined, fallback?: string) => {
@@ -72,12 +72,20 @@
 		return fallback ?? (id ?? 'Custom Dice');
 	};
 
-	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel);
+	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel, language);
+
+	function getBreakpointCount(bp: EffectBreakpoint): string | number {
+		if (language === BASE_LANGUAGE) return bp.count;
+		if (typeof bp.count !== 'string') return bp.count;
+		return getTranslationValue((bp as any).count_translations, String(language)) ?? bp.count;
+	}
 
 	function toNumericCount(count: EffectBreakpoint['count']): number | null {
 		if (typeof count === 'number' && Number.isFinite(count)) return count;
 		if (typeof count === 'string') {
-			const parsed = Number.parseInt(count, 10);
+			const trimmed = count.trim();
+			if (!/^\d+$/.test(trimmed)) return null;
+			const parsed = Number.parseInt(trimmed, 10);
 			if (Number.isFinite(parsed)) return parsed;
 		}
 		return null;
@@ -137,6 +145,21 @@
 
 	function renderMultiline(value?: string | null): string {
 		return (value ?? '').replace(/\r\n/g, '\n').trim();
+	}
+
+	function getClassName(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.name;
+		return getTranslationValue(entry.name_translations, String(language)) ?? entry.name;
+	}
+
+	function getClassDescription(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.description ?? '';
+		return getTranslationValue(entry.description_translations, String(language)) ?? entry.description ?? '';
+	}
+
+	function getClassFooter(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.footer ?? '';
+		return getTranslationValue(entry.footer_translations, String(language)) ?? entry.footer ?? '';
 	}
 
 	function getClassById(id: string): ClassRow | undefined {
@@ -219,13 +242,21 @@
 										)}
 										<div class="special-slot__class" style="border-left-color: {cls.color ?? '#8b5cf6'}">
 												<div class="special-slot__header">
-													<span class="special-slot__icon">{cls.icon_emoji ?? '🛡️'}</span>
-													<span class="special-slot__name">{cls.name}</span>
+													{#if getIconUrl(cls.icon_png, cls.updated_at)}
+														<img
+															class="special-slot__icon-image"
+															src={getIconUrl(cls.icon_png, cls.updated_at)}
+															alt={`${getClassName(cls)} icon`}
+														/>
+													{:else}
+														<span class="special-slot__icon">{cls.icon_emoji ?? '🛡️'}</span>
+													{/if}
+													<span class="special-slot__name">{getClassName(cls)}</span>
 													<button
 														type="button"
 														class="special-slot__edit-btn"
 														onclick={() => onEdit(cls)}
-														title="Edit {cls.name}"
+														title="Edit {getClassName(cls)}"
 													>
 														✏️
 													</button>
@@ -233,7 +264,7 @@
 														type="button"
 														class="special-slot__delete-btn"
 														onclick={() => onDelete(cls)}
-														title="Delete {cls.name}"
+														title="Delete {getClassName(cls)}"
 													>
 														🗑️
 													</button>
@@ -248,7 +279,7 @@
 															class:gold={bp.color === 'gold'}
 															class:prismatic={bp.color === 'prismatic'}
 														>
-															({bp.count}) {bp.effects.map((e) => summarizeEffectWithScaling(cls.name, e)).join(', ')}
+															({getBreakpointCount(bp)}) {bp.effects.map((e) => summarizeEffectWithScaling(cls.name, e)).join(', ')}
 														</span>
 													{/each}
 												</div>
@@ -263,37 +294,42 @@
 						{/each}
 					</div>
 				</article>
-			{:else}
-				{@const entry = item.data as ClassRow}
-			{@const description = renderMultiline(entry.description)}
-			{@const footer = renderMultiline(entry.footer)}
-			{@const prismatic = getPrismatic(entry.prismatic)}
-			{@const effectSchema = sortBreakpointsByCount(
-				resolveDiceIdsInSchema(parseEffectSchema(entry.effect_schema))
-			)}
+				{:else}
+					{@const entry = item.data as ClassRow}
+				{@const displayName = getClassName(entry)}
+				{@const description = renderMultiline(getClassDescription(entry))}
+				{@const footer = renderMultiline(getClassFooter(entry))}
+				{@const prismatic = getPrismatic(entry.prismatic)}
+				{@const effectSchema = sortBreakpointsByCount(
+					resolveDiceIdsInSchema(parseEffectSchema(entry.effect_schema))
+				)}
 			{@const isSelected = selectedIds.has(entry.id)}
 			<article class="class-card" class:selected={isSelected} style={`border-left-color: ${entry.color ?? '#8b5cf6'}`}>
 				<header class="class-card__header">
 					<div class="checkbox-wrapper">
 						<input
-							type="checkbox"
-							checked={isSelected}
-							onchange={() => toggleSelect(entry.id)}
-							aria-label="Select {entry.name}"
-						/>
-					</div>
-					<div class="header-content">
-						<div class="class-card__identity">
-							{#if getIconUrl(entry.icon_png)}
-								<img class="class-card__icon-image" src={getIconUrl(entry.icon_png)} alt={`${entry.name} icon`} />
-							{:else}
-								<span class="class-card__icon">{entry.icon_emoji ?? '🛡️'}</span>
-							{/if}
-							<div>
-								<h2>{entry.name}</h2>
-								<small>Position {entry.position}</small>
-							</div>
+								type="checkbox"
+								checked={isSelected}
+								onchange={() => toggleSelect(entry.id)}
+								aria-label="Select {displayName}"
+							/>
 						</div>
+						<div class="header-content">
+							<div class="class-card__identity">
+								{#if getIconUrl(entry.icon_png, entry.updated_at)}
+									<img
+										class="class-card__icon-image"
+										src={getIconUrl(entry.icon_png, entry.updated_at)}
+										alt={`${displayName} icon`}
+									/>
+								{:else}
+									<span class="class-card__icon">{entry.icon_emoji ?? '🛡️'}</span>
+								{/if}
+								<div>
+									<h2>{displayName}</h2>
+									<small>Position {entry.position}</small>
+								</div>
+							</div>
 						<CardActionMenu
 							onEdit={() => onEdit(entry)}
 							onDelete={() => onDelete(entry)}
@@ -330,7 +366,7 @@
 										class:gold={bp.color === 'gold'}
 										class:prismatic={bp.color === 'prismatic'}
 									>
-										({bp.count})
+										({getBreakpointCount(bp)})
 									</span>
 									<div class="breakpoints__effects">
 										{#each bp.effects as effect, effectIndex (`${entry.id}-bp-${index}-effect-${effectIndex}`)}
@@ -685,6 +721,14 @@
 
 	.special-slot__icon {
 		font-size: 0.85rem;
+	}
+
+	.special-slot__icon-image {
+		width: 16px;
+		height: 16px;
+		object-fit: contain;
+		background: rgba(248, 250, 252, 0.92);
+		border-radius: 3px;
 	}
 
 	.special-slot__name {

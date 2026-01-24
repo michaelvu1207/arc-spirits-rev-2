@@ -15,7 +15,7 @@
 
 	let { edition, spirits, originLookup }: Props = $props();
 
-	const ALL_COSTS = ['1', '3', '5', '7', '9', '11', '13', '15', '17'];
+	const ALL_COSTS = ['1', '3', '4', '5', '7', '9', '11', '13', '15', '17'];
 
 	// Spirit distribution by cost
 	const costDistribution = $derived.by(() => {
@@ -134,9 +134,18 @@
 
 	// Mana curve analysis
 	const manaCurve = $derived.by(() => {
-		const lowCost = costDistribution.filter(d => parseInt(d.cost) <= 3).reduce((s, d) => s + d.total, 0);
-		const midCost = costDistribution.filter(d => parseInt(d.cost) >= 5 && parseInt(d.cost) <= 9).reduce((s, d) => s + d.total, 0);
-		const highCost = costDistribution.filter(d => parseInt(d.cost) >= 11).reduce((s, d) => s + d.total, 0);
+		const lowCost = costDistribution
+			.filter((d) => Number.parseInt(d.cost, 10) <= 4)
+			.reduce((s, d) => s + d.total, 0);
+		const midCost = costDistribution
+			.filter((d) => {
+				const cost = Number.parseInt(d.cost, 10);
+				return cost >= 5 && cost <= 9;
+			})
+			.reduce((s, d) => s + d.total, 0);
+		const highCost = costDistribution
+			.filter((d) => Number.parseInt(d.cost, 10) >= 10)
+			.reduce((s, d) => s + d.total, 0);
 		const total = lowCost + midCost + highCost;
 
 		return { lowCost, midCost, highCost, total };

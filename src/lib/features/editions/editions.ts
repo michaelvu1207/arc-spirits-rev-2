@@ -15,6 +15,7 @@ export interface EditionFormData {
 export const DEFAULT_COST_DUPLICATES: CostDuplicates = {
 	'1': 3,
 	'3': 2,
+	'4': 1,
 	'5': 1,
 	'7': 1,
 	'9': 1,

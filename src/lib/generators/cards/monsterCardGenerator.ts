@@ -173,18 +173,19 @@ export async function generateMonsterCardPNG(
 		// ignore
 	}
 
-	const stateColors: Record<string, string> = {
-		tainted: '#dc2626',
-		corrupt: '#991b1b',
-		fallen: '#7f1d1d',
-		arcane: '#0ea5e9',
-		inactive: '#64748b'
-	};
+		const stageColors: Record<string, string> = {
+			stage_1: '#dc2626',
+			stage_2: '#991b1b',
+			stage_3: '#7f1d1d',
+			final_stage: '#a855f7',
+			inactive: '#64748b'
+		};
 
-	const classificationColors: Record<string, string> = {
-		abyss_guardian: '#0ea5e9',
-		boss: '#450a0a'
-	};
+		const classificationColors: Record<string, string> = {
+			abyss_guardian: '#0ea5e9',
+			boss: '#450a0a',
+			final_boss: '#be123c'
+		};
 
 	const effectTypeColors: Record<string, string> = {
 		before_combat: '#f59e0b',
@@ -193,11 +194,11 @@ export async function generateMonsterCardPNG(
 		combat_type: '#8b5cf6'
 	};
 
-	const stateColor = stateColors[monster.state ?? 'tainted'] ?? '#dc2626';
+	const stageColor = stageColors[monster.stage ?? 'stage_1'] ?? '#dc2626';
 	const classification = monster.monster_classification ?? 'monster';
 	const classificationText = (ui.classification[classification] ?? ui.classification.monster).toUpperCase();
-	const stateKey = monster.state ?? 'tainted';
-	const stateText = (ui.state[stateKey as keyof typeof ui.state] ?? String(stateKey)).toUpperCase();
+	const stageKey = monster.stage ?? 'stage_1';
+	const stageText = (ui.stage[stageKey as keyof typeof ui.stage] ?? String(stageKey)).toUpperCase();
 
 	ctx.save();
 	roundRect(ctx, 0, 0, MONSTER_CARD_WIDTH, MONSTER_CARD_HEIGHT, 4);
@@ -292,7 +293,7 @@ export async function generateMonsterCardPNG(
 	ctx.fillText(monsterName, nameX, nameBaselineY);
 	ctx.restore();
 
-	// Tags under the name (classification + state)
+	// Tags under the name (classification + stage)
 	const tagFontSize = 13;
 	const tagH = 22;
 	const tagPadX = 12;
@@ -320,9 +321,9 @@ export async function generateMonsterCardPNG(
 	}
 
 	{
-		const tagText = stateText;
+		const tagText = stageText;
 		const tagW = ctx.measureText(tagText).width + tagPadX * 2;
-		ctx.fillStyle = stateColor;
+		ctx.fillStyle = stageColor;
 		roundRect(ctx, tagX, tagsY, tagW, tagH, tagRadius);
 		ctx.fill();
 		ctx.fillStyle = '#fecaca';
@@ -399,6 +400,7 @@ export async function generateMonsterCardPNG(
 
 	// Effects section: flexes to fill remaining space and always renders (hosts damage box).
 	const effects = monster.effects ?? [];
+	const effectTypeOrder = ['before_combat', 'during_combat', 'after_combat', 'combat_type'] as const;
 	const available = innerBottom - yPos;
 	const effectsHeight = Math.max(0, available);
 
@@ -422,87 +424,110 @@ export async function generateMonsterCardPNG(
 		ctx.fillStyle = '#dc2626';
 		ctx.fillRect(effectsX, effectsY, 4, effectsH);
 
-		const pad = 14;
-		const bulletSize = 8;
-		const bulletGap = 10;
-		const lineHeight = 20;
-		const typeBadgeHeight = 18;
-		const effectGap = 10;
+			const pad = 14;
+			const bulletSize = 8;
+			const bulletGap = 10;
+			const EFFECT_TEXT_SCALE = 0.8;
+			const lineHeight = Math.max(10, Math.round(20 * EFFECT_TEXT_SCALE));
+			const typeBadgeHeight = Math.max(10, Math.round(18 * EFFECT_TEXT_SCALE));
+			const effectGap = Math.max(6, Math.round(10 * EFFECT_TEXT_SCALE));
+			const typeBadgeGap = Math.max(3, Math.round(5 * EFFECT_TEXT_SCALE));
+			const firstLineYOffset = Math.max(8, Math.round(12 * EFFECT_TEXT_SCALE));
+			const bulletBaselineOffset = Math.max(3, Math.round(5 * EFFECT_TEXT_SCALE));
+			const noEffectsFontSize = Math.max(10, Math.round(15 * EFFECT_TEXT_SCALE));
+			const typeFontSize = Math.max(10, Math.round(14 * EFFECT_TEXT_SCALE));
+			const effectNameFontSize = Math.max(10, Math.round(15 * EFFECT_TEXT_SCALE));
+			const effectBodyFontSize = Math.max(10, Math.round(15 * EFFECT_TEXT_SCALE));
 
-		let effectY = effectsY + pad;
-		const maxY = effectsY + effectsH - pad;
-		const maxTextW = effectsW - pad * 2 - bulletSize - bulletGap;
-		const textX = effectsX + pad + bulletSize + bulletGap;
-		const bulletX = effectsX + pad + bulletSize / 2;
+			let effectY = effectsY + pad;
+			const maxY = effectsY + effectsH - pad;
+			const maxTextW = effectsW - pad * 2 - bulletSize - bulletGap;
+			const textX = effectsX + pad + bulletSize + bulletGap;
+			const bulletX = effectsX + pad + bulletSize / 2;
 
-		if (effects.length === 0) {
-			ctx.font = '400 15px Opsilon, serif';
-			ctx.fillStyle = 'rgba(148, 163, 184, 0.8)';
-			ctx.fillText(ui.noSpecialEffects, effectsX + pad, effectY + 12);
-		} else {
-			for (const effect of effects.slice(0, 2)) {
+			if (effects.length === 0) {
+				ctx.font = `400 ${noEffectsFontSize}px Opsilon, serif`;
+				ctx.fillStyle = 'rgba(148, 163, 184, 0.8)';
+				ctx.fillText(ui.noSpecialEffects, effectsX + pad, effectY + firstLineYOffset);
+			} else {
+				const displayedEffects = effects.slice(0, 4);
+				const byType = new Map<(typeof effectTypeOrder)[number], typeof displayedEffects>();
+
+			for (const effect of displayedEffects) {
+				const effectType = ((effect as any).effect_type ?? 'during_combat') as (typeof effectTypeOrder)[number];
+				const next = byType.get(effectType) ?? [];
+				next.push(effect);
+				byType.set(effectType, next);
+			}
+
+			for (const effectType of effectTypeOrder) {
+				const group = byType.get(effectType);
+				if (!group || group.length === 0) continue;
 				if (effectY > maxY) break;
-				const desc = stripHtml(effect.description).trim();
 
-				// Effect type badge
-				const effectType = (effect as any).effect_type ?? 'during_combat';
 				const typeLabel = ui.effectType[effectType as keyof typeof ui.effectType] ?? ui.effectType.during_combat;
-				const typeColor = effectTypeColors[effectType] ?? effectTypeColors.during_combat;
+					const typeColor = effectTypeColors[effectType] ?? effectTypeColors.during_combat;
 
-				ctx.save();
-				ctx.font = '700 14px Opsilon, serif';
-				ctx.fillStyle = typeColor;
-				ctx.globalAlpha = 0.9;
-				ctx.fillText(typeLabel, effectsX + pad, effectY + typeBadgeHeight);
-				ctx.restore();
+					ctx.save();
+					ctx.font = `700 ${typeFontSize}px Opsilon, serif`;
+					ctx.fillStyle = typeColor;
+					ctx.globalAlpha = 0.9;
+					ctx.fillText(typeLabel, effectsX + pad, effectY + typeBadgeHeight);
+					ctx.restore();
 
-				effectY += typeBadgeHeight + 5;
+					effectY += typeBadgeHeight + typeBadgeGap;
 
-				// First line baseline
-				const firstLineY = effectY + 12;
-
-				// Bullet diamond (vertically centered with first line text)
-				ctx.save();
-				ctx.translate(bulletX, firstLineY - 5);
-				ctx.rotate(Math.PI / 4);
-				ctx.fillStyle = '#dc2626';
-				ctx.fillRect(-bulletSize / 2, -bulletSize / 2, bulletSize, bulletSize);
-				ctx.restore();
-
-				ctx.font = '700 15px Opsilon, serif';
-				ctx.fillStyle = '#fca5a5';
-				const nameText = `${effect.name}:`;
-				const nameW = ctx.measureText(nameText).width;
-				ctx.fillText(nameText, textX, firstLineY);
-
-				ctx.font = '400 15px Opsilon, serif';
-				ctx.fillStyle = '#a8a0b0';
-
-				const firstLineX = textX + nameW + 4;
-				const firstLineMaxW = Math.max(10, effectsX + effectsW - pad - firstLineX);
-				const firstLine = desc ? wrapText(ctx, desc, firstLineMaxW)[0] ?? '' : '';
-				if (firstLine) {
-					ctx.fillText(firstLine, firstLineX, firstLineY);
-				}
-
-				let used = firstLine ? firstLine.split(' ').length : 0;
-				let remainder = desc;
-				if (firstLine && desc) {
-					const words = desc.split(/\s+/);
-					remainder = words.slice(used).join(' ').trim();
-				}
-
-				effectY = firstLineY + lineHeight;
-				if (remainder) {
-					const lines = wrapText(ctx, remainder, maxTextW);
-					for (const line of lines) {
+					for (const effect of group) {
 						if (effectY > maxY) break;
-						ctx.fillText(line, textX, effectY);
-						effectY += lineHeight;
-					}
-				}
 
-				effectY += effectGap;
+						const desc = stripHtml(effect.description).trim();
+
+						// First line baseline
+						const firstLineY = effectY + firstLineYOffset;
+
+						// Bullet diamond (vertically centered with first line text)
+						ctx.save();
+						ctx.translate(bulletX, firstLineY - bulletBaselineOffset);
+						ctx.rotate(Math.PI / 4);
+						ctx.fillStyle = '#dc2626';
+						ctx.fillRect(-bulletSize / 2, -bulletSize / 2, bulletSize, bulletSize);
+						ctx.restore();
+
+						ctx.font = `700 ${effectNameFontSize}px Opsilon, serif`;
+						ctx.fillStyle = '#fca5a5';
+						const nameText = `${effect.name}:`;
+						const nameW = ctx.measureText(nameText).width;
+						ctx.fillText(nameText, textX, firstLineY);
+
+						ctx.font = `400 ${effectBodyFontSize}px Opsilon, serif`;
+						ctx.fillStyle = '#a8a0b0';
+
+					const firstLineX = textX + nameW + 4;
+					const firstLineMaxW = Math.max(10, effectsX + effectsW - pad - firstLineX);
+					const firstLine = desc ? wrapText(ctx, desc, firstLineMaxW)[0] ?? '' : '';
+					if (firstLine) {
+						ctx.fillText(firstLine, firstLineX, firstLineY);
+					}
+
+					let used = firstLine ? firstLine.split(' ').length : 0;
+					let remainder = desc;
+					if (firstLine && desc) {
+						const words = desc.split(/\s+/);
+						remainder = words.slice(used).join(' ').trim();
+					}
+
+					effectY = firstLineY + lineHeight;
+					if (remainder) {
+						const lines = wrapText(ctx, remainder, maxTextW);
+						for (const line of lines) {
+							if (effectY > maxY) break;
+							ctx.fillText(line, textX, effectY);
+							effectY += lineHeight;
+						}
+					}
+
+					effectY += effectGap;
+				}
 			}
 		}
 
@@ -607,74 +632,70 @@ export async function generateMonsterCardPNG(
 	const showTutorial = (monster as any).show_tutorial ?? true;
 	const participationUrls = rewardSlots[0] ?? [];
 	const displaySlotCount = killedBarrierIndex; // excludes participation (slot 0), includes KILLED
+	const showCallout = showTutorial || participationUrls.length > 0;
 
 	// Tutorial / Participation callout (left side, hovering over the bottom bar)
-	const calloutW = 200;
-	const calloutH = 55;
-	const calloutX = 12;
-	const calloutY = bottomBarY - calloutH;
+	if (showCallout) {
+		const calloutW = 200;
+		const calloutH = 55;
+		const calloutX = 12;
+		const calloutY = bottomBarY - calloutH;
 
-	ctx.save();
-	const calloutGrad = ctx.createLinearGradient(0, calloutY, 0, calloutY + calloutH);
-	calloutGrad.addColorStop(0, '#4a0a0a');
-	calloutGrad.addColorStop(0.5, '#2a0606');
-	calloutGrad.addColorStop(1, '#1a0404');
-	ctx.fillStyle = calloutGrad;
-	roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
-	ctx.fill();
+		ctx.save();
+		const calloutGrad = ctx.createLinearGradient(0, calloutY, 0, calloutY + calloutH);
+		calloutGrad.addColorStop(0, '#4a0a0a');
+		calloutGrad.addColorStop(0.5, '#2a0606');
+		calloutGrad.addColorStop(1, '#1a0404');
+		ctx.fillStyle = calloutGrad;
+		roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
+		ctx.fill();
 
-	// Border (hide bottom edge to match the UI)
-	ctx.strokeStyle = '#7f1d1d';
-	ctx.lineWidth = 2;
-	roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
-	ctx.stroke();
-	ctx.fillStyle = bottomGrad;
-	ctx.fillRect(calloutX - 1, calloutY + calloutH - 2, calloutW + 2, 4);
+		// Border (hide bottom edge to match the UI)
+		ctx.strokeStyle = '#7f1d1d';
+		ctx.lineWidth = 2;
+		roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
+		ctx.stroke();
+		ctx.fillStyle = bottomGrad;
+		ctx.fillRect(calloutX - 1, calloutY + calloutH - 2, calloutW + 2, 4);
 
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'top';
-	ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
-	ctx.font = '800 12px Opsilon, serif';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'top';
+		ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
+		ctx.font = '800 12px Opsilon, serif';
 
-	const calloutTitle = showTutorial ? ui.calloutTutorialTitle : ui.calloutParticipationTitle;
-	ctx.fillText(calloutTitle, calloutX + calloutW / 2, calloutY + 8);
+		const calloutTitle = showTutorial ? ui.calloutTutorialTitle : ui.calloutParticipationTitle;
+		ctx.fillText(calloutTitle, calloutX + calloutW / 2, calloutY + 8);
 
-	if (showTutorial) {
-		ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
-		ctx.font = '500 10px Opsilon, serif';
-		const maxW = calloutW - 24;
-		const lines = wrapText(ctx, ui.calloutTutorialText, maxW).slice(
-			0,
-			2
-		);
-		const startY = calloutY + 26;
-		for (let i = 0; i < lines.length; i++) {
-			ctx.fillText(lines[i], calloutX + calloutW / 2, startY + i * 12);
-		}
-	} else if (participationUrls.length === 0) {
-		ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
-		ctx.font = '500 10px Opsilon, serif';
-		ctx.fillText(ui.calloutNoParticipationRewards, calloutX + calloutW / 2, calloutY + 30);
-	} else {
-		const iconSize = 30;
-		const iconGap = 6;
-		const maxIcons = 5;
-		const urls = participationUrls.slice(0, maxIcons);
-		const totalW = urls.length * iconSize + Math.max(0, urls.length - 1) * iconGap;
-		let x = calloutX + (calloutW - totalW) / 2;
-		const y = calloutY + 24;
-		for (const url of urls) {
-			try {
-				const img = await loadImage(url);
-				drawImageContain(ctx, img, x, y, iconSize, iconSize);
-			} catch (err) {
-				console.warn('Failed to load participation icon', err);
+		if (showTutorial) {
+			ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
+			ctx.font = '500 10px Opsilon, serif';
+			const maxW = calloutW - 24;
+			const lines = wrapText(ctx, ui.calloutTutorialText, maxW).slice(0, 2);
+			const startY = calloutY + 26;
+			for (let i = 0; i < lines.length; i++) {
+				ctx.fillText(lines[i], calloutX + calloutW / 2, startY + i * 12);
 			}
-			x += iconSize + iconGap;
+		} else {
+			const iconSize = 30;
+			const iconGap = 6;
+			const maxIcons = 5;
+			const urls = participationUrls.slice(0, maxIcons);
+			const totalW = urls.length * iconSize + Math.max(0, urls.length - 1) * iconGap;
+			let x = calloutX + (calloutW - totalW) / 2;
+			const y = calloutY + 24;
+			for (const url of urls) {
+				try {
+					const img = await loadImage(url);
+					drawImageContain(ctx, img, x, y, iconSize, iconSize);
+				} catch (err) {
+					console.warn('Failed to load participation icon', err);
+				}
+				x += iconSize + iconGap;
+			}
 		}
-	}
 
-	ctx.restore();
+		ctx.restore();
+	}
 
 	// Barrier track styling to match live preview
 	const trackPad = 4;

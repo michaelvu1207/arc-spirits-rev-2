@@ -16,9 +16,13 @@
 	let showIconPicker = $state(false);
 
 	const typeOptions = [
-		{ value: 'all_in_combat', label: 'On kill, all in combat gain' },
-		{ value: 'all_in_combat_pick_one', label: 'On kill, all in combat pick 1' },
-		{ value: 'all_losers', label: 'All in monster combat gain' }
+		{ value: 'all_players', label: 'All players gain' },
+		{ value: 'all_in_combat', label: 'All in combat gain' },
+		{ value: 'all_in_combat_pick_one', label: 'All in combat pick 1' },
+		{ value: 'all_winners', label: 'All winners gain' },
+		{ value: 'all_losers', label: 'All losers gain' },
+		{ value: 'one_winner', label: 'One winner gains' },
+		{ value: 'tournament', label: 'Tournament' }
 	];
 
 	const config = $derived(REWARD_ROW_CONFIG[row.type]);

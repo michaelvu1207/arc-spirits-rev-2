@@ -150,6 +150,38 @@ export function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/png', qual
 }
 
 /**
+ * For every pixel with alpha > `alphaThreshold`, force alpha to 255 (fully opaque).
+ * Fully-transparent pixels (alpha <= threshold) remain transparent.
+ *
+ * Useful when compositing icons onto partially-transparent bases and you want
+ * any non-empty icon pixels to be fully opaque in the final PNG.
+ */
+export function solidifyNonTransparentPixels(
+	canvas: HTMLCanvasElement,
+	alphaThreshold = 0
+): void {
+	const ctx = canvas.getContext('2d');
+	if (!ctx) return;
+
+	const w = canvas.width;
+	const h = canvas.height;
+	if (w <= 0 || h <= 0) return;
+
+	const threshold = Math.max(0, Math.min(255, Math.floor(alphaThreshold)));
+	const imageData = ctx.getImageData(0, 0, w, h);
+	const data = imageData.data;
+
+	for (let i = 0; i < data.length; i += 4) {
+		const a = data[i + 3] ?? 0;
+		if (a > threshold) {
+			data[i + 3] = 255;
+		}
+	}
+
+	ctx.putImageData(imageData, 0, 0);
+}
+
+/**
  * Draws a rounded rectangle path (does not fill or stroke)
  */
 export function roundRect(

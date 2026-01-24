@@ -14,15 +14,18 @@ export type SpiritWorldMapConfig = {
 	background_image_path: string | null;
 	/** Storage path in `game_assets` bucket (relative path). */
 	generated_image_path: string | null;
-	/** Per-location placement keyed by location id. */
+	/** Per-row placement keyed by placement id (e.g. `${locationId}:${rowIndex}`). */
 	placements: Record<string, SpiritWorldLocationPlacement>;
+	/** Hide all tooltip labels in the editor/export. */
+	hide_all_labels?: boolean;
 };
 
 export function createDefaultSpiritWorldMapConfig(): SpiritWorldMapConfig {
 	return {
 		background_image_path: null,
 		generated_image_path: null,
-		placements: {}
+		placements: {},
+		hide_all_labels: false
 	};
 }
 
@@ -64,6 +67,7 @@ export function normalizeSpiritWorldMapConfig(input: unknown): SpiritWorldMapCon
 	const generated_image_path = typeof raw.generated_image_path === 'string'
 		? raw.generated_image_path
 		: null;
+	const hide_all_labels = typeof raw.hide_all_labels === 'boolean' ? raw.hide_all_labels : defaults.hide_all_labels;
 
 	const placements: Record<string, SpiritWorldLocationPlacement> = {};
 
@@ -92,7 +96,8 @@ export function normalizeSpiritWorldMapConfig(input: unknown): SpiritWorldMapCon
 	return {
 		background_image_path,
 		generated_image_path,
-		placements
+		placements,
+		hide_all_labels
 	};
 }
 

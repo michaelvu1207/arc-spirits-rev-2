@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import type { ClassRow, SpecialCategoryRow } from '$lib/types/gameData';
 	import type { Effect, EffectBreakpoint, DiceEffect } from '$lib/types/effects';
-	import { supabase } from '$lib/api/supabaseClient';
 	import html2canvas from 'html2canvas';
 	import jsPDF from 'jspdf';
 	import {
@@ -11,16 +10,17 @@
 		parsePrismaticJson
 	} from '$lib/features/classes/classes';
 	import { Button } from '$lib/components/ui';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue } from '$lib/i18n/translations';
+	import { publicAssetUrl } from '$lib/utils';
 
 	interface Props {
 		classes: ClassRow[];
 		specialCategories: SpecialCategoryRow[];
 		diceNameById: Map<string, string>;
+		language?: TranslationLanguage;
 	}
 
-	let { classes, specialCategories, diceNameById }: Props = $props();
-
-	const gameAssetsStorage = supabase.storage.from('game_assets');
+	let { classes, specialCategories, diceNameById, language = BASE_LANGUAGE }: Props = $props();
 
 	// Preview state
 	let previewImages = $state<string[]>([]);
@@ -28,11 +28,10 @@
 	let exporting = $state(false);
 	let previewContainer: HTMLDivElement | null = null;
 
-	function getIconUrl(iconPng: string | null | undefined): string | null {
+	function getIconUrl(iconPng: string | null | undefined, updatedAt?: string | null): string | null {
 		if (!iconPng) return null;
 		const path = iconPng.startsWith('class_icons/') ? iconPng : `class_icons/${iconPng}`;
-		const { data } = gameAssetsStorage.getPublicUrl(path);
-		return data?.publicUrl ?? null;
+		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
 	const resolveDiceLabel = (id: string | null | undefined, fallback?: string) => {
@@ -40,12 +39,20 @@
 		return fallback ?? (id ?? 'Custom Dice');
 	};
 
-	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel);
+	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel, language);
+
+	function getBreakpointCount(bp: EffectBreakpoint): string | number {
+		if (language === BASE_LANGUAGE) return bp.count;
+		if (typeof bp.count !== 'string') return bp.count;
+		return getTranslationValue((bp as any).count_translations, String(language)) ?? bp.count;
+	}
 
 	function toNumericCount(count: EffectBreakpoint['count']): number | null {
 		if (typeof count === 'number' && Number.isFinite(count)) return count;
 		if (typeof count === 'string') {
-			const parsed = Number.parseInt(count, 10);
+			const trimmed = count.trim();
+			if (!/^\d+$/.test(trimmed)) return null;
+			const parsed = Number.parseInt(trimmed, 10);
 			if (Number.isFinite(parsed)) return parsed;
 		}
 		return null;
@@ -109,6 +116,21 @@
 		return (value ?? '').replace(/\r\n/g, '\n').trim();
 	}
 
+	function getClassName(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.name;
+		return getTranslationValue(entry.name_translations, String(language)) ?? entry.name;
+	}
+
+	function getClassDescription(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.description ?? '';
+		return getTranslationValue(entry.description_translations, String(language)) ?? entry.description ?? '';
+	}
+
+	function getClassFooter(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.footer ?? '';
+		return getTranslationValue(entry.footer_translations, String(language)) ?? entry.footer ?? '';
+	}
+
 	function getClassById(id: string): ClassRow | undefined {
 		return classes.find((c) => c.id === id);
 	}
@@ -120,8 +142,9 @@
 		const effectSchema = sortBreakpointsByCount(
 			resolveDiceIdsInSchema(parseEffectSchema(entry.effect_schema))
 		);
-		const description = renderMultiline(entry.description);
-		const footer = renderMultiline(entry.footer);
+		const displayName = getClassName(entry);
+		const description = renderMultiline(getClassDescription(entry));
+		const footer = renderMultiline(getClassFooter(entry));
 		const prismatic = getPrismatic(entry.prismatic);
 		const tags =
 			Array.isArray(entry.tags) && entry.tags.length
@@ -133,7 +156,7 @@
 						.join('')
 				: '';
 
-		const iconUrl = getIconUrl(entry.icon_png);
+		const iconUrl = getIconUrl(entry.icon_png, entry.updated_at);
 		const iconHtml = iconUrl
 			? `<div style="width:24px; height:24px; background-color:#ffffff; border-radius:4px; display:flex; align-items:center; justify-content:center;"><img src="${iconUrl}" style="width:100%; height:100%; object-fit:contain;" crossorigin="anonymous" /></div>`
 			: `<span style="font-size:18px; line-height:1;">${entry.icon_emoji ?? '🛡️'}</span>`;
@@ -143,7 +166,7 @@
 			<div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
 				${iconHtml}
 				<div style="flex:1;">
-					<h3 style="margin:0; font-size:14px; font-weight:700; color:#1e293b; line-height:1.2;">${entry.name}</h3>
+					<h3 style="margin:0; font-size:14px; font-weight:700; color:#1e293b; line-height:1.2;">${displayName}</h3>
 				</div>
 				${tags ? `<div style="display:flex; flex-wrap:wrap; justify-content:flex-end; gap:2px;">${tags}</div>` : ''}
 			</div>
@@ -154,7 +177,7 @@
 							.map(
 								(bp) => `
 						<div style="margin:3px 0; font-size:8px; line-height:1.3;">
-							<strong style="color:#0f172a;">${bp.count}:</strong>
+							<strong style="color:#0f172a;">${getBreakpointCount(bp)}:</strong>
 							<span style="color:#64748b;">
 								${bp.effects.map((effect) => summarizeEffectWithScaling(entry.name, effect)).join(', ')}
 							</span>
@@ -200,15 +223,20 @@
 					const breakpointsHtml = effectSchema
 						.map(
 							(bp) =>
-								`<div style="font-size:6px; color:#64748b; line-height:1.2;">(${bp.count}) ${bp.effects.map((e) => summarizeEffectWithScaling(cls.name, e)).join(', ')}</div>`
+								`<div style="font-size:6px; color:#64748b; line-height:1.2;">(${getBreakpointCount(bp)}) ${bp.effects.map((e) => summarizeEffectWithScaling(cls.name, e)).join(', ')}</div>`
 						)
 						.join('');
 
+					const displayName = getClassName(cls);
+					const iconUrl = getIconUrl(cls.icon_png, cls.updated_at);
+					const iconHtml = iconUrl
+						? `<div style="width:14px; height:14px; background-color:#ffffff; border-radius:3px; display:flex; align-items:center; justify-content:center;"><img src="${iconUrl}" style="width:100%; height:100%; object-fit:contain;" crossorigin="anonymous" /></div>`
+						: `<span style="font-size:10px;">${cls.icon_emoji ?? '🛡️'}</span>`;
 					return `
 					<div style="padding-left:6px; border-left:2px solid ${cls.color ?? '#8b5cf6'};">
 						<div style="display:flex; align-items:center; gap:4px; margin-bottom:2px;">
-							<span style="font-size:10px;">${cls.icon_emoji ?? '🛡️'}</span>
-							<span style="font-size:8px; font-weight:600; color:#1e293b;">${cls.name}</span>
+							${iconHtml}
+							<span style="font-size:8px; font-weight:600; color:#1e293b;">${displayName}</span>
 						</div>
 						${breakpointsHtml}
 					</div>

@@ -7,6 +7,7 @@ import { publicAssetUrl } from './storage';
  */
 let iconPoolCache: IconPoolRow[] | null = null;
 let iconPoolLookupCache: Map<string, IconPoolRow> | null = null;
+let iconPoolLoadingPromise: Promise<IconPoolRow[]> | null = null;
 
 /**
  * Load all icons from the central icon_pool table.
@@ -23,21 +24,32 @@ export async function loadIconPool(forceRefresh = false): Promise<IconPoolRow[]>
 		return iconPoolCache;
 	}
 
-	const { data, error } = await supabase
-		.from('icon_pool')
-		.select('*')
-		.order('source_type')
-		.order('name');
-
-	if (error) {
-		console.error('Failed to load icon pool:', error);
-		return [];
+	if (iconPoolLoadingPromise && !forceRefresh) {
+		return iconPoolLoadingPromise;
 	}
 
-	iconPoolCache = data ?? [];
-	iconPoolLookupCache = new Map(iconPoolCache.map((icon) => [icon.id, icon]));
+	iconPoolLoadingPromise = (async () => {
+		try {
+			const { data, error } = await supabase
+				.from('icon_pool')
+				.select('*')
+				.order('source_type')
+				.order('name');
 
-	return iconPoolCache;
+			if (error) {
+				console.error('Failed to load icon pool:', error);
+				return [];
+			}
+
+			iconPoolCache = data ?? [];
+			iconPoolLookupCache = new Map(iconPoolCache.map((icon) => [icon.id, icon]));
+			return iconPoolCache;
+		} finally {
+			iconPoolLoadingPromise = null;
+		}
+	})();
+
+	return iconPoolLoadingPromise;
 }
 
 /**

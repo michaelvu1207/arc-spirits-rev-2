@@ -1,0 +1,2 @@
+[functions.export-all-tts-json-uncached]
+verify_jwt = false

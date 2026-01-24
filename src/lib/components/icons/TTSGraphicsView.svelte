@@ -49,6 +49,26 @@
 	// Preview state
 	let previewUrl: string | null = $state(null);
 
+	function drawImageContain(
+		ctx: CanvasRenderingContext2D,
+		img: HTMLImageElement,
+		x: number,
+		y: number,
+		w: number,
+		h: number
+	) {
+		const naturalW = img.naturalWidth || img.width || w;
+		const naturalH = img.naturalHeight || img.height || h;
+		const safeW = naturalW > 0 ? naturalW : w;
+		const safeH = naturalH > 0 ? naturalH : h;
+		const scale = Math.min(w / safeW, h / safeH);
+		const drawW = safeW * scale;
+		const drawH = safeH * scale;
+		const drawX = x + (w - drawW) / 2;
+		const drawY = y + (h - drawH) / 2;
+		ctx.drawImage(img, drawX, drawY, drawW, drawH);
+	}
+
 	// Handle background file selection
 	function onBackgroundChange(event: Event) {
 		const input = event.target as HTMLInputElement;
@@ -135,7 +155,7 @@
 		ctx.drawImage(bgImage, 0, 0, canvasWidth, canvasHeight);
 
 		// Draw icon at specified position and size
-		ctx.drawImage(iconImage, iconX, iconY, iconSize, iconSize);
+		drawImageContain(ctx, iconImage, iconX, iconY, iconSize, iconSize);
 
 		// Draw title if enabled
 		if (showTitle && titleText) {

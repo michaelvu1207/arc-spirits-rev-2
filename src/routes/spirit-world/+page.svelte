@@ -1,23 +1,35 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import html2canvas from 'html2canvas';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { GameLocationRow } from '$lib/types/gameData';
+	import type { GameLocationRewardRow, GameLocationRow } from '$lib/types/gameData';
 	import { getErrorMessage } from '$lib/utils';
+	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
+	import { isRewardOrIconToken, normalizeRewardIconTokens, rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
 	import { publicAssetUrl } from '$lib/utils/storage';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { ImageUploader } from '$lib/components/shared';
 	import { Button, Input } from '$lib/components/ui';
 	import { fetchSpiritWorldMapConfig, upsertSpiritWorldMapConfig } from '$lib/api/spiritWorldMapConfig';
 	import type { SpiritWorldLocationPlacement, SpiritWorldMapConfig } from '$lib/generators/spirit-world/spiritWorldMapConfig';
-	import { generateSpiritWorldMapImage } from '$lib/generators/spirit-world/spiritWorldMapGenerator';
 
-	type Location = Pick<
-		GameLocationRow,
-		'id' | 'name' | 'background_image_path' | 'image_with_icons_path' | 'updated_at'
-	>;
+	type Location = Pick<GameLocationRow, 'id' | 'name' | 'reward_rows'>;
+	type LocationRowItem = {
+		placementId: string;
+		locationId: string;
+		locationName: string;
+		rowIndex: number;
+		row: GameLocationRewardRow;
+	};
 
 	const tabs: Tab[] = [{ id: 'map', label: 'Spirit World Map', icon: '🗺️' }];
 	let activeTab = $state('map');
+
+	const PLACEMENT_ID_SEPARATOR = ':';
+	const EXPORT_ICON_SIZE = 56;
+	const EXPORT_ICON_GAP = 10;
+	const EXPORT_ROW_GAP = 12;
+	const LEGACY_ROW_HEIGHT = EXPORT_ICON_SIZE + EXPORT_ROW_GAP;
 
 	let locations = $state<Location[]>([]);
 	let loading = $state(true);
@@ -32,7 +44,7 @@
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
 
-	let selectedLocationId = $state<string | null>(null);
+	let selectedPlacementId = $state<string | null>(null);
 	let searchQuery = $state('');
 
 	let bgSize = $state<{ w: number; h: number } | null>(null);
@@ -43,16 +55,88 @@
 	let generatedStamp = $state<number>(0);
 
 	const locationById = $derived.by(() => new Map(locations.map((l) => [l.id, l])));
-	const placedLocationIds = $derived.by(() => new Set(Object.keys(mapConfig.placements ?? {})));
-	const placedCount = $derived(placedLocationIds.size);
 
-	function getLocationImagePath(loc: Location): string | null {
-		return loc.image_with_icons_path ?? loc.background_image_path ?? null;
+	function placementIdFor(locationId: string, rowIndex: number): string {
+		return `${locationId}${PLACEMENT_ID_SEPARATOR}${rowIndex}`;
 	}
 
-	function getLocationImageUrl(loc: Location): string | null {
-		const path = getLocationImagePath(loc);
-		return publicAssetUrl(path, { updatedAt: loc.updated_at ?? 0 });
+	function rowLabel(row: GameLocationRewardRow, rowIndex: number): string {
+		const kind = row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain';
+		return `${kind} • Row ${rowIndex + 1}`;
+	}
+
+	const rowItems = $derived.by<LocationRowItem[]>(() => {
+		const items: LocationRowItem[] = [];
+		for (const loc of locations) {
+			const rows = loc.reward_rows ?? [];
+			for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+				const row = rows[rowIndex];
+				if (!row || !hasRewardContent(row)) continue;
+				items.push({
+					placementId: placementIdFor(loc.id, rowIndex),
+					locationId: loc.id,
+					locationName: loc.name,
+					rowIndex,
+					row
+				});
+			}
+		}
+		return items;
+	});
+
+	const rowItemByPlacementId = $derived.by(() => new Map(rowItems.map((item) => [item.placementId, item])));
+
+	const placedPlacementIds = $derived.by(() => new Set(Object.keys(mapConfig.placements ?? {})));
+	const placedRows = $derived.by(() => {
+		const placements = mapConfig.placements ?? {};
+		return rowItems
+			.filter((item) => !!placements[item.placementId])
+			.map((item) => ({ item, placement: placements[item.placementId]! }));
+	});
+
+	const placedCount = $derived(placedRows.length);
+
+	function normalizeRewardRows(rows: any): GameLocationRewardRow[] {
+		if (!Array.isArray(rows)) return [];
+		return rows.map((row) => {
+			if (!row || typeof row !== 'object') {
+				return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
+			}
+
+			// Back-compat for earlier shape: { icon_ids: [...] }
+			if (Array.isArray((row as any).icon_ids)) {
+				return {
+					type: 'gain',
+					gain_icon_ids: normalizeRewardIconTokens((row as any).icon_ids)
+				} satisfies GameLocationRewardRow;
+			}
+
+			const rawType = (row as any).type;
+			if (rawType === 'text') {
+				return {
+					type: 'text',
+					text: typeof (row as any).text === 'string' ? (row as any).text : ''
+				} satisfies GameLocationRewardRow;
+			}
+
+			const type = rawType === 'trade' ? 'trade' : 'gain';
+			const gain_icon_ids = normalizeRewardIconTokens((row as any).gain_icon_ids);
+
+			if (type === 'trade') {
+				const cost_icon_ids = normalizeRewardIconTokens((row as any).cost_icon_ids);
+				return { type: 'trade', cost_icon_ids, gain_icon_ids } satisfies GameLocationRewardRow;
+			}
+
+			return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
+		});
+	}
+
+	function hasRewardContent(row: GameLocationRewardRow): boolean {
+		if (row.type === 'text') return row.text.trim().length > 0;
+		if (row.type === 'trade') {
+			return rewardIconTokensHaveAnyIcons(row.cost_icon_ids) || rewardIconTokensHaveAnyIcons(row.gain_icon_ids);
+		}
+		return rewardIconTokensHaveAnyIcons(row.gain_icon_ids);
 	}
 
 	const backgroundUrl = $derived.by(() =>
@@ -65,23 +149,20 @@
 			: null
 	);
 
-	const filteredLocations = $derived.by(() => {
+	const filteredRowItems = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
-		return locations.filter((loc) => {
+		return rowItems.filter((item) => {
 			if (!term) return true;
-			return loc.name.toLowerCase().includes(term);
+			if (item.locationName.toLowerCase().includes(term)) return true;
+			if (rowLabel(item.row, item.rowIndex).toLowerCase().includes(term)) return true;
+			if (item.row.type === 'text' && item.row.text.toLowerCase().includes(term)) return true;
+			return false;
 		});
 	});
 
-	const placedLocations = $derived.by(() => {
-		const placements = mapConfig.placements ?? {};
-		return locations
-			.filter((loc) => !!placements[loc.id])
-			.map((loc) => ({ loc, placement: placements[loc.id]!, imageUrl: getLocationImageUrl(loc) }));
-	});
-
-	let dragging = $state<{ locationId: string; offsetX: number; offsetY: number } | null>(null);
+	let dragging = $state<{ placementId: string; offsetX: number; offsetY: number } | null>(null);
 	let pendingSave = $state(false);
+	let exportCanvasEl = $state<HTMLDivElement | null>(null);
 
 	onMount(loadData);
 
@@ -89,7 +170,12 @@
 		loading = true;
 		error = null;
 		try {
-			await Promise.all([loadLocations(), loadConfig()]);
+			await Promise.all([loadAllIcons(), loadLocations(), loadConfig()]);
+			const migrated = migrateLegacyLocationPlacements(mapConfig);
+			if (migrated) {
+				mapConfig = migrated;
+				await saveConfig(migrated);
+			}
 		} catch (err) {
 			error = getErrorMessage(err);
 		} finally {
@@ -100,14 +186,60 @@
 	async function loadLocations() {
 		const { data, error: err } = await supabase
 			.from('game_locations')
-			.select('id, name, background_image_path, image_with_icons_path, updated_at')
+			.select('id, name, reward_rows')
 			.order('name');
 		if (err) throw new Error(err.message);
-		locations = (data ?? []) as Location[];
+		locations = (data ?? []).map((row: any) => ({
+			...row,
+			reward_rows: normalizeRewardRows(row.reward_rows)
+		})) as Location[];
 	}
 
 	async function loadConfig() {
 		mapConfig = await fetchSpiritWorldMapConfig();
+	}
+
+	function migrateLegacyLocationPlacements(config: SpiritWorldMapConfig): SpiritWorldMapConfig | null {
+		const placements = config.placements ?? {};
+		if (Object.keys(placements).length === 0) return null;
+
+		const nextPlacements: Record<string, SpiritWorldLocationPlacement> = { ...placements };
+		let changed = false;
+
+		for (const [key, placement] of Object.entries(placements)) {
+			if (key.includes(PLACEMENT_ID_SEPARATOR)) continue;
+			const loc = locationById.get(key);
+			if (!loc) continue;
+
+			const rowsWithIndex = (loc.reward_rows ?? [])
+				.map((row, rowIndex) => ({ row, rowIndex }))
+				.filter(({ row }) => !!row && hasRewardContent(row));
+
+			for (let displayIndex = 0; displayIndex < rowsWithIndex.length; displayIndex++) {
+				const entry = rowsWithIndex[displayIndex];
+				if (!entry) continue;
+				const placementId = placementIdFor(loc.id, entry.rowIndex);
+				if (nextPlacements[placementId]) continue;
+
+				const scale = placement.scale ?? 1;
+				nextPlacements[placementId] = {
+					...placement,
+					y: placement.y + displayIndex * LEGACY_ROW_HEIGHT * scale
+				};
+				changed = true;
+			}
+
+			delete nextPlacements[key];
+			changed = true;
+		}
+
+		if (!changed) return null;
+
+		return {
+			...config,
+			generated_image_path: null,
+			placements: nextPlacements
+		};
 	}
 
 	async function saveConfig(next: SpiritWorldMapConfig) {
@@ -145,22 +277,22 @@
 		void measureBackground(backgroundUrl);
 	});
 
-	function setPlacement(locationId: string, placement: SpiritWorldLocationPlacement) {
+	function setPlacement(placementId: string, placement: SpiritWorldLocationPlacement) {
 		mapConfig = {
 			...mapConfig,
 			placements: {
 				...(mapConfig.placements ?? {}),
-				[locationId]: placement
+				[placementId]: placement
 			}
 		};
 		pendingSave = true;
 	}
 
-	function removePlacement(locationId: string) {
+	function removePlacement(placementId: string) {
 		const next = { ...(mapConfig.placements ?? {}) };
-		delete next[locationId];
+		delete next[placementId];
 		mapConfig = { ...mapConfig, placements: next };
-		if (selectedLocationId === locationId) selectedLocationId = null;
+		if (selectedPlacementId === placementId) selectedPlacementId = null;
 		pendingSave = true;
 	}
 
@@ -170,39 +302,33 @@
 		return {
 			x: 32 + col * 220,
 			y: 32 + row * 170,
-			scale: 0.35,
+			scale: 0.8,
 			rotation: 0
 		};
 	}
 
-	function addToMap(locationId: string) {
-		if ((mapConfig.placements ?? {})[locationId]) return;
+	function addToMap(placementId: string) {
+		if ((mapConfig.placements ?? {})[placementId]) return;
 		const nextIdx = Object.keys(mapConfig.placements ?? {}).length;
 		const placement = defaultPlacementForIndex(nextIdx);
-		setPlacement(locationId, placement);
-		selectedLocationId = locationId;
-		void saveConfig({
-			...mapConfig,
-			placements: {
-				...(mapConfig.placements ?? {}),
-				[locationId]: placement
-			}
-		});
+		setPlacement(placementId, placement);
+		selectedPlacementId = placementId;
+		void saveConfig(mapConfig);
 	}
 
-	function onPlacedPointerDown(e: PointerEvent, locationId: string) {
+	function onPlacedPointerDown(e: PointerEvent, placementId: string) {
 		const canvas = (e.currentTarget as HTMLElement).closest('.spirit-world__canvas') as HTMLElement | null;
 		if (!canvas) return;
 		const rect = canvas.getBoundingClientRect();
 		const pointerX = e.clientX - rect.left;
 		const pointerY = e.clientY - rect.top;
-		const placement = mapConfig.placements?.[locationId];
+		const placement = mapConfig.placements?.[placementId];
 		if (!placement) return;
 
-		selectedLocationId = locationId;
+		selectedPlacementId = placementId;
 		const left = placement.x * mapScale;
 		const top = placement.y * mapScale;
-		dragging = { locationId, offsetX: pointerX - left, offsetY: pointerY - top };
+		dragging = { placementId, offsetX: pointerX - left, offsetY: pointerY - top };
 		(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 	}
 
@@ -212,9 +338,9 @@
 		const rect = canvas.getBoundingClientRect();
 		const x = (e.clientX - rect.left - dragging.offsetX) / mapScale;
 		const y = (e.clientY - rect.top - dragging.offsetY) / mapScale;
-		const current = mapConfig.placements?.[dragging.locationId];
+		const current = mapConfig.placements?.[dragging.placementId];
 		if (!current) return;
-		setPlacement(dragging.locationId, { ...current, x, y });
+		setPlacement(dragging.placementId, { ...current, x, y });
 	}
 
 	function onCanvasPointerUp() {
@@ -226,48 +352,113 @@
 	}
 
 	function updateSelectedScale(scale: number) {
-		if (!selectedLocationId) return;
-		const current = mapConfig.placements?.[selectedLocationId];
+		if (!selectedPlacementId) return;
+		const current = mapConfig.placements?.[selectedPlacementId];
 		if (!current) return;
-		setPlacement(selectedLocationId, { ...current, scale });
+		setPlacement(selectedPlacementId, { ...current, scale });
+	}
+
+	function applyScaleToAllPlacements(scale: number) {
+		const placements = mapConfig.placements ?? {};
+		if (Object.keys(placements).length === 0) return;
+
+		const nextPlacements: Record<string, SpiritWorldLocationPlacement> = {};
+		for (const [placementId, placement] of Object.entries(placements)) {
+			nextPlacements[placementId] = { ...placement, scale };
+		}
+
+		const next: SpiritWorldMapConfig = { ...mapConfig, placements: nextPlacements };
+		mapConfig = next;
+		pendingSave = true;
+		void saveConfig(next);
+	}
+
+	function applyRotationToAllPlacements(rotation: number) {
+		const placements = mapConfig.placements ?? {};
+		if (Object.keys(placements).length === 0) return;
+
+		const nextPlacements: Record<string, SpiritWorldLocationPlacement> = {};
+		for (const [placementId, placement] of Object.entries(placements)) {
+			nextPlacements[placementId] = { ...placement, rotation };
+		}
+
+		const next: SpiritWorldMapConfig = { ...mapConfig, placements: nextPlacements };
+		mapConfig = next;
+		pendingSave = true;
+		void saveConfig(next);
 	}
 
 	function updateSelectedRotation(rotation: number) {
-		if (!selectedLocationId) return;
-		const current = mapConfig.placements?.[selectedLocationId];
+		if (!selectedPlacementId) return;
+		const current = mapConfig.placements?.[selectedPlacementId];
 		if (!current) return;
-		setPlacement(selectedLocationId, { ...current, rotation });
+		setPlacement(selectedPlacementId, { ...current, rotation });
+	}
+
+	function toggleHideAllTooltips() {
+		const next: SpiritWorldMapConfig = { ...mapConfig, hide_all_labels: !(mapConfig.hide_all_labels ?? false) };
+		mapConfig = next;
+		void saveConfig(next);
 	}
 
 	let exporting = $state(false);
 	let exportError = $state<string | null>(null);
 
 	async function exportMap() {
-		if (!backgroundUrl) {
+		if (!backgroundUrl || !bgSize) {
 			alert('Upload a Spirit World background first.');
+			return;
+		}
+		if (!exportCanvasEl) {
+			alert('Export canvas is not ready yet.');
 			return;
 		}
 
 		exporting = true;
 		exportError = null;
 		try {
-			const placements: { imageUrl: string; x: number; y: number; scale: number; rotation: number }[] = [];
-			for (const [locationId, placement] of Object.entries(mapConfig.placements ?? {})) {
-				const loc = locationById.get(locationId);
-				if (!loc) continue;
-				const url = getLocationImageUrl(loc);
-				if (!url) continue;
-				placements.push({
-					imageUrl: url,
-					x: placement.x,
-					y: placement.y,
-					scale: placement.scale,
-					rotation: placement.rotation ?? 0
-				});
+			// Ensure the background is loaded in the browser cache for html2canvas.
+			try {
+				const bg = new Image();
+				bg.crossOrigin = 'anonymous';
+				bg.src = backgroundUrl;
+				await bg.decode();
+			} catch {
+				// ignore
 			}
 
-			const blob = await generateSpiritWorldMapImage({ backgroundUrl, placements });
-			const storagePath = 'spirit_world/spirit_world_with_locations.png';
+			// Wait for icons to load before capturing.
+			const imgs = Array.from(exportCanvasEl.querySelectorAll('img'));
+			await Promise.all(
+				imgs.map(
+					(img) =>
+						img.complete
+							? Promise.resolve()
+							: new Promise<void>((resolve) => {
+									img.addEventListener('load', () => resolve(), { once: true });
+									img.addEventListener('error', () => resolve(), { once: true });
+								})
+				)
+			);
+
+			const canvas = await html2canvas(exportCanvasEl, {
+				backgroundColor: null,
+				scale: 1,
+				useCORS: true,
+				allowTaint: false,
+				logging: false,
+				width: bgSize.w,
+				height: bgSize.h
+			});
+
+			const blob: Blob = await new Promise((resolve, reject) => {
+				canvas.toBlob((value) => {
+					if (!value) return reject(new Error('Failed to render export PNG.'));
+					resolve(value);
+				}, 'image/png');
+			});
+
+			const storagePath = 'spirit_world/spirit_world_with_rewards.png';
 			const { error: uploadError } = await supabase.storage.from('game_assets').upload(storagePath, blob, {
 				contentType: 'image/png',
 				upsert: true
@@ -283,7 +474,7 @@
 			const objectUrl = URL.createObjectURL(blob);
 			const a = document.createElement('a');
 			a.href = objectUrl;
-			a.download = 'spirit_world_with_locations.png';
+			a.download = 'spirit_world_with_rewards.png';
 			a.click();
 			URL.revokeObjectURL(objectUrl);
 		} catch (err) {
@@ -296,13 +487,13 @@
 
 <PageLayout
 	title="Spirit World"
-	subtitle="Place game locations on the Spirit World background and export a composite PNG"
+	subtitle="Place location rewards on the Spirit World background and export a composite PNG"
 	{tabs}
 	{activeTab}
 	onTabChange={(id) => (activeTab = id)}
 >
 	{#snippet tabActions()}
-		<span class="count">{placedCount}/{locations.length} placed</span>
+		<span class="count">{placedCount}/{rowItems.length} placed</span>
 	{/snippet}
 
 	{#if loading}
@@ -347,34 +538,113 @@
 
 				<div class="panel">
 					<div class="panel__header">
-						<h2>Locations</h2>
-						<span class="pill">{locations.length}</span>
+						<h2>Reward Rows</h2>
+						<span class="pill">{rowItems.length}</span>
 					</div>
 					<div class="panel__row">
 						<Input bind:value={searchQuery} placeholder="Search locations…" />
 					</div>
 					<div class="locations">
-						{#each filteredLocations as loc (loc.id)}
-							{@const isPlaced = placedLocationIds.has(loc.id)}
-							{@const thumbUrl = getLocationImageUrl(loc)}
-							<div class="location-item" class:is-placed={isPlaced} class:is-selected={selectedLocationId === loc.id}>
+						{#each filteredRowItems as item (item.placementId)}
+							{@const isPlaced = placedPlacementIds.has(item.placementId)}
+							<div
+								class="location-item"
+								class:is-placed={isPlaced}
+								class:is-selected={selectedPlacementId === item.placementId}
+							>
 								<div class="location-item__thumb">
-									{#if thumbUrl}
-										<img src={thumbUrl} alt={loc.name} loading="lazy" />
-									{:else}
-										<div class="thumb-placeholder">No image</div>
-									{/if}
+									<div class="reward-preview">
+										<div class="reward-preview__row" class:is-trade={item.row.type === 'trade'} class:is-text={item.row.type === 'text'}>
+											{#if item.row.type === 'trade'}
+												<div class="reward-preview__icons">
+													{#each item.row.cost_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Cost icon" loading="lazy" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" loading="lazy" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+												<span class="reward-preview__arrow">→</span>
+												<div class="reward-preview__icons">
+													{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Gain icon" loading="lazy" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" loading="lazy" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else if item.row.type === 'gain'}
+												<div class="reward-preview__icons">
+													{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Reward icon" loading="lazy" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" loading="lazy" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<div class="reward-preview__text">{item.row.text}</div>
+											{/if}
+										</div>
+									</div>
 								</div>
 								<div class="location-item__meta">
-									<div class="location-item__name">{loc.name}</div>
+									<div class="location-item__name">{item.locationName}</div>
+									<div class="location-item__sub">{rowLabel(item.row, item.rowIndex)}</div>
 									<div class="location-item__actions">
 										{#if isPlaced}
-											<Button size="sm" onclick={() => (selectedLocationId = loc.id)}>Select</Button>
-											<Button size="sm" variant="danger" onclick={() => (removePlacement(loc.id), void saveConfig(mapConfig))}>
+											<Button size="sm" onclick={() => (selectedPlacementId = item.placementId)}>Select</Button>
+											<Button
+												size="sm"
+												variant="danger"
+												onclick={() => (removePlacement(item.placementId), void saveConfig(mapConfig))}
+											>
 												Remove
 											</Button>
 										{:else}
-											<Button size="sm" variant="primary" onclick={() => addToMap(loc.id)}>Add</Button>
+											<Button size="sm" variant="primary" onclick={() => addToMap(item.placementId)}>Add</Button>
 										{/if}
 									</div>
 								</div>
@@ -383,20 +653,29 @@
 					</div>
 				</div>
 
-				{#if selectedLocationId && mapConfig.placements?.[selectedLocationId]}
-					{@const placement = mapConfig.placements[selectedLocationId]!}
-					{@const selectedLoc = locationById.get(selectedLocationId)}
+				{#if selectedPlacementId && mapConfig.placements?.[selectedPlacementId]}
+					{@const placement = mapConfig.placements[selectedPlacementId]!}
+					{@const selectedItem = rowItemByPlacementId.get(selectedPlacementId)}
 					<div class="panel">
 						<div class="panel__header">
 							<h2>Selected</h2>
-							<span class="pill">{selectedLoc?.name ?? 'Unknown'}</span>
+							<span class="pill">
+								{selectedItem
+									? `${selectedItem.locationName} · ${rowLabel(selectedItem.row, selectedItem.rowIndex)}`
+									: 'Unknown'}
+							</span>
 						</div>
 						<div class="field">
-							<div class="field__label">Scale</div>
+							<div class="field__label-row">
+								<div class="field__label">Scale</div>
+								<Button size="sm" variant="secondary" onclick={() => applyScaleToAllPlacements(placement.scale)}>
+									Apply to all
+								</Button>
+							</div>
 							<input
 								type="range"
 								min="0.05"
-								max="2"
+								max="4"
 								step="0.01"
 								value={placement.scale}
 								oninput={(e) => updateSelectedScale(parseFloat((e.currentTarget as HTMLInputElement).value))}
@@ -405,7 +684,16 @@
 							<div class="field__hint">{placement.scale.toFixed(2)}x</div>
 						</div>
 						<div class="field">
-							<div class="field__label">Rotation</div>
+							<div class="field__label-row">
+								<div class="field__label">Rotation</div>
+								<Button
+									size="sm"
+									variant="secondary"
+									onclick={() => applyRotationToAllPlacements(placement.rotation ?? 0)}
+								>
+									Apply to all
+								</Button>
+							</div>
 							<input
 								type="range"
 								min="0"
@@ -416,6 +704,12 @@
 								onchange={() => void saveConfig(mapConfig)}
 							/>
 							<div class="field__hint">{Math.round(placement.rotation ?? 0)}°</div>
+						</div>
+						<div class="field field--row">
+							<div class="field__label">Tooltips</div>
+							<Button size="sm" variant="secondary" onclick={toggleHideAllTooltips}>
+								{mapConfig.hide_all_labels ? 'Show all' : 'Hide all'}
+							</Button>
 						</div>
 						<div class="field field--row">
 							<div class="field__hint">x: {Math.round(placement.x)} · y: {Math.round(placement.y)}</div>
@@ -459,7 +753,7 @@
 
 				{#if !backgroundUrl || !bgSize}
 					<div class="stage__empty">
-						<div>Upload a Spirit World background to start placing locations.</div>
+						<div>Upload a Spirit World background to start placing rewards.</div>
 					</div>
 				{:else}
 					<div class="stage__canvas-wrap">
@@ -468,27 +762,195 @@
 							style={`width:${bgSize.w * mapScale}px;height:${bgSize.h * mapScale}px;background-image:url('${backgroundUrl}');`}
 							onpointermove={onCanvasPointerMove}
 							onpointerup={onCanvasPointerUp}
-							onpointerleave={onCanvasPointerUp}
+								onpointerleave={onCanvasPointerUp}
 						>
-							{#each placedLocations as { loc, placement, imageUrl } (loc.id)}
+							{#each placedRows as { item, placement } (item.placementId)}
 								<div
 									class="placed"
-									class:is-selected={selectedLocationId === loc.id}
+									class:is-selected={selectedPlacementId === item.placementId}
 									style={`left:${placement.x * mapScale}px;top:${placement.y * mapScale}px;transform:rotate(${placement.rotation ?? 0}deg) scale(${placement.scale * mapScale});transform-origin:top left;`}
 									role="button"
 									tabindex="0"
-									onclick={() => (selectedLocationId = loc.id)}
-									onkeydown={(e) => e.key === 'Enter' && (selectedLocationId = loc.id)}
-									onpointerdown={(e) => onPlacedPointerDown(e, loc.id)}
+									onclick={() => (selectedPlacementId = item.placementId)}
+									onkeydown={(e) => e.key === 'Enter' && (selectedPlacementId = item.placementId)}
+									onpointerdown={(e) => onPlacedPointerDown(e, item.placementId)}
 								>
-									{#if imageUrl}
-										<img src={imageUrl} alt={loc.name} draggable="false" />
-									{:else}
-										<div class="placed__fallback">{loc.name}</div>
+									<div class="placed__rewards">
+										<div class="reward-preview__row" class:is-trade={item.row.type === 'trade'} class:is-text={item.row.type === 'text'}>
+											{#if item.row.type === 'trade'}
+												<div class="reward-preview__icons">
+													{#each item.row.cost_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Cost icon" draggable="false" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" draggable="false" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+												<span class="reward-preview__arrow">→</span>
+												<div class="reward-preview__icons">
+													{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Gain icon" draggable="false" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" draggable="false" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else if item.row.type === 'gain'}
+												<div class="reward-preview__icons">
+													{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-preview__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Reward icon" draggable="false" />
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#each token.icon_ids as iconId, j (j)}
+																	{@const url = getIconPoolUrl(iconId)}
+																	{#if url}
+																		<img src={url} alt="OR icon" draggable="false" />
+																	{/if}
+																	{#if j < token.icon_ids.length - 1}
+																		<span class="reward-preview__or-slash">/</span>
+																	{/if}
+																{/each}
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<div class="reward-preview__text">{item.row.text}</div>
+											{/if}
+										</div>
+									</div>
+									{#if !(mapConfig.hide_all_labels ?? false)}
+										<div class="placed__label">{item.locationName} · {rowLabel(item.row, item.rowIndex)}</div>
 									{/if}
-									<div class="placed__label">{loc.name}</div>
 								</div>
 							{/each}
+						</div>
+						<!-- Offscreen export DOM: same rendering as preview, but at native map size -->
+						<div class="spirit-world__export-sandbox" aria-hidden="true">
+							<div
+								class="spirit-world__canvas spirit-world__canvas--export"
+								bind:this={exportCanvasEl}
+								style={`width:${bgSize.w}px;height:${bgSize.h}px;background-image:url('${backgroundUrl}');`}
+							>
+								{#each placedRows as { item, placement } (item.placementId)}
+									<div
+										class="placed"
+										style={`left:${placement.x}px;top:${placement.y}px;transform:rotate(${placement.rotation ?? 0}deg) scale(${placement.scale});transform-origin:top left;`}
+									>
+										<div class="placed__rewards">
+											<div class="reward-preview__row" class:is-trade={item.row.type === 'trade'} class:is-text={item.row.type === 'text'}>
+												{#if item.row.type === 'trade'}
+													<div class="reward-preview__icons">
+														{#each item.row.cost_icon_ids as token, iconIdx (iconIdx)}
+															<div class="reward-preview__icon">
+																{#if typeof token === 'string'}
+																	{@const url = getIconPoolUrl(token)}
+																	{#if url}
+																		<img src={url} alt="Cost icon" draggable="false" />
+																	{/if}
+																{:else if isRewardOrIconToken(token)}
+																	{#each token.icon_ids as iconId, j (j)}
+																		{@const url = getIconPoolUrl(iconId)}
+																		{#if url}
+																			<img src={url} alt="OR icon" draggable="false" />
+																		{/if}
+																		{#if j < token.icon_ids.length - 1}
+																			<span class="reward-preview__or-slash">/</span>
+																		{/if}
+																	{/each}
+																{/if}
+															</div>
+														{/each}
+													</div>
+													<span class="reward-preview__arrow">→</span>
+													<div class="reward-preview__icons">
+														{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+															<div class="reward-preview__icon">
+																{#if typeof token === 'string'}
+																	{@const url = getIconPoolUrl(token)}
+																	{#if url}
+																		<img src={url} alt="Gain icon" draggable="false" />
+																	{/if}
+																{:else if isRewardOrIconToken(token)}
+																	{#each token.icon_ids as iconId, j (j)}
+																		{@const url = getIconPoolUrl(iconId)}
+																		{#if url}
+																			<img src={url} alt="OR icon" draggable="false" />
+																		{/if}
+																		{#if j < token.icon_ids.length - 1}
+																			<span class="reward-preview__or-slash">/</span>
+																		{/if}
+																	{/each}
+																{/if}
+															</div>
+														{/each}
+													</div>
+												{:else if item.row.type === 'gain'}
+													<div class="reward-preview__icons">
+														{#each item.row.gain_icon_ids as token, iconIdx (iconIdx)}
+															<div class="reward-preview__icon">
+																{#if typeof token === 'string'}
+																	{@const url = getIconPoolUrl(token)}
+																	{#if url}
+																		<img src={url} alt="Reward icon" draggable="false" />
+																	{/if}
+																{:else if isRewardOrIconToken(token)}
+																	{#each token.icon_ids as iconId, j (j)}
+																		{@const url = getIconPoolUrl(iconId)}
+																		{#if url}
+																			<img src={url} alt="OR icon" draggable="false" />
+																		{/if}
+																		{#if j < token.icon_ids.length - 1}
+																			<span class="reward-preview__or-slash">/</span>
+																		{/if}
+																	{/each}
+																{/if}
+															</div>
+														{/each}
+													</div>
+												{:else}
+													<div class="reward-preview__text">{item.row.text}</div>
+												{/if}
+											</div>
+										</div>
+										{#if !(mapConfig.hide_all_labels ?? false)}
+											<div class="placed__label">{item.locationName} · {rowLabel(item.row, item.rowIndex)}</div>
+										{/if}
+									</div>
+								{/each}
+							</div>
 						</div>
 					</div>
 				{/if}
@@ -567,7 +1029,7 @@
 
 	.location-item {
 		display: grid;
-		grid-template-columns: 64px minmax(0, 1fr);
+		grid-template-columns: 160px minmax(0, 1fr);
 		gap: 0.6rem;
 		align-items: center;
 		border: 1px solid rgba(148, 163, 184, 0.12);
@@ -586,26 +1048,91 @@
 	}
 
 	.location-item__thumb {
-		width: 64px;
-		height: 48px;
+		--reward-icon-size: 18px;
+		--reward-icon-gap: 4px;
+		--reward-row-gap: 4px;
+
+		width: 160px;
+		height: 64px;
 		border-radius: 8px;
 		overflow: hidden;
 		border: 1px solid rgba(148, 163, 184, 0.2);
 		background: rgba(2, 6, 23, 0.45);
-		display: grid;
-		place-items: center;
-	}
-
-	.location-item__thumb img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		display: block;
+		display: flex;
+		align-items: flex-start;
+		justify-content: flex-start;
+		padding: 0.25rem;
 	}
 
 	.thumb-placeholder {
 		font-size: 0.7rem;
 		color: #94a3b8;
+	}
+
+	.reward-preview {
+		display: flex;
+		flex-direction: column;
+		gap: var(--reward-row-gap);
+		width: 100%;
+	}
+
+	.reward-preview__row {
+		display: flex;
+		align-items: center;
+		gap: var(--reward-icon-gap);
+		min-width: 0;
+		padding: 0.35rem 0.45rem;
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.22);
+		border: 1px solid rgba(255, 255, 255, 0.3);
+	}
+
+	.reward-preview__icons {
+		display: flex;
+		align-items: center;
+		gap: var(--reward-icon-gap);
+		min-width: 0;
+		flex-wrap: nowrap;
+	}
+
+	.reward-preview__icon {
+		display: flex;
+		align-items: center;
+		gap: var(--reward-icon-gap);
+	}
+
+	.reward-preview__icon img {
+		height: var(--reward-icon-size);
+		width: auto;
+		max-width: calc(var(--reward-icon-size) * 1.8);
+		display: block;
+		pointer-events: none;
+		filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+	}
+
+	.reward-preview__arrow {
+		font-size: calc(var(--reward-icon-size) * 0.7);
+		font-weight: 800;
+		color: rgba(226, 232, 240, 0.9);
+		text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+		pointer-events: none;
+	}
+
+	.reward-preview__or-slash {
+		font-size: calc(var(--reward-icon-size) * 0.65);
+		font-weight: 900;
+		color: rgba(226, 232, 240, 0.9);
+		text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+		pointer-events: none;
+	}
+
+	.reward-preview__text {
+		font-size: 0.72rem;
+		color: rgba(226, 232, 240, 0.85);
+		line-height: 1.05;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.location-item__meta {
@@ -619,6 +1146,14 @@
 		font-size: 0.85rem;
 		font-weight: 700;
 		color: #f8fafc;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.location-item__sub {
+		font-size: 0.75rem;
+		color: rgba(148, 163, 184, 0.9);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -646,6 +1181,13 @@
 	.field__label {
 		font-size: 0.75rem;
 		color: rgba(148, 163, 184, 0.9);
+	}
+
+	.field__label-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
 	}
 
 	.field__hint {
@@ -748,22 +1290,36 @@
 		touch-action: none;
 	}
 
+	.spirit-world__export-sandbox {
+		position: fixed;
+		left: -100000px;
+		top: 0;
+	}
+
+	.spirit-world__canvas--export {
+		user-select: none;
+	}
+
 	.placed {
 		position: absolute;
 		cursor: grab;
 	}
 
-	.placed.is-selected img,
+	.placed.is-selected .placed__rewards,
 	.placed.is-selected .placed__fallback {
 		outline: 2px solid rgba(168, 85, 247, 0.8);
 		outline-offset: 2px;
 	}
 
-	.placed img {
-		display: block;
-		pointer-events: auto;
-		max-width: none;
-		max-height: none;
+	.placed__rewards {
+		--reward-icon-size: 56px;
+		--reward-icon-gap: 10px;
+		--reward-row-gap: 12px;
+
+		display: flex;
+		flex-direction: column;
+		gap: var(--reward-row-gap);
+		filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.55));
 	}
 
 	.placed__fallback {
@@ -779,7 +1335,7 @@
 	.placed__label {
 		position: absolute;
 		left: 10px;
-		top: 10px;
+		top: -26px;
 		background: rgba(15, 23, 42, 0.75);
 		border: 1px solid rgba(148, 163, 184, 0.25);
 		color: #e2e8f0;

@@ -1,10 +1,12 @@
 <script lang="ts">
 	import type { Monster, Event } from './types';
-	import type { SpecialEffectRow } from '$lib/types/gameData';
+	import type { RewardRow, SpecialEffectRow } from '$lib/types/gameData';
+	import { DEFAULT_EVENT_TYPE, EVENT_TYPE_OPTIONS, type EventType } from '$lib/types/eventTypes';
 	import { MonsterCardPreview, RewardRowsEditor } from '$lib/components/monsters';
 	import EventCardPreview from './EventCardPreview.svelte';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import { SpecialEffectPicker } from '$lib/components/shared';
+	import { getMonsterStageLabel } from '$lib/utils/monsterStageLabels';
 
 	export type DeckCard = {
 		type: 'monster' | 'event';
@@ -21,7 +23,7 @@
 		name: string;
 		damage: number;
 		barrier: number;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive' | 'boss';
+		stage: 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
 		icon: string | null;
 		image_path: string | null;
 		order_num: number;
@@ -32,10 +34,12 @@
 	};
 
 	export type EventFormData = {
-		name: string;
+		event_type: EventType;
 		title: string;
 		description: string | null;
+		stage_completion: string | null;
 		image_path: string | null;
+		reward_rows: RewardRow[];
 		order_num: number;
 	};
 
@@ -66,7 +70,7 @@
 		name: '',
 		damage: 0,
 		barrier: 0,
-		state: 'tainted',
+		stage: 'stage_1',
 		icon: null,
 		image_path: null,
 		order_num: 0,
@@ -80,10 +84,12 @@
 	let showEventDrawer = $state(false);
 	let editingEventId = $state<string | null>(null);
 	let eventFormData = $state<EventFormData>({
-		name: '',
+		event_type: DEFAULT_EVENT_TYPE,
 		title: '',
 		description: null,
+		stage_completion: null,
 		image_path: null,
+		reward_rows: [{ type: 'all_players', icon_ids: [] }],
 		order_num: 0
 	});
 
@@ -232,7 +238,7 @@
 			name: '',
 			damage: 0,
 			barrier: 0,
-			state: 'tainted',
+			stage: 'stage_1',
 			icon: null,
 			image_path: null,
 			order_num: deckCards.length,
@@ -251,7 +257,7 @@
 			name: monster.name,
 			damage: monster.damage,
 			barrier: monster.barrier,
-			state: monster.state,
+			stage: monster.stage,
 			icon: monster.icon,
 			image_path: monster.image_path,
 			order_num: monster.order_num,
@@ -279,34 +285,38 @@
 	}
 
 	// Event form handlers
-	function openEventForm() {
-		editingEventId = null;
-		eventFormData = {
-			name: '',
-			title: '',
-			description: null,
-			image_path: null,
-			order_num: deckCards.length
-		};
-		showEventDrawer = true;
-	}
+		function openEventForm() {
+			editingEventId = null;
+			eventFormData = {
+				event_type: DEFAULT_EVENT_TYPE,
+				title: '',
+				description: null,
+				stage_completion: null,
+				image_path: null,
+				reward_rows: [{ type: 'all_players', icon_ids: [] }],
+				order_num: deckCards.length
+			};
+			showEventDrawer = true;
+		}
 
-	function openEventEditForm(card: DeckCard) {
-		const event = card.data as Event;
-		editingEventId = event.id;
-		eventFormData = {
-			name: event.name,
-			title: event.title,
-			description: event.description,
-			image_path: event.image_path,
-			order_num: event.order_num
-		};
-		showEventDrawer = true;
-	}
+		function openEventEditForm(card: DeckCard) {
+			const event = card.data as Event;
+			editingEventId = event.id;
+			eventFormData = {
+				event_type: event.stage ?? DEFAULT_EVENT_TYPE,
+				title: event.title,
+				description: event.description,
+				stage_completion: (event as { stage_completion?: string | null }).stage_completion ?? null,
+				image_path: event.image_path,
+				reward_rows: (event.reward_rows as RewardRow[] | null | undefined) ?? [{ type: 'all_players', icon_ids: [] }],
+				order_num: event.order_num
+			};
+			showEventDrawer = true;
+		}
 
 	async function saveEvent() {
-		if (!eventFormData.name.trim() || !eventFormData.title.trim()) {
-			alert('Event name and title are required.');
+		if (!eventFormData.title.trim()) {
+			alert('Event title is required.');
 			return;
 		}
 		await onEventSave(eventFormData, editingEventId);
@@ -334,15 +344,20 @@
 		return (card.data as Event).title;
 	}
 
-	function getStateColor(state: string | null | undefined): string {
-		switch (state) {
-			case 'tainted': return '#c084fc';
-			case 'corrupt': return '#6b21a8';
-			case 'fallen': return '#065f46';
-			case 'arcane': return '#0ea5e9';
-			case 'inactive': return '#64748b';
-			case 'boss': return '#ef4444';
-			default: return '#94a3b8';
+	function getStageColor(stage: string | null | undefined): string {
+		switch (stage) {
+			case 'stage_1':
+				return '#c084fc';
+			case 'stage_2':
+				return '#6b21a8';
+			case 'stage_3':
+				return '#065f46';
+			case 'final_stage':
+				return '#a855f7';
+			case 'inactive':
+				return '#64748b';
+			default:
+				return '#94a3b8';
 		}
 	}
 
@@ -550,8 +565,8 @@
 						<h3 class="card-name">{getCardName(card)}</h3>
 						{#if card.type === 'monster'}
 							{@const monster = card.data as Monster}
-							<span class="card-state" style="--state-color: {getStateColor(monster.state)}">
-								{monster.state}
+							<span class="card-state" style="--state-color: {getStageColor(monster.stage)}">
+								{getMonsterStageLabel(monster.stage)}
 							</span>
 						{/if}
 					</div>
@@ -601,16 +616,15 @@
 					<FormField label="Quantity" helperText="Copies in deck">
 						<Input type="number" min={1} bind:value={monsterFormData.quantity} />
 					</FormField>
-					<FormField label="State">
+					<FormField label="Stage">
 						<Select
-							bind:value={monsterFormData.state}
+							bind:value={monsterFormData.stage}
 							options={[
-								{ value: 'tainted', label: 'Tainted' },
-								{ value: 'corrupt', label: 'Corrupt' },
-								{ value: 'fallen', label: 'Fallen' },
-								{ value: 'arcane', label: 'Arcane' },
+								{ value: 'stage_1', label: 'Stage 1' },
+								{ value: 'stage_2', label: 'Stage 2' },
+								{ value: 'stage_3', label: 'Stage 3' },
+								{ value: 'final_stage', label: 'Final Stage' },
 								{ value: 'inactive', label: 'Inactive' },
-								{ value: 'boss', label: 'Boss' }
 							]}
 						/>
 					</FormField>
@@ -657,23 +671,35 @@
 				<button class="close-btn" onclick={() => (showEventDrawer = false)}>&times;</button>
 			</div>
 			<div class="drawer-content">
-				<form id="event-form" class="form-grid" onsubmit={submitEventForm}>
-					<div class="full-width">
-						<FormField label="Name (Internal)" required>
-							<Input type="text" bind:value={eventFormData.name} required placeholder="Internal reference" />
-						</FormField>
-					</div>
-					<div class="full-width">
-						<FormField label="Title (Displayed)" required>
-							<Input type="text" bind:value={eventFormData.title} required placeholder="Card title" />
-						</FormField>
-					</div>
-					<div class="full-width">
-						<FormField label="Description">
-							<Textarea rows={4} bind:value={eventFormData.description} placeholder="Event description..." />
-						</FormField>
-					</div>
-				</form>
+					<form id="event-form" class="form-grid" onsubmit={submitEventForm}>
+						<div class="full-width">
+							<FormField label="Type" required>
+								<Select bind:value={eventFormData.event_type} options={EVENT_TYPE_OPTIONS} />
+							</FormField>
+						</div>
+						<div class="full-width">
+							<FormField label="Title" required>
+								<Input type="text" bind:value={eventFormData.title} required placeholder="Card title" />
+							</FormField>
+						</div>
+						<div class="full-width">
+							<FormField label="Description">
+								<Textarea rows={4} bind:value={eventFormData.description} placeholder="Event description..." />
+							</FormField>
+						</div>
+						<div class="full-width">
+							<FormField label="Stage completion" helperText="When should this stage end? Shown at the bottom of the card.">
+								<Textarea
+									rows={2}
+									bind:value={eventFormData.stage_completion}
+									placeholder="e.g. Ends when all players leave the abyss"
+								/>
+							</FormField>
+						</div>
+						<div class="full-width">
+							<RewardRowsEditor bind:rewardRows={eventFormData.reward_rows} defaultType="all_players" />
+						</div>
+					</form>
 			</div>
 			<div class="drawer-footer">
 				<Button variant="primary" type="submit" form="event-form">

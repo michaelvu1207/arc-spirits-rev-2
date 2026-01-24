@@ -1,30 +1,24 @@
-<script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/api/supabaseClient';
-	import type {
-		GameLocationRewardRow,
-		GameLocationRow,
-		GameLocationRowCompositionRow,
-		IconPoolRow,
-		OriginRow
-	} from '$lib/types/gameData';
-	import { fetchGameLocationRows } from '$lib/api/gameLocationRows';
-	import { getErrorMessage } from '$lib/utils';
-	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
-	import { publicAssetUrl } from '$lib/utils/storage';
-	import { PageLayout, Modal, type Tab } from '$lib/components/layout';
-	import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
-	import { LocationPlacerModal, LocationRewardRowsEditor } from '$lib/components/game-locations';
-	import { Button, FormField, Input, Select } from '$lib/components/ui';
+	<script lang="ts">
+		import { onMount } from 'svelte';
+		import { supabase } from '$lib/api/supabaseClient';
+		import type { GameLocationRewardRow, GameLocationRow, OriginRow } from '$lib/types/gameData';
+		import { getErrorMessage } from '$lib/utils';
+		import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
+		import { isRewardOrIconToken, normalizeRewardIconTokens, rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
+		import { PageLayout, Modal, type Tab } from '$lib/components/layout';
+		import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
+		import { LocationRewardRowsEditor } from '$lib/components/game-locations';
+		import { Button, FormField, Input, Select } from '$lib/components/ui';
 
-	const tabs: Tab[] = [{ id: 'locations', label: 'Locations', icon: '📍' }];
-	const activeTab = 'locations';
+		const tabs: Tab[] = [
+			{ id: 'locations', label: 'Locations', icon: '📍' }
+		];
+		let activeTab = $state('locations');
 
-	type OriginOption = Pick<OriginRow, 'id' | 'name'>;
-	type Location = GameLocationRow;
+		type OriginOption = Pick<OriginRow, 'id' | 'name'>;
+		type Location = GameLocationRow;
 
-	let iconPool = $state<IconPoolRow[]>([]);
-	let locations = $state<Location[]>([]);
+		let locations = $state<Location[]>([]);
 	let origins = $state<OriginOption[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -34,28 +28,22 @@
 
 	let showForm = $state(false);
 	let saving = $state(false);
-	let formError = $state<string | null>(null);
-	let nameError = $state<string | null>(null);
+		let formError = $state<string | null>(null);
+		let nameError = $state<string | null>(null);
 
-	let editingLocation = $state<Location | null>(null);
-	let formData = $state({
-		name: '',
-		origin_id: null as string | null,
-		reward_rows: normalizeRewardRows([]),
-		background_image_path: null as string | null
-	});
+		let editingLocation = $state<Location | null>(null);
+		let formData = $state({
+			name: '',
+			origin_id: null as string | null,
+			background_image_path: null as string | null,
+			reward_rows: normalizeRewardRows([])
+		});
 
 	let showDeleteConfirm = $state(false);
 	let deleting = $state(false);
 	let deleteTarget = $state<Location | null>(null);
 
-	let iconPlacerOpen = $state(false);
-	let locationRows = $state<GameLocationRowCompositionRow[]>([]);
-	let locationRowsLoading = $state(false);
-	let locationRowsError = $state<string | null>(null);
-
-	const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
-	const iconById = $derived.by(() => new Map(iconPool.map((icon) => [icon.id, icon])));
+		const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
 
 	const filteredLocations = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
@@ -64,17 +52,54 @@
 			if (!term) return true;
 			return loc.name.toLowerCase().includes(term);
 		});
+		});
+
+		const subtitleText = $derived.by(() => `${filteredLocations.length} locations`);
+
+		onMount(() => {
+			const params = new URLSearchParams(window.location.search);
+			const create = params.get('create');
+			const editId = params.get('edit');
+
+			void loadData().finally(() => {
+				if (create === '1') {
+					openCreate();
+
+					try {
+						const url = new URL(window.location.href);
+						url.searchParams.delete('create');
+					window.history.replaceState(null, '', url.toString());
+				} catch {
+					// ignore
+				}
+				return;
+			}
+
+			if (editId) {
+				activeTab = 'locations';
+				const location = locations.find((l) => l.id === editId) ?? null;
+				if (location) {
+					openEdit(location);
+				} else {
+					alert('Location not found.');
+				}
+
+				try {
+					const url = new URL(window.location.href);
+					url.searchParams.delete('edit');
+					window.history.replaceState(null, '', url.toString());
+				} catch {
+					// ignore
+				}
+			}
+		});
 	});
-
-	const subtitleText = $derived.by(() => `${filteredLocations.length} locations`);
-
-	onMount(loadData);
 
 	async function loadData() {
 		loading = true;
 		error = null;
 		try {
-			iconPool = await loadAllIcons();
+			await loadAllIcons();
 			await Promise.all([loadOrigins(), loadLocations()]);
 		} catch (err) {
 			error = getErrorMessage(err);
@@ -100,7 +125,7 @@
 			if (Array.isArray((row as any).icon_ids)) {
 				return {
 					type: 'gain',
-					gain_icon_ids: (row as any).icon_ids.filter((id: any) => typeof id === 'string')
+					gain_icon_ids: normalizeRewardIconTokens((row as any).icon_ids)
 				} satisfies GameLocationRewardRow;
 			}
 
@@ -113,15 +138,10 @@
 			}
 
 			const type = rawType === 'trade' ? 'trade' : 'gain';
-
-			const gain_icon_ids = Array.isArray((row as any).gain_icon_ids)
-				? (row as any).gain_icon_ids.filter((id: any) => typeof id === 'string')
-				: [];
+			const gain_icon_ids = normalizeRewardIconTokens((row as any).gain_icon_ids);
 
 			if (type === 'trade') {
-				const cost_icon_ids = Array.isArray((row as any).cost_icon_ids)
-					? (row as any).cost_icon_ids.filter((id: any) => typeof id === 'string')
-					: [];
+				const cost_icon_ids = normalizeRewardIconTokens((row as any).cost_icon_ids);
 
 				return {
 					type: 'trade',
@@ -134,9 +154,9 @@
 		});
 	}
 
-	async function loadLocations() {
-		const { data, error: err } = await supabase.from('game_locations').select('*').order('name');
-		if (err) throw new Error(err.message);
+		async function loadLocations() {
+			const { data, error: err } = await supabase.from('game_locations').select('*').order('name');
+			if (err) throw new Error(err.message);
 
 		locations = (data ?? []).map((row: any) => ({
 			...row,
@@ -144,49 +164,34 @@
 		})) as Location[];
 	}
 
-	function resetForm() {
-		formData = { name: '', origin_id: null, reward_rows: normalizeRewardRows([]), background_image_path: null };
-		formError = null;
-		nameError = null;
+		function resetForm() {
+			formData = {
+				name: '',
+				origin_id: null,
+				background_image_path: null,
+				reward_rows: normalizeRewardRows([])
+			};
+			formError = null;
+			nameError = null;
 	}
 
 	function openCreate() {
 		editingLocation = null;
 		resetForm();
-		locationRows = [];
-		locationRowsError = null;
-		locationRowsLoading = false;
 		showForm = true;
 	}
 
-	function openEdit(location: Location) {
-		editingLocation = location;
-		formData = {
-			name: location.name,
-			origin_id: location.origin_id,
-			reward_rows: normalizeRewardRows(location.reward_rows),
-			background_image_path: location.background_image_path
-		};
-		locationRows = [];
-		locationRowsError = null;
-		locationRowsLoading = false;
-		void loadLocationRows(location.id);
-		formError = null;
-		nameError = null;
+		function openEdit(location: Location) {
+			editingLocation = location;
+			formData = {
+				name: location.name,
+				origin_id: location.origin_id,
+				background_image_path: location.background_image_path ?? null,
+				reward_rows: normalizeRewardRows(location.reward_rows)
+			};
+			formError = null;
+			nameError = null;
 		showForm = true;
-	}
-
-	async function loadLocationRows(locationId: string) {
-		locationRowsLoading = true;
-		locationRowsError = null;
-		try {
-			locationRows = await fetchGameLocationRows(locationId);
-		} catch (err) {
-			locationRows = [];
-			locationRowsError = getErrorMessage(err);
-		} finally {
-			locationRowsLoading = false;
-		}
 	}
 
 	async function saveLocation() {
@@ -194,28 +199,29 @@
 		nameError = null;
 
 		const name = formData.name.trim();
-		if (!name) {
-			nameError = 'Name is required.';
-			return;
-		}
+			if (!name) {
+				nameError = 'Name is required.';
+				return;
+			}
 
-		const payload = {
-			name,
-			origin_id: formData.origin_id,
-			reward_rows: normalizeRewardRows(formData.reward_rows),
-			background_image_path: formData.background_image_path
-		};
+			const payload = {
+				name,
+				origin_id: formData.origin_id,
+				background_image_path: formData.background_image_path,
+				reward_rows: normalizeRewardRows(formData.reward_rows)
+			};
 
 		saving = true;
 		try {
+			const now = new Date().toISOString();
 			if (editingLocation) {
 				const { error: err } = await supabase
-					.from('game_locations')
-					.update(payload)
-					.eq('id', editingLocation.id);
+						.from('game_locations')
+						.update({ ...payload, updated_at: now })
+						.eq('id', editingLocation.id);
 				if (err) throw new Error(err.message);
 			} else {
-				const { error: err } = await supabase.from('game_locations').insert(payload);
+				const { error: err } = await supabase.from('game_locations').insert({ ...payload, updated_at: now });
 				if (err) throw new Error(err.message);
 			}
 
@@ -233,14 +239,14 @@
 			return row.text.trim().length > 0;
 		}
 		if (row.type === 'trade') {
-			return (row.cost_icon_ids?.length ?? 0) > 0 || (row.gain_icon_ids?.length ?? 0) > 0;
+			return rewardIconTokensHaveAnyIcons(row.cost_icon_ids) || rewardIconTokensHaveAnyIcons(row.gain_icon_ids);
+			}
+			return rewardIconTokensHaveAnyIcons(row.gain_icon_ids);
 		}
-		return (row.gain_icon_ids?.length ?? 0) > 0;
-	}
 
-	function requestDelete(location: Location) {
-		deleteTarget = location;
-		showDeleteConfirm = true;
+		function requestDelete(location: Location) {
+			deleteTarget = location;
+			showDeleteConfirm = true;
 	}
 
 	async function confirmDelete() {
@@ -262,21 +268,18 @@
 </script>
 
 <PageLayout
-	title="Game Locations"
-	subtitle={subtitleText}
-	{tabs}
-	{activeTab}
->
-	{#snippet headerActions()}
-		<Button variant="primary" onclick={openCreate}>+ Location</Button>
-		<Button variant="secondary" onclick={() => (iconPlacerOpen = true)} disabled={locations.length === 0}>
-			Icon Placer
-		</Button>
-	{/snippet}
-	{#snippet children()}
-		{#if error}
-			<div class="banner banner--error">{error}</div>
-		{/if}
+		title="Game Locations"
+		subtitle={subtitleText}
+		{tabs}
+		{activeTab}
+	>
+		{#snippet headerActions()}
+			<Button variant="primary" onclick={openCreate}>+ Location</Button>
+		{/snippet}
+		{#snippet children()}
+			{#if error}
+				<div class="banner banner--error">{error}</div>
+			{/if}
 
 		<FilterBar
 			bind:searchValue={searchQuery}
@@ -294,43 +297,30 @@
 			}}
 		/>
 
-		{#if loading}
-			<div class="placeholder">
-				<p>Loading…</p>
-			</div>
-		{:else}
-			<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
-				{#snippet item({ item })}
-					{@const previewUrl = publicAssetUrl(item.image_with_icons_path ?? item.background_image_path, {
-						updatedAt: item.updated_at ?? undefined
-					})}
-					{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
-					<div class="location-card">
-						{#if previewUrl}
-							<div class="location-card__preview">
-								<img src={previewUrl} alt={`Preview for ${item.name}`} loading="lazy" />
-								{#if item.image_with_icons_path}
-									<span class="location-card__badge">With Icons</span>
-								{:else}
-									<span class="location-card__badge">Background</span>
-								{/if}
-							</div>
-						{/if}
-						<header class="location-card__header">
-							<div class="location-card__title">
-								<h3>{item.name}</h3>
-								<p class="location-card__subtitle">
-									{#if item.origin_id}
-										Origin: {originNameById.get(item.origin_id) ?? 'Unknown'}
-									{:else}
-										Origin: None
-									{/if}
-								</p>
-							</div>
-							<div class="location-card__actions">
-								<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
-								<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
-							</div>
+			{#if loading}
+				<div class="placeholder">
+					<p>Loading…</p>
+				</div>
+				{:else}
+					<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
+							{#snippet item({ item })}
+								{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
+								<div class="location-card">
+									<header class="location-card__header">
+										<div class="location-card__title">
+											<h3>{item.name}</h3>
+											<p class="location-card__subtitle">
+												{#if item.origin_id}
+													Origin: {originNameById.get(item.origin_id) ?? 'Unknown'}
+												{:else}
+													Origin: None
+												{/if}
+											</p>
+								</div>
+								<div class="location-card__actions">
+									<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
+									<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
+								</div>
 						</header>
 
 						<div class="location-card__rewards">
@@ -347,60 +337,120 @@
 											{row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain Reward'}
 										</span>
 
-										{#if row.type === 'trade'}
-											<div class="reward-row__trade">
-												<div class="reward-row__icons">
-													{#each row.cost_icon_ids as iconId, iconIdx (iconIdx)}
-														{@const url = getIconPoolUrl(iconId)}
-														<div class="reward-row__icon">
-															{#if url}
-																<img src={url} alt="Cost icon" />
-															{:else}
-																<span class="reward-row__icon-placeholder">?</span>
-															{/if}
-														</div>
-													{/each}
-												</div>
-												<span class="reward-row__arrow">→</span>
-												<div class="reward-row__icons">
-													{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
-														{@const url = getIconPoolUrl(iconId)}
-														<div class="reward-row__icon">
-															{#if url}
-																<img src={url} alt="Gain icon" />
-															{:else}
-																<span class="reward-row__icon-placeholder">?</span>
-															{/if}
-														</div>
-													{/each}
-												</div>
-											</div>
-										{:else if row.type === 'gain'}
-											<div class="reward-row__icons">
-												{#each row.gain_icon_ids as iconId, iconIdx (iconIdx)}
-													{@const url = getIconPoolUrl(iconId)}
-													<div class="reward-row__icon">
-														{#if url}
-															<img src={url} alt="Reward icon" />
-														{:else}
-															<span class="reward-row__icon-placeholder">?</span>
-														{/if}
+											{#if row.type === 'trade'}
+												<div class="reward-row__trade">
+													<div class="reward-row__icons">
+														{#each row.cost_icon_ids as token, iconIdx (iconIdx)}
+															<div class="reward-row__icon">
+																{#if typeof token === 'string'}
+																	{@const url = getIconPoolUrl(token)}
+																	{#if url}
+																		<img src={url} alt="Cost icon" />
+																	{:else}
+																		<span class="reward-row__icon-placeholder">?</span>
+																	{/if}
+																{:else if isRewardOrIconToken(token)}
+																	{#if token.icon_ids.length === 0}
+																		<span class="reward-row__icon-placeholder">OR</span>
+																	{:else}
+																		<div class="reward-row__or-group">
+																			{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
+																				{@const url = getIconPoolUrl(iconId)}
+																				{#if url}
+																					<img src={url} alt="OR icon" />
+																				{:else}
+																					<span class="reward-row__icon-placeholder">?</span>
+																				{/if}
+																				{#if j < Math.min(2, token.icon_ids.length) - 1}
+																					<span class="reward-row__or-slash">/</span>
+																				{/if}
+																			{/each}
+																		</div>
+																	{/if}
+																{/if}
+															</div>
+														{/each}
 													</div>
-												{/each}
-											</div>
-										{:else}
-											<div class="reward-row__text">{row.text}</div>
-										{/if}
+													<span class="reward-row__arrow">→</span>
+													<div class="reward-row__icons">
+														{#each row.gain_icon_ids as token, iconIdx (iconIdx)}
+															<div class="reward-row__icon">
+																{#if typeof token === 'string'}
+																	{@const url = getIconPoolUrl(token)}
+																	{#if url}
+																		<img src={url} alt="Gain icon" />
+																	{:else}
+																		<span class="reward-row__icon-placeholder">?</span>
+																	{/if}
+																{:else if isRewardOrIconToken(token)}
+																	{#if token.icon_ids.length === 0}
+																		<span class="reward-row__icon-placeholder">OR</span>
+																	{:else}
+																		<div class="reward-row__or-group">
+																			{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
+																				{@const url = getIconPoolUrl(iconId)}
+																				{#if url}
+																					<img src={url} alt="OR icon" />
+																				{:else}
+																					<span class="reward-row__icon-placeholder">?</span>
+																				{/if}
+																				{#if j < Math.min(2, token.icon_ids.length) - 1}
+																					<span class="reward-row__or-slash">/</span>
+																				{/if}
+																			{/each}
+																		</div>
+																	{/if}
+																{/if}
+															</div>
+														{/each}
+													</div>
+												</div>
+											{:else if row.type === 'gain'}
+												<div class="reward-row__icons">
+													{#each row.gain_icon_ids as token, iconIdx (iconIdx)}
+														<div class="reward-row__icon">
+															{#if typeof token === 'string'}
+																{@const url = getIconPoolUrl(token)}
+																{#if url}
+																	<img src={url} alt="Reward icon" />
+																{:else}
+																	<span class="reward-row__icon-placeholder">?</span>
+																{/if}
+															{:else if isRewardOrIconToken(token)}
+																{#if token.icon_ids.length === 0}
+																	<span class="reward-row__icon-placeholder">OR</span>
+																{:else}
+																	<div class="reward-row__or-group">
+																		{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
+																			{@const url = getIconPoolUrl(iconId)}
+																			{#if url}
+																				<img src={url} alt="OR icon" />
+																			{:else}
+																				<span class="reward-row__icon-placeholder">?</span>
+																			{/if}
+																			{#if j < Math.min(2, token.icon_ids.length) - 1}
+																				<span class="reward-row__or-slash">/</span>
+																			{/if}
+																		{/each}
+																	</div>
+																{/if}
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{:else}
+												<div class="reward-row__text">{row.text}</div>
+											{/if}
 									</div>
 								{/each}
 							{/if}
 						</div>
 					</div>
-				{/snippet}
-			</DataGrid>
-		{/if}
-	{/snippet}
-</PageLayout>
+					{/snippet}
+				</DataGrid>
+			{/if}
+		{/snippet}
+	</PageLayout>
 
 <style>
 	.banner {
@@ -424,48 +474,16 @@
 		color: #94a3b8;
 	}
 
-	.location-card {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		padding: 1rem;
-		border-radius: 12px;
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		background: rgba(15, 23, 42, 0.5);
-		box-shadow: 0 10px 20px rgba(2, 6, 23, 0.25);
-	}
-
-	.location-card__preview {
-		position: relative;
-		border-radius: 10px;
-		overflow: hidden;
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		background: rgba(2, 6, 23, 0.35);
-		aspect-ratio: 16 / 9;
-	}
-
-	.location-card__preview img {
-		width: 100%;
-		height: 100%;
-		object-fit: contain;
-		object-position: center;
-		display: block;
-	}
-
-	.location-card__badge {
-		position: absolute;
-		top: 0.5rem;
-		left: 0.5rem;
-		padding: 0.25rem 0.5rem;
-		border-radius: 999px;
-		font-size: 0.7rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		background: rgba(2, 6, 23, 0.5);
-		color: #e2e8f0;
-	}
+		.location-card {
+			display: flex;
+			flex-direction: column;
+			gap: 0.75rem;
+			padding: 1rem;
+			border-radius: 12px;
+			border: 1px solid rgba(148, 163, 184, 0.15);
+			background: rgba(15, 23, 42, 0.5);
+			box-shadow: 0 10px 20px rgba(2, 6, 23, 0.25);
+		}
 
 	.location-card__header {
 		display: flex;
@@ -516,8 +534,8 @@
 		gap: 0.75rem;
 		padding: 0.5rem 0.65rem;
 		border-radius: 10px;
-		background: rgba(2, 6, 23, 0.35);
-		border: 1px solid rgba(148, 163, 184, 0.12);
+		background: rgba(255, 255, 255, 0.22);
+		border: 1px solid rgba(255, 255, 255, 0.3);
 	}
 
 	.reward-row--trade {
@@ -577,10 +595,34 @@
 		place-items: center;
 	}
 
-	.reward-row__icon img {
+	.reward-row__icon > img {
 		width: 100%;
 		height: 100%;
 		object-fit: contain;
+	}
+
+	.reward-row__or-group {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		gap: 0;
+		padding: 0.08rem;
+	}
+
+	.reward-row__or-group img {
+		width: 9px;
+		height: 9px;
+		object-fit: contain;
+	}
+
+	.reward-row__or-slash {
+		color: rgba(226, 232, 240, 0.9);
+		font-weight: 800;
+		font-size: 0.85rem;
+		line-height: 1;
+		margin: 0 0.07rem;
 	}
 
 	.reward-row__icon-placeholder {
@@ -588,112 +630,10 @@
 		color: #64748b;
 	}
 
-	.image-uploads {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1rem;
-		padding: 0.75rem;
-		border-radius: 12px;
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		background: rgba(15, 23, 42, 0.35);
-	}
-
-	.image-upload-section {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.upload-label {
-		font-size: 0.75rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: rgba(148, 163, 184, 0.85);
-	}
-
-	.generated-preview {
-		border-radius: 10px;
-		overflow: hidden;
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		background: rgba(2, 6, 23, 0.35);
-	}
-
-	.generated-preview img {
-		display: block;
-		width: 100%;
-		height: auto;
-	}
-
-	.generated-rows {
-		display: grid;
-		gap: 0.6rem;
-		max-height: 320px;
-		overflow: auto;
-		padding-right: 0.2rem;
-	}
-
-	.generated-row {
-		display: grid;
-		gap: 0.35rem;
-		padding: 0.5rem;
-		border-radius: 10px;
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		background: rgba(2, 6, 23, 0.35);
-	}
-
-	.generated-row__label {
-		font-size: 0.7rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: rgba(148, 163, 184, 0.9);
-	}
-
-	.generated-row img {
-		display: block;
-		width: 100%;
-		height: auto;
-		border-radius: 8px;
-	}
-
-	.generated-row__missing {
-		display: grid;
-		place-items: center;
-		min-height: 120px;
-		border-radius: 8px;
-		border: 1px dashed rgba(148, 163, 184, 0.25);
-		color: #94a3b8;
-		background: rgba(2, 6, 23, 0.2);
-		font-size: 0.8rem;
-	}
-
-	.generated-placeholder {
-		display: grid;
-		place-items: center;
-		min-height: 200px;
-		border-radius: 10px;
-		border: 1px dashed rgba(148, 163, 184, 0.25);
-		color: #94a3b8;
-		background: rgba(2, 6, 23, 0.2);
-	}
-
 	.image-note {
 		margin: 0.25rem 0 0;
 		font-size: 0.8rem;
 		color: rgba(148, 163, 184, 0.75);
-	}
-
-	@media (max-width: 1200px) {
-		.image-uploads {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-	}
-
-	@media (max-width: 860px) {
-		.image-uploads {
-			grid-template-columns: 1fr;
-		}
 	}
 	</style>
 
@@ -709,96 +649,34 @@
 			{/snippet}
 		</FormField>
 
-		<FormField label="Origin (optional)">
-			{#snippet children()}
-				<Select
-					value={formData.origin_id ?? ''}
-					options={[
-						{ value: '', label: 'None' },
-						...origins.map((o) => ({ value: o.id, label: o.name }))
-					]}
-					onchange={(e) => {
-						const v = (e.target as HTMLSelectElement).value;
-						formData.origin_id = v === '' ? null : v;
-					}}
-				/>
-			{/snippet}
+				<FormField label="Origin (optional)">
+					{#snippet children()}
+						<Select
+							value={formData.origin_id ?? ''}
+							options={[
+								{ value: '', label: 'None' },
+								...origins.map((o) => ({ value: o.id, label: o.name }))
+							]}
+							onchange={(e) => {
+								const v = (e.target as HTMLSelectElement).value;
+								formData.origin_id = v === '' ? null : v;
+							}}
+						/>
+					{/snippet}
+					</FormField>
+
+			<LocationRewardRowsEditor bind:rewardRows={formData.reward_rows} />
+			<FormField label="Background Art (optional)" helperText="Used as the default background for this location (and stage location cards).">
+				<ImageUploader
+					bind:value={formData.background_image_path}
+					folder="game_locations"
+					cropTransparent={false}
+					onerror={(err) => alert(`Upload failed: ${err}`)}
+			/>
 		</FormField>
-
-		{#if editingLocation}
-			<div class="image-uploads">
-				<div class="image-upload-section">
-					<div class="upload-label">Background Image</div>
-					<ImageUploader
-						bind:value={formData.background_image_path}
-						folder={`game_locations/${editingLocation.id}/background`}
-						maxSizeMB={50}
-						cropTransparent={false}
-						onupload={(path) => {
-							formData.background_image_path = path;
-						}}
-						onerror={(err) => alert(`Upload failed: ${err}`)}
-					/>
-				</div>
-				<div class="image-upload-section">
-					<div class="upload-label">Generated Rows</div>
-					{#if locationRowsLoading}
-						<div class="generated-placeholder">
-							<span>Loading rows…</span>
-						</div>
-					{:else if locationRows.length === 0}
-						<div class="generated-placeholder">
-							<span>Not yet generated</span>
-							<p class="image-note">Render rows in Icon Placer.</p>
-						</div>
-					{:else}
-						<div class="generated-rows">
-							{#each locationRows as row (row.id)}
-								{@const rowUrl = row.row_image_path
-									? publicAssetUrl(row.row_image_path, { updatedAt: row.updated_at ?? undefined })
-									: null}
-								<div class="generated-row">
-									<div class="generated-row__label">{row.type} row {row.row_index + 1}</div>
-									{#if rowUrl}
-										<img src={rowUrl} alt={`Generated ${row.type} row ${row.row_index + 1}`} loading="lazy" />
-									{:else}
-										<div class="generated-row__missing">Not yet generated</div>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					{/if}
-					{#if locationRowsError}
-						<p class="image-note">Failed to load rows: {locationRowsError}</p>
-					{:else if locationRows.length > 0}
-						<p class="image-note">Generated by Icon Placer</p>
-					{/if}
-				</div>
-				<div class="image-upload-section">
-					<div class="upload-label">Generated Location</div>
-					{#if editingLocation.image_with_icons_path}
-						{@const generatedUrl = publicAssetUrl(editingLocation.image_with_icons_path, {
-							updatedAt: editingLocation.updated_at ?? undefined
-						})}
-						{#if generatedUrl}
-							<div class="generated-preview">
-								<img src={generatedUrl} alt="Generated location" />
-							</div>
-						{/if}
-						<p class="image-note">Generated by Icon Placer</p>
-					{:else}
-						<div class="generated-placeholder">
-							<span>Not yet generated</span>
-							<p class="image-note">Use Icon Placer to generate</p>
-						</div>
-					{/if}
-				</div>
-			</div>
-		{:else}
-			<p class="image-note">Save the location first to upload a background image.</p>
-		{/if}
-
-		<LocationRewardRowsEditor bind:rewardRows={formData.reward_rows} />
+		<p class="image-note">
+			Spirit World placement now uses reward icons directly (no location backgrounds or generated location images).
+		</p>
 	{/snippet}
 
 	{#snippet footer()}
@@ -816,10 +694,3 @@
 	onconfirm={confirmDelete}
 	oncancel={() => (deleteTarget = null)}
 />
-
-	<LocationPlacerModal
-		bind:isOpen={iconPlacerOpen}
-		locations={locations}
-		onClose={() => (iconPlacerOpen = false)}
-		onUpdated={loadLocations}
-	/>

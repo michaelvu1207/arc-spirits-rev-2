@@ -87,7 +87,7 @@
 				<div class="scenario-actions">
 					<Button variant="secondary" onclick={onAddExistingCard}>+ Add Existing</Button>
 					<button class="btn btn--monster" onclick={onNewMonster}>+ New Monster</button>
-					<button class="btn btn--event" onclick={onNewEvent}>+ New Event</button>
+					<button class="btn btn--event" onclick={onNewEvent}>+ New Stage Card</button>
 				</div>
 			</div>
 
@@ -101,7 +101,7 @@
 							<div class="card-wrapper">
 								<div class="card-controls">
 									<span class="card-order">#{card.order_num}</span>
-									<span class="card-type-badge" class:card-type-badge--event={card.card_type === 'event'}>
+									<span class="card-type-badge" class:card-type-badge--event={card.card_type === 'stage_card'}>
 										{card.card_type}
 									</span>
 									<div class="card-reorder">
@@ -112,11 +112,11 @@
 												title="Edit monster"
 											>✏️</button>
 										{:else}
-											<button
-												class="btn-reorder btn-reorder--edit"
-												onclick={() => onEditEvent(card.card_data as Event)}
-												title="Edit event"
-											>✏️</button>
+												<button
+													class="btn-reorder btn-reorder--edit"
+													onclick={() => onEditEvent(card.card_data as Event)}
+													title="Edit stage card"
+												>✏️</button>
 										{/if}
 										<button
 											class="btn-reorder"
@@ -140,23 +140,22 @@
 								{#if card.card_type === 'monster'}
 									{@const monster = card.card_data as Monster}
 									<MonsterCardPreview {monster} orderNum={card.order_num} />
-								{:else}
-									{@const event = card.card_data as Event}
-									<div class="event-card-preview">
-										<div class="event-content">
-											<h4 class="event-name">{event.name}</h4>
-											<p class="event-title">{event.title}</p>
-											{#if event.description}
-												<p class="event-description">{event.description}</p>
-											{/if}
-										</div>
-										{#if event.art_url}
-											<div class="event-art">
-												<img src={event.art_url} alt={event.name} />
+									{:else}
+										{@const event = card.card_data as Event}
+										<div class="event-card-preview">
+											<div class="event-content">
+												<h4 class="event-name">{event.title}</h4>
+												{#if event.description}
+													<p class="event-description">{event.description}</p>
+												{/if}
 											</div>
-										{/if}
-										<div class="event-footer">Arc Spirits // Event</div>
-									</div>
+											{#if event.art_url}
+												<div class="event-art">
+													<img src={event.art_url} alt={event.title} />
+												</div>
+											{/if}
+											<div class="event-footer">Arc Spirits // Stage Card</div>
+										</div>
 								{/if}
 							</div>
 						{/each}

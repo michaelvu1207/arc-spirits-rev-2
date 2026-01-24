@@ -6,6 +6,10 @@
 		value?: string | null;
 		bucket?: string;
 		folder?: string;
+		/** When provided, uploaded files use this stable filename (without extension). */
+		filename?: string;
+		/** When true, overwrite existing file at the same path (default: false). */
+		upsert?: boolean;
 		accept?: string;
 		maxSizeMB?: number;
 		aspectRatio?: string;
@@ -21,6 +25,8 @@
 		value = $bindable<string | null>(null),
 		bucket = 'game_assets',
 		folder = 'uploads',
+		filename,
+		upsert = false,
 		accept = 'image/*',
 		maxSizeMB = 5,
 		aspectRatio,
@@ -59,17 +65,15 @@
 
 		uploading = true;
 		try {
-			// Remove old file if exists
-			if (value) {
-				await deleteStorageFile(bucket, value);
-			}
+			const previousPath = value;
 
-			// Process and upload using unified function (crops transparent areas by default)
+			// Process and upload using unified function (crops transparent areas by default).
 			const { data, error: uploadError } = await processAndUploadImage(file, {
 				bucket,
 				folder,
+				filename,
 				cropTransparent,
-				upsert: false
+				upsert
 			});
 
 			if (uploadError) {
@@ -78,6 +82,14 @@
 
 			if (data?.path) {
 				value = data.path;
+				if (previousPath && previousPath !== data.path) {
+					// Best-effort cleanup; don't block the new upload if removal fails.
+					try {
+						await deleteStorageFile(bucket, previousPath);
+					} catch (err) {
+						console.warn('Failed to delete previous upload:', err);
+					}
+				}
 				onupload?.(data.path);
 			}
 		} catch (err) {

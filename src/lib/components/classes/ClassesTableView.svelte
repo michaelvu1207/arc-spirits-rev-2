@@ -2,28 +2,41 @@
 	import type { ClassRow } from '$lib/types/gameData';
 	import type { Effect, EffectBreakpoint } from '$lib/types/effects';
 	import { parseEffectSchema, formatEffectSummary } from '$lib/features/classes/classes';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue } from '$lib/i18n/translations';
 
 	interface Props {
 		classes: ClassRow[];
 		diceNameById: Map<string, string>;
 		onEdit: (cls: ClassRow) => void;
+		language?: TranslationLanguage;
 	}
 
-	let { classes, diceNameById, onEdit }: Props = $props();
+	let { classes, diceNameById, onEdit, language = BASE_LANGUAGE }: Props = $props();
+
+	function getClassName(entry: ClassRow): string {
+		if (language === BASE_LANGUAGE) return entry.name;
+		return getTranslationValue(entry.name_translations, String(language)) ?? entry.name;
+	}
 
 	const resolveDiceLabel = (id: string | null | undefined, fallback?: string) => {
 		if (id && diceNameById.has(id)) return diceNameById.get(id) ?? fallback ?? 'Custom Dice';
 		return fallback ?? (id ?? 'Custom Dice');
 	};
 
-	const summarizeEffect = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel);
+	const summarizeEffect = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel, language);
+
+	function getBreakpointCount(bp: EffectBreakpoint): string | number {
+		if (language === BASE_LANGUAGE) return bp.count;
+		if (typeof bp.count !== 'string') return bp.count;
+		return getTranslationValue((bp as any).count_translations, String(language)) ?? bp.count;
+	}
 
 	function getEffectSummary(schema: EffectBreakpoint[]): string {
 		if (!schema.length) return 'No effects';
 		return schema
 			.map((bp) => {
 				const effects = bp.effects.map(summarizeEffect).join(', ');
-				return `(${bp.count}) ${effects}`;
+				return `(${getBreakpointCount(bp)}) ${effects}`;
 			})
 			.join(' | ');
 	}
@@ -44,6 +57,11 @@
 		if (!sortColumn) return classes;
 		const col = sortColumn;
 		return [...classes].sort((a, b) => {
+			if (col === 'name') {
+				const aName = getClassName(a);
+				const bName = getClassName(b);
+				return sortAsc ? aName.localeCompare(bName) : bName.localeCompare(aName);
+			}
 			const aVal = a[col];
 			const bVal = b[col];
 			if (aVal == null && bVal == null) return 0;
@@ -66,7 +84,7 @@
 		<thead>
 			<tr>
 				<th onclick={() => toggleSort('name')} class:sorted={sortColumn === 'name'}>
-					Name {sortColumn === 'name' ? (sortAsc ? '▲' : '▼') : ''}
+					Name {language === BASE_LANGUAGE ? '' : `(${language})`} {sortColumn === 'name' ? (sortAsc ? '▲' : '▼') : ''}
 				</th>
 				<th onclick={() => toggleSort('position')} class:sorted={sortColumn === 'position'}>
 					Position {sortColumn === 'position' ? (sortAsc ? '▲' : '▼') : ''}
@@ -81,7 +99,7 @@
 			{#each sortedClasses() as cls (cls.id)}
 				{@const effectSchema = parseEffectSchema(cls.effect_schema)}
 				<tr>
-					<td class="name-cell">{cls.name}</td>
+					<td class="name-cell">{getClassName(cls)}</td>
 					<td class="position-cell">{cls.position}</td>
 					<td class="icon-cell">{cls.icon_emoji ?? '🛡️'}</td>
 					<td class="tags-cell">

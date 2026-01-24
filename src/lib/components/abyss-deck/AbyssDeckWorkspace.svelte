@@ -1,8 +1,16 @@
 <script lang="ts">
-	import type { SpecialEffectRow, TradeRow, GainRow } from '$lib/types/gameData';
+	import type { RewardRow, SpecialEffectRow, TradeRow, GainRow } from '$lib/types/gameData';
+	import { DEFAULT_EVENT_TYPE, EVENT_TYPE_OPTIONS, type EventType } from '$lib/types/eventTypes';
+	import {
+		DEFAULT_STAGE_EVENT_RENDER_STYLE,
+		STAGE_EVENT_RENDER_STYLE_OPTIONS,
+		getStageCardRenderStyle,
+		type StageEventRenderStyle
+	} from '$lib/types/stageCardStyles';
 	import { getErrorMessage } from '$lib/utils';
 	import { getIconPoolUrl } from '$lib/utils/iconPool';
 		import { MonsterCardPreview } from '$lib/components/monsters';
+	import { RewardRowsEditor } from '$lib/components/monsters';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import LazyMount from '$lib/components/shared/LazyMount.svelte';
 	import Modal from '../layout/Modal.svelte';
@@ -23,12 +31,13 @@
 		description: string | null;
 		damage: number;
 		barrier: number;
+		card_image_path: string | null;
 		/** Unified reward-track slots (slot0 participation, slotN killed). */
 		reward_track: string[][];
 		/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
 		show_tutorial: boolean;
-		state: 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
-		monster_classification: 'monster' | 'abyss_guardian' | 'boss';
+		stage: 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
+		monster_classification: 'monster' | 'abyss_guardian' | 'boss' | 'final_boss';
 		icon: string | null;
 		image_path: string | null;
 		invade_location_id: string | null;
@@ -41,10 +50,13 @@
 	};
 
 	export type EventFormData = {
-		name: string;
+		event_type: EventType;
+		render_style: StageEventRenderStyle;
 		title: string;
 		description: string | null;
+		stage_completion: string | null;
 		image_path: string | null;
+		reward_rows: RewardRow[];
 		order_num: number;
 	};
 
@@ -55,10 +67,15 @@
 		specialEffects: SpecialEffectRow[];
 		monsterSpecialEffects: Record<string, string[]>;
 		language?: 'base' | string;
+		/** When false, hides all deck reordering UI (drag, move, save order). */
+		enableOrdering?: boolean;
+		/** When false, treats all monster quantities as 1 and hides quantity controls. */
+		enableQuantities?: boolean;
 		onMonsterSave: (formData: MonsterFormData, id: string | null) => Promise<string>;
 		onEventSave?: (formData: EventFormData, id: string | null) => Promise<string>;
 		onMonsterDelete: (id: string) => Promise<void>;
 		onEventDelete?: (id: string) => Promise<void>;
+		onEventLocationEdit?: (id: string) => void;
 		onSaveDeckOrder: (order: DeckOrderItem[]) => Promise<void>;
 		onSelectMonster?: (monster: Monster | null) => void;
 		monsterLabel?: string;
@@ -76,11 +93,17 @@
 		imageUploadAspectRatio?: string;
 		imageUploadCropTransparent?: boolean;
 		imageUploadMaxSizeMB?: number;
+		showCardImageUpload?: boolean;
+		cardImageUploadFolder?: string;
+		cardImageUploadAspectRatio?: string;
+		cardImageUploadCropTransparent?: boolean;
+		cardImageUploadMaxSizeMB?: number;
 		showGainRows?: boolean;
 		showStats?: boolean;
 		showInvadeLocation?: boolean;
 		showSpecialEffects?: boolean;
 		showRewardRows?: boolean;
+		showEventRewardRows?: boolean;
 		showTradeRow?: boolean;
 	}
 
@@ -91,6 +114,8 @@
 		specialEffects,
 		monsterSpecialEffects,
 		language = 'base',
+		enableOrdering = true,
+		enableQuantities = true,
 		onMonsterSave,
 		onEventSave = async () => {
 			throw new Error('Event save handler not provided.');
@@ -99,6 +124,7 @@
 		onEventDelete = async () => {
 			throw new Error('Event delete handler not provided.');
 		},
+		onEventLocationEdit,
 		onSaveDeckOrder,
 		onSelectMonster,
 		monsterLabel = 'Monster',
@@ -116,11 +142,17 @@
 		imageUploadAspectRatio,
 		imageUploadCropTransparent = true,
 		imageUploadMaxSizeMB = 12,
+		showCardImageUpload = false,
+		cardImageUploadFolder = 'card_images/monsters/en',
+		cardImageUploadAspectRatio = '600 / 437',
+		cardImageUploadCropTransparent = false,
+		cardImageUploadMaxSizeMB = 12,
 		showGainRows = false,
 		showStats = true,
 		showInvadeLocation = true,
 		showSpecialEffects = true,
 		showRewardRows = true,
+		showEventRewardRows = false,
 		showTradeRow = false
 	}: Props = $props();
 
@@ -135,7 +167,7 @@
 	const INLINE_SPECIAL_EFFECT_MAX = 4;
 	let inlineEffectEdits = $state<Record<string, string[]>>({});
 	let inlineEffectOpenId = $state<string | null>(null);
-	let inlineStateEdits = $state<Record<string, MonsterState>>({});
+	let inlineStageEdits = $state<Record<string, MonsterStage>>({});
 	const inlineAutosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 		let rewardSlotPickerOpen = $state(false);
@@ -244,6 +276,7 @@
 
 	const monsterById = $derived.by(() => new Map(monsters.map((m) => [m.id, m])));
 	const eventById = $derived.by(() => new Map(events.map((e) => [e.id, e])));
+	const locationNameById = $derived.by(() => new Map(locations.map((l) => [l.id, l.name])));
 
 	// UI state
 	let typeFilter = $state<'all' | 'monster' | 'event'>('all');
@@ -360,9 +393,10 @@
 				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
 				damage: monster.damage ?? 0,
 				barrier,
+				card_image_path: (monster as { card_image_path?: string | null }).card_image_path ?? null,
 				reward_track: rewardTrack,
 				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
-				state: monster.state,
+				stage: monster.stage,
 				monster_classification: monster.monster_classification ?? 'monster',
 				icon: monster.icon,
 				image_path: monster.image_path,
@@ -375,8 +409,8 @@
 				(monster as { trade_right_icon_ids?: string[] }).trade_right_icon_ids
 			),
 			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
-			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-				quantity: monster.quantity ?? 1
+				special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
+				quantity: enableQuantities ? (monster.quantity ?? 1) : 1
 			};
 		}
 
@@ -456,27 +490,27 @@
 		};
 	}
 
-	function getInlineState(monster: Monster): MonsterState {
-		const edit = inlineStateEdits[monster.id];
+	function getInlineStage(monster: Monster): MonsterStage {
+		const edit = inlineStageEdits[monster.id];
 		if (edit) return edit;
-		switch (monster.state) {
-			case 'tainted':
-			case 'corrupt':
-			case 'fallen':
-			case 'arcane':
+		switch (monster.stage) {
+			case 'stage_1':
+			case 'stage_2':
+			case 'stage_3':
+			case 'final_stage':
 			case 'inactive':
-				return monster.state;
+				return monster.stage;
 			default:
-				return 'tainted';
+				return 'stage_1';
 		}
 	}
 
-	function coerceMonsterState(value: string, fallback: MonsterState): MonsterState {
+	function coerceMonsterStage(value: string, fallback: MonsterStage): MonsterStage {
 		switch (value) {
-			case 'tainted':
-			case 'corrupt':
-			case 'fallen':
-			case 'arcane':
+			case 'stage_1':
+			case 'stage_2':
+			case 'stage_3':
+			case 'final_stage':
 			case 'inactive':
 				return value;
 			default:
@@ -565,16 +599,16 @@
 		}
 	}
 
-	function setInlineState(monster: Monster, rawValue: string) {
-		const base = coerceMonsterState(monster.state, 'tainted');
-		const next = coerceMonsterState(rawValue, base);
-		const edits = { ...inlineStateEdits };
+	function setInlineStage(monster: Monster, rawValue: string) {
+		const base = coerceMonsterStage(monster.stage, 'stage_1');
+		const next = coerceMonsterStage(rawValue, base);
+		const edits = { ...inlineStageEdits };
 		if (next === base) {
 			delete edits[monster.id];
 		} else {
 			edits[monster.id] = next;
 		}
-		inlineStateEdits = edits;
+		inlineStageEdits = edits;
 
 		if (inlineStatsError[monster.id]) {
 			inlineStatsError = { ...inlineStatsError, [monster.id]: null };
@@ -588,8 +622,8 @@
 
 		const statsEdit = inlineStatsEdits[monsterId];
 		const effectsEdit = inlineEffectEdits[monsterId];
-		const stateEdit = inlineStateEdits[monsterId];
-		if (!statsEdit && !effectsEdit && !stateEdit) return;
+		const stageEdit = inlineStageEdits[monsterId];
+		if (!statsEdit && !effectsEdit && !stageEdit) return;
 
 		inlineStatsSaving = { ...inlineStatsSaving, [monsterId]: true };
 		inlineStatsError = { ...inlineStatsError, [monsterId]: null };
@@ -601,7 +635,7 @@
 					damage: statsEdit?.damage ?? formData.damage,
 					barrier: nextBarrier,
 					reward_track: normalizeRewardTrack(nextBarrier, formData.reward_track),
-					state: stateEdit ?? formData.state,
+					stage: stageEdit ?? formData.stage,
 					special_effect_ids: effectsEdit ?? formData.special_effect_ids
 				};
 				await onMonsterSave(merged, monsterId);
@@ -614,9 +648,9 @@
 			delete nextEffects[monsterId];
 			inlineEffectEdits = nextEffects;
 
-			const nextState = { ...inlineStateEdits };
-			delete nextState[monsterId];
-			inlineStateEdits = nextState;
+			const nextStage = { ...inlineStageEdits };
+			delete nextStage[monsterId];
+			inlineStageEdits = nextStage;
 		} catch (err) {
 			inlineStatsError = { ...inlineStatsError, [monsterId]: getErrorMessage(err) };
 		} finally {
@@ -625,15 +659,16 @@
 	}
 
 	let monsterFormData = $state<MonsterFormData>({
-		name: '',
-		subtext: null,
-		description: null,
-		damage: 0,
-		barrier: 0,
-		reward_track: [[], []],
-		show_tutorial: true,
-		state: 'tainted',
-		monster_classification: 'monster',
+			name: '',
+			subtext: null,
+			description: null,
+			damage: 0,
+			barrier: 0,
+			card_image_path: null,
+			reward_track: [[], []],
+			show_tutorial: true,
+			stage: 'stage_1',
+			monster_classification: 'monster',
 		icon: null,
 		image_path: null,
 		invade_location_id: null,
@@ -646,10 +681,13 @@
 	});
 
 	let eventFormData = $state<EventFormData>({
-		name: '',
+		event_type: DEFAULT_EVENT_TYPE,
+		render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE,
 		title: '',
 		description: null,
+		stage_completion: null,
 		image_path: null,
+		reward_rows: [{ type: 'all_players', icon_ids: [] }],
 		order_num: 0
 	});
 
@@ -660,23 +698,24 @@
 			return monsterById.get(id)?.name ?? `Unknown ${monsterLabel}`;
 		}
 		const event = eventById.get(id);
-		return event?.title ?? event?.name ?? 'Unknown Event';
+		return event?.title ?? 'Unknown Stage Card';
 	}
 
 		function openNewMonster() {
 			if (!showMonsters) return;
 			editorType = 'monster';
 			editingId = null;
-			monsterFormData = {
-				name: '',
-				subtext: null,
-				description: null,
-				damage: 0,
-				barrier: 0,
-				reward_track: [[], []],
-				show_tutorial: true,
-				state: 'tainted',
-				monster_classification: 'monster',
+				monsterFormData = {
+					name: '',
+					subtext: null,
+					description: null,
+					damage: 0,
+					barrier: 0,
+					card_image_path: null,
+					reward_track: [[], []],
+					show_tutorial: true,
+					stage: 'stage_1',
+					monster_classification: 'monster',
 				icon: null,
 				image_path: null,
 			invade_location_id: null,
@@ -691,23 +730,26 @@
 		editorOpen = true;
 	}
 
-	function openNewEvent() {
-		if (!showEvents) return;
-		editorType = 'event';
-		editingId = null;
-		eventFormData = {
-			name: '',
-			title: '',
-			description: null,
-			image_path: null,
-			order_num: deckOrder.length
-		};
-		editorOpen = true;
-	}
+		function openNewEvent() {
+			if (!showEvents) return;
+			editorType = 'event';
+			editingId = null;
+			eventFormData = {
+				event_type: DEFAULT_EVENT_TYPE,
+				render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE,
+				title: '',
+				description: null,
+				stage_completion: null,
+				image_path: null,
+				reward_rows: [{ type: 'all_players', icon_ids: [] }],
+				order_num: deckOrder.length
+			};
+			editorOpen = true;
+		}
 
-		function openEdit(type: 'monster' | 'event', id: string) {
-		if (type === 'monster' && !showMonsters) return;
-		if (type === 'event' && !showEvents) return;
+			function openEdit(type: 'monster' | 'event', id: string) {
+			if (type === 'monster' && !showMonsters) return;
+			if (type === 'event' && !showEvents) return;
 
 		if (inlineEffectOpenId) {
 			const openId = inlineEffectOpenId;
@@ -718,7 +760,7 @@
 		if (type === 'monster') {
 			const monster = monsterById.get(id);
 			if (!monster) return;
-			if (inlineStatsEdits[id] || inlineEffectEdits[id] || inlineStateEdits[id]) {
+			if (inlineStatsEdits[id] || inlineEffectEdits[id] || inlineStageEdits[id]) {
 				scheduleInlineAutosave(id, 0);
 			}
 			editorType = type;
@@ -726,34 +768,49 @@
 				const baseForm = monsterToFormData(monster);
 				const statsEdit = inlineStatsEdits[id];
 				const effectsEdit = inlineEffectEdits[id];
-				const stateEdit = inlineStateEdits[id];
+				const stageEdit = inlineStageEdits[id];
 				const nextBarrier = statsEdit?.barrier ?? baseForm.barrier;
 				monsterFormData = {
 					...baseForm,
 					damage: statsEdit?.damage ?? baseForm.damage,
 					barrier: nextBarrier,
 					reward_track: normalizeRewardTrack(nextBarrier, baseForm.reward_track),
-					state: stateEdit ?? baseForm.state,
+					stage: stageEdit ?? baseForm.stage,
 					special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
 				};
 				onSelectMonster?.(monster);
 				editorOpen = true;
-		} else {
-			const event = eventById.get(id);
-			if (!event) return;
-			editorType = type;
-			editingId = id;
-			eventFormData = {
-				name: event.name,
-				title: event.title,
-				description: event.description,
-				image_path: event.image_path,
-				order_num: event.order_num
-			};
-			onSelectMonster?.(null);
-			editorOpen = true;
+			} else {
+				const event = eventById.get(id);
+				if (!event) return;
+				if (event.card_kind === 'stage_location') {
+					onEventLocationEdit?.(id);
+					if (!onEventLocationEdit) {
+						alert('Stage location cards are edited in the Game Locations page.');
+					}
+					return;
+				}
+				if (event.card_kind === 'traveler') {
+					alert('Traveler cards are edited in the Travelers page.');
+					return;
+				}
+					editorType = type;
+					editingId = id;
+					eventFormData = {
+						event_type: event.stage ?? DEFAULT_EVENT_TYPE,
+						render_style: getStageCardRenderStyle('event', (event as unknown as { data?: unknown }).data) as StageEventRenderStyle,
+						title: event.title,
+						description: event.description,
+						stage_completion: (event as { stage_completion?: string | null }).stage_completion ?? null,
+						image_path: event.image_path,
+						reward_rows:
+							(event.reward_rows as RewardRow[] | null | undefined) ?? [{ type: 'all_players', icon_ids: [] }],
+						order_num: event.order_num
+					};
+				onSelectMonster?.(null);
+				editorOpen = true;
+			}
 		}
-	}
 
 	function closeEditor() {
 		editorType = null;
@@ -783,9 +840,10 @@
 				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
 				damage: monster.damage,
 				barrier: barrierValue,
+				card_image_path: null,
 				reward_track: rewardTrack,
 				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
-				state: monster.state,
+				stage: monster.stage,
 				monster_classification: monster.monster_classification ?? 'monster',
 				icon: monster.icon,
 				image_path: monster.image_path,
@@ -799,7 +857,7 @@
 			),
 			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
 			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-			quantity: monster.quantity ?? 1
+			quantity: enableQuantities ? (monster.quantity ?? 1) : 1
 		};
 
 		try {
@@ -913,16 +971,16 @@
 		orderChanged = false;
 	}
 
-	function resetMonsterOrderByState() {
+	function resetMonsterOrderByStage() {
 		if (!showMonsters) return;
 		const current = deckOrder.length > 0 ? deckOrder : buildCanonicalOrder(showMonsters ? monsters : [], events, showEvents);
 		if (current.length === 0) return;
 
-		const stateRank = new Map<string, number>([
-			['tainted', 0],
-			['corrupt', 1],
-			['fallen', 2],
-			['arcane', 3],
+		const stageRank = new Map<string, number>([
+			['stage_1', 0],
+			['stage_2', 1],
+			['stage_3', 2],
+			['final_stage', 3],
 			['inactive', 4]
 		]);
 
@@ -941,11 +999,11 @@
 			const monsterA = monsterById.get(a.id);
 			const monsterB = monsterById.get(b.id);
 
-			const stateA = monsterA ? (inlineStateEdits[monsterA.id] ?? normalizeStateKey(monsterA.state)) : null;
-			const stateB = monsterB ? (inlineStateEdits[monsterB.id] ?? normalizeStateKey(monsterB.state)) : null;
+			const stageA = monsterA ? (inlineStageEdits[monsterA.id] ?? normalizeStageKey(monsterA.stage)) : null;
+			const stageB = monsterB ? (inlineStageEdits[monsterB.id] ?? normalizeStageKey(monsterB.stage)) : null;
 
-			const rankA = stateA ? (stateRank.get(stateA) ?? 999) : 999;
-			const rankB = stateB ? (stateRank.get(stateB) ?? 999) : 999;
+			const rankA = stageA ? (stageRank.get(stageA) ?? 999) : 999;
+			const rankB = stageB ? (stageRank.get(stageB) ?? 999) : 999;
 			if (rankA !== rankB) return rankA - rankB;
 
 			const idxA = originalMonsterIndex.get(a.id) ?? 0;
@@ -994,9 +1052,9 @@
 					reward_track: normalizeRewardTrack(barrierValue, monsterFormData.reward_track)
 				};
 				const id = await onMonsterSave(sanitized, editingId);
-			if (!editingId) {
-				deckOrder = [...deckOrder, { type: 'monster', id }];
-			}
+				if (!editingId && !deckOrder.some((k) => k.type === 'monster' && k.id === id)) {
+					deckOrder = [...deckOrder, { type: 'monster', id }];
+				}
 			orderChanged = true;
 			void saveDeckOrder();
 			closeEditor();
@@ -1007,16 +1065,16 @@
 
 	async function saveEvent() {
 		if (!showEvents) return;
-		if (!eventFormData.name.trim() || !eventFormData.title.trim()) {
-			alert('Event name and title are required.');
+		if (!eventFormData.title.trim()) {
+			alert('Stage card title is required.');
 			return;
 		}
 
 		try {
 			const id = await onEventSave(eventFormData, editingId);
-			if (!editingId) {
-				deckOrder = [...deckOrder, { type: 'event', id }];
-			}
+				if (!editingId && !deckOrder.some((k) => k.type === 'event' && k.id === id)) {
+					deckOrder = [...deckOrder, { type: 'event', id }];
+				}
 			orderChanged = true;
 			void saveDeckOrder();
 			closeEditor();
@@ -1031,7 +1089,7 @@
 		let count = 0;
 		for (const item of deckOrder) {
 			if (item.type === 'monster') {
-				count += monsterById.get(item.id)?.quantity ?? 1;
+				count += enableQuantities ? (monsterById.get(item.id)?.quantity ?? 1) : 1;
 			} else {
 				count += 1;
 			}
@@ -1053,7 +1111,7 @@
 			});
 	});
 
-	type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
+	type MonsterStage = 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
 	type DeckSection = {
 		key: string;
 		label: string;
@@ -1061,42 +1119,42 @@
 		groups: { item: DeckOrderItem; orderIndex: number }[];
 	};
 
-	const monsterStateGroupOrder: MonsterState[] = ['tainted', 'corrupt', 'fallen', 'arcane', 'inactive'];
-	const monsterStateGroupOrderSet = new Set<string>(monsterStateGroupOrder);
+	const monsterStageGroupOrder: MonsterStage[] = ['stage_1', 'stage_2', 'stage_3', 'final_stage', 'inactive'];
+	const monsterStageGroupOrderSet = new Set<string>(monsterStageGroupOrder);
 
-	function normalizeStateKey(state: string | null | undefined): string | null {
-		if (typeof state !== 'string') return null;
-		const normalized = state.trim().toLowerCase();
+	function normalizeStageKey(stage: string | null | undefined): string | null {
+		if (typeof stage !== 'string') return null;
+		const normalized = stage.trim().toLowerCase();
 		return normalized ? normalized : null;
 	}
 
-	function getMonsterStateLabel(state: string): string {
-		switch (state) {
-			case 'tainted':
-				return 'Tainted';
-			case 'corrupt':
-				return 'Corrupt';
-			case 'fallen':
-				return 'Fallen';
-			case 'arcane':
-				return 'Arcane';
+	function getMonsterStageLabel(stage: string): string {
+		switch (stage) {
+			case 'stage_1':
+				return 'Stage 1';
+			case 'stage_2':
+				return 'Stage 2';
+			case 'stage_3':
+				return 'Stage 3';
+			case 'final_stage':
+				return 'Final Stage';
 			case 'inactive':
 				return 'Inactive';
 			default:
-				return state.charAt(0).toUpperCase() + state.slice(1);
+				return stage.charAt(0).toUpperCase() + stage.slice(1);
 		}
 	}
 
-	function getMonsterStateAccentColor(state: string): string {
-		switch (state) {
-			case 'tainted':
+	function getMonsterStageAccentColor(stage: string): string {
+		switch (stage) {
+			case 'stage_1':
 				return '#c084fc';
-			case 'corrupt':
+			case 'stage_2':
 				return '#6b21a8';
-			case 'fallen':
+			case 'stage_3':
 				return '#065f46';
-			case 'arcane':
-				return '#0ea5e9';
+			case 'final_stage':
+				return '#a855f7';
 			case 'inactive':
 				return '#64748b';
 			default:
@@ -1114,40 +1172,42 @@
 		const sections: DeckSection[] = [];
 
 		if (typeFilter !== 'event') {
-			const effectiveStateByMonsterId = new Map<string, string | null>();
-			const extraStates = new Set<string>();
+			const effectiveStageByMonsterId = new Map<string, string | null>();
+			const extraStages = new Set<string>();
 
 			for (const g of monsters) {
 				const monster = monsterById.get(g.item.id);
-				const effective = monster ? (inlineStateEdits[monster.id] ?? normalizeStateKey(monster.state)) : null;
-				effectiveStateByMonsterId.set(g.item.id, effective);
-				if (effective && !monsterStateGroupOrderSet.has(effective)) {
-					extraStates.add(effective);
+				const effective = monster
+					? (inlineStageEdits[monster.id] ?? normalizeStageKey(monster.stage))
+					: null;
+				effectiveStageByMonsterId.set(g.item.id, effective);
+				if (effective && !monsterStageGroupOrderSet.has(effective)) {
+					extraStages.add(effective);
 				}
 			}
 
-			const extraStateOrder = [...extraStates].sort((a, b) => a.localeCompare(b));
+			const extraStageOrder = [...extraStages].sort((a, b) => a.localeCompare(b));
 
 			if (monsters.length > 0) {
-				for (const state of monsterStateGroupOrder) {
-					const stateGroups = monsters.filter((g) => effectiveStateByMonsterId.get(g.item.id) === state);
+				for (const stage of monsterStageGroupOrder) {
+					const stageGroups = monsters.filter((g) => effectiveStageByMonsterId.get(g.item.id) === stage);
 					sections.push({
-						key: `state:${state}`,
-						label: getMonsterStateLabel(state),
-						accentColor: getMonsterStateAccentColor(state),
-						groups: stateGroups
+						key: `stage:${stage}`,
+						label: getMonsterStageLabel(stage),
+						accentColor: getMonsterStageAccentColor(stage),
+						groups: stageGroups
 					});
 				}
 			}
 
-			for (const state of extraStateOrder) {
-				const stateGroups = monsters.filter((g) => effectiveStateByMonsterId.get(g.item.id) === state);
-				if (stateGroups.length === 0) continue;
+			for (const stage of extraStageOrder) {
+				const stageGroups = monsters.filter((g) => effectiveStageByMonsterId.get(g.item.id) === stage);
+				if (stageGroups.length === 0) continue;
 				sections.push({
-					key: `state:${state}`,
-					label: getMonsterStateLabel(state),
-					accentColor: getMonsterStateAccentColor(state),
-					groups: stateGroups
+					key: `stage:${stage}`,
+					label: getMonsterStageLabel(stage),
+					accentColor: getMonsterStageAccentColor(stage),
+					groups: stageGroups
 				});
 			}
 		}
@@ -1155,7 +1215,7 @@
 		if ((typeFilter === 'all' || typeFilter === 'event') && showEvents && events.length > 0) {
 			sections.push({
 				key: 'events',
-				label: 'Events',
+				label: 'Stage Cards',
 				accentColor: '#60a5fa',
 				groups: events
 			});
@@ -1236,7 +1296,7 @@
 			return editingId ? `Edit ${monsterLabel}` : `New ${monsterLabel}`;
 		}
 		if (editorType === 'event') {
-			return editingId ? 'Edit Event' : 'New Event';
+			return editingId ? 'Edit Stage Card' : 'New Stage Card';
 		}
 		return 'Deck Editor';
 	});
@@ -1248,18 +1308,20 @@
 			<div class="toolbar-left">
 				{#if showMonsters}
 					<Button variant="primary" onclick={openNewMonster}>+ {monsterLabel}</Button>
-					<Button
-						variant="secondary"
-						onclick={resetMonsterOrderByState}
-						disabled={savingOrder || deckOrder.length === 0}
-					>
-						Reset Monster Order
-					</Button>
+					{#if enableOrdering}
+						<Button
+							variant="secondary"
+							onclick={resetMonsterOrderByStage}
+							disabled={savingOrder || deckOrder.length === 0}
+						>
+							Reset Monster Order
+						</Button>
+					{/if}
 				{/if}
 				{#if showEvents}
-					<Button variant="primary" onclick={openNewEvent}>+ Event</Button>
+					<Button variant="primary" onclick={openNewEvent}>+ Stage Card</Button>
 				{/if}
-				{#if orderChanged}
+				{#if enableOrdering && orderChanged}
 					<Button variant="secondary" onclick={resetOrder} disabled={savingOrder}>Reset</Button>
 					<Button variant="primary" onclick={saveDeckOrder} disabled={savingOrder}>
 						{savingOrder ? 'Saving…' : 'Save Order'}
@@ -1289,7 +1351,7 @@
 						<option value="monster">{monsterLabelPlural}</option>
 					{/if}
 					{#if showEvents}
-						<option value="event">Events</option>
+						<option value="event">Stage Cards</option>
 					{/if}
 				</select>
 				{#if showCardPreviews}
@@ -1317,14 +1379,14 @@
 								{@const isSelected = selectedKey === `${item.type}:${item.id}`}
 								{@const monster = item.type === 'monster' ? monsterById.get(item.id) : null}
 								{@const event = item.type === 'event' ? eventById.get(item.id) : null}
-								{@const copies = item.type === 'monster' ? (monster?.quantity ?? 1) : 1}
+								{@const copies = item.type === 'monster' && enableQuantities ? (monster?.quantity ?? 1) : 1}
 
 								<div
 									class="group"
 									class:selected={isSelected}
 									class:dragging={isDragging}
 									class:drag-over={isDragOver}
-									draggable="true"
+									draggable={enableOrdering}
 									role="listitem"
 									ondragstart={(e) => handleDragStart(e, orderIndex)}
 									ondragover={(e) => handleDragOver(e, orderIndex)}
@@ -1332,15 +1394,24 @@
 									ondrop={(e) => handleDrop(e, orderIndex)}
 									ondragend={handleDragEnd}
 								>
-									<div class="group-header">
-										<div class="group-meta">
-											<span class="pos">#{orderIndex + 1}</span>
-											<span class="type">{item.type === 'monster' ? `${monsterIcon} ${monsterLabel}` : '⚡ Event'}</span>
-											<span class="name">{getGroupLabel(item.type, item.id)}</span>
-											{#if item.type === 'monster' && copies > 1}
-												<span class="copies">x{copies}</span>
+								<div class="group-header">
+									<div class="group-meta">
+										<span class="pos">#{orderIndex + 1}</span>
+										<span class="type">{item.type === 'monster' ? `${monsterIcon} ${monsterLabel}` : '🎴 Stage Card'}</span>
+										<span class="name">{getGroupLabel(item.type, item.id)}</span>
+										{#if item.type === 'monster' && monster?.invade_location_id}
+											{@const invadeName =
+												(monster as unknown as { invade_location_name?: string | null }).invade_location_name ??
+												locationNameById.get(monster.invade_location_id) ??
+												null}
+											{#if invadeName}
+												<span class="invades">Invades: {invadeName}</span>
 											{/if}
-										</div>
+										{/if}
+										{#if enableQuantities && item.type === 'monster' && copies > 1}
+											<span class="copies">x{copies}</span>
+										{/if}
+									</div>
 
 										<div class="group-actions">
 											{#if !showCardPreviews && showStats && item.type === 'monster' && monster}
@@ -1394,28 +1465,28 @@
 												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
 												{@const saveError = inlineStatsError[monster.id]}
 												<label class="inline-state" class:error={Boolean(saveError)} title={saveError ?? ''}>
-													<span>State</span>
+													<span>Stage</span>
 													<select
-														value={getInlineState(monster)}
+														value={getInlineStage(monster)}
 														disabled={isSaving}
-														aria-label="State"
+														aria-label="Stage"
 														onchange={(e) => {
-															setInlineState(monster, (e.target as HTMLSelectElement).value);
+															setInlineStage(monster, (e.target as HTMLSelectElement).value);
 															scheduleInlineAutosave(monster.id, 0);
 														}}
 													>
-														<option value="tainted">Tainted</option>
-														<option value="corrupt">Corrupt</option>
-														<option value="fallen">Fallen</option>
-														<option value="arcane">Arcane</option>
+														<option value="stage_1">Stage 1</option>
+														<option value="stage_2">Stage 2</option>
+														<option value="stage_3">Stage 3</option>
+														<option value="final_stage">Final Stage</option>
 														<option value="inactive">Inactive</option>
 													</select>
 												</label>
 											{/if}
-											{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0}
-												{@const selectedEffects = getInlineEffectIds(monster.id)}
-												{@const effectCount = selectedEffects.length}
-												{@const isSaving = inlineStatsSaving[monster.id] ?? false}
+												{#if !showCardPreviews && showSpecialEffects && item.type === 'monster' && monster && specialEffects.length > 0}
+													{@const selectedEffects = getInlineEffectIds(monster.id)}
+													{@const effectCount = selectedEffects.length}
+													{@const isSaving = inlineStatsSaving[monster.id] ?? false}
 												<button
 													class="btn"
 													onclick={() => toggleInlineEffectsPanel(monster.id)}
@@ -1424,24 +1495,30 @@
 													Effects{effectCount > 0 ? ` (${effectCount})` : ''}
 												</button>
 											{/if}
-											<button class="btn" onclick={() => openEdit(item.type, item.id)}>Edit</button>
-											{#if item.type === 'monster'}
-												<button class="btn" onclick={() => duplicateMonster(item.id)} disabled={duplicatingId === item.id}>
-													{duplicatingId === item.id ? 'Duplicating…' : 'Duplicate'}
+												{#if item.type === 'event' && event?.card_kind === 'stage_location'}
+													<button class="btn" onclick={() => openEdit(item.type, item.id)}>Edit Location</button>
+												{:else}
+													<button class="btn" onclick={() => openEdit(item.type, item.id)}>Edit</button>
+												{/if}
+												{#if item.type === 'monster'}
+													<button class="btn" onclick={() => duplicateMonster(item.id)} disabled={duplicatingId === item.id}>
+														{duplicatingId === item.id ? 'Duplicating…' : 'Duplicate'}
 												</button>
 											{/if}
 											<button class="btn danger" onclick={() => requestDelete(item.type, item.id)}>Delete</button>
-											<button class="btn" disabled={orderIndex === 0} onclick={() => moveGroup(orderIndex, 'up')}>
-												↑
-											</button>
-											<button
-												class="btn"
-												disabled={orderIndex === deckOrder.length - 1}
-												onclick={() => moveGroup(orderIndex, 'down')}
-											>
-												↓
-											</button>
-											<span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+											{#if enableOrdering}
+												<button class="btn" disabled={orderIndex === 0} onclick={() => moveGroup(orderIndex, 'up')}>
+													↑
+												</button>
+												<button
+													class="btn"
+													disabled={orderIndex === deckOrder.length - 1}
+													onclick={() => moveGroup(orderIndex, 'down')}
+												>
+													↓
+												</button>
+												<span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+											{/if}
 										</div>
 									</div>
 
@@ -1519,23 +1596,37 @@
 														</LazyMount>
 													</div>
 												{/each}
-											{:else if item.type === 'event' && event}
-												<div
-													class="copy"
-													class:selected={isSelected}
-													style="--scale: {scale}; width: {600 * scale}px; height: {364 * scale}px;"
-													role="button"
-													tabindex="0"
-													onclick={() => openEdit('event', item.id)}
-													onkeydown={(e) => e.key === 'Enter' && openEdit('event', item.id)}
-												>
-													<LazyMount style="width: 100%; height: 100%; display: block;" rootMargin="1200px 0px">
-														<div class="copy-inner">
-															<EventCardPreview event={{ ...event, order_num: orderIndex }} />
-														</div>
-														<div slot="placeholder" class="copy-placeholder" aria-hidden="true" />
-													</LazyMount>
-												</div>
+												{:else if item.type === 'event' && event}
+													<div
+														class="copy"
+														class:selected={isSelected}
+														style="--scale: {scale}; width: {600 * scale}px; height: {437 * scale}px;"
+														role="button"
+														tabindex="0"
+														onclick={() => openEdit('event', item.id)}
+														onkeydown={(e) => e.key === 'Enter' && openEdit('event', item.id)}
+													>
+														<LazyMount style="width: 100%; height: 100%; display: block;" rootMargin="1200px 0px">
+															<div class="copy-inner">
+																{#if event.card_kind === 'stage_location'}
+																	{#if event.art_url}
+																		<img src={event.art_url} alt={event.title} style="width: 100%; height: 100%; object-fit: cover;" />
+																	{:else}
+																		<div class="missing">Missing image</div>
+																	{/if}
+																{:else if event.card_kind === 'traveler'}
+																	{#if event.art_url}
+																		<img src={event.art_url} alt={event.title} style="width: 100%; height: 100%; object-fit: cover;" />
+																	{:else}
+																		<div class="missing">Missing image</div>
+																	{/if}
+																{:else}
+																	<EventCardPreview event={{ ...event, order_num: orderIndex }} />
+																{/if}
+															</div>
+															<div slot="placeholder" class="copy-placeholder" aria-hidden="true" />
+														</LazyMount>
+													</div>
 											{:else}
 												<div class="missing">Missing data</div>
 											{/if}
@@ -1563,7 +1654,7 @@
 					<div class="editor-empty-actions">
 						<Button variant="primary" onclick={openNewMonster}>+ {monsterLabel}</Button>
 						{#if showEvents}
-							<Button variant="primary" onclick={openNewEvent}>+ Event</Button>
+							<Button variant="primary" onclick={openNewEvent}>+ Stage Card</Button>
 						{/if}
 					</div>
 				</div>
@@ -1603,56 +1694,87 @@
 						</FormField>
 					{/if}
 
-					<div class="grid-2">
-						<FormField label="Quantity" helperText="Copies in deck">
-							<Input type="number" min={1} bind:value={monsterFormData.quantity} />
-						</FormField>
-						<FormField label="State">
+					{#if enableQuantities}
+						<div class="grid-2">
+							<FormField label="Quantity" helperText="Copies in deck">
+								<Input type="number" min={1} bind:value={monsterFormData.quantity} />
+							</FormField>
+							<FormField label="Stage">
+									<Select
+										bind:value={monsterFormData.stage}
+										options={[
+											{ value: 'stage_1', label: 'Stage 1' },
+											{ value: 'stage_2', label: 'Stage 2' },
+											{ value: 'stage_3', label: 'Stage 3' },
+											{ value: 'final_stage', label: 'Final Stage' },
+											{ value: 'inactive', label: 'Inactive' }
+										]}
+									/>
+							</FormField>
+						</div>
+					{:else}
+						<FormField label="Stage">
 								<Select
-									bind:value={monsterFormData.state}
+									bind:value={monsterFormData.stage}
 									options={[
-										{ value: 'tainted', label: 'Tainted' },
-										{ value: 'corrupt', label: 'Corrupt' },
-										{ value: 'fallen', label: 'Fallen' },
-										{ value: 'arcane', label: 'Arcane' },
+										{ value: 'stage_1', label: 'Stage 1' },
+										{ value: 'stage_2', label: 'Stage 2' },
+										{ value: 'stage_3', label: 'Stage 3' },
+										{ value: 'final_stage', label: 'Final Stage' },
 										{ value: 'inactive', label: 'Inactive' }
 									]}
 								/>
 						</FormField>
-					</div>
+					{/if}
 
-					<FormField label="Classification">
-						<Select
-							bind:value={monsterFormData.monster_classification}
-							options={[
-								{ value: 'monster', label: 'Monster' },
-								{ value: 'abyss_guardian', label: 'Abyss Guardian' },
-								{ value: 'boss', label: 'Boss' }
-							]}
-						/>
-					</FormField>
+						<FormField label="Classification">
+							<Select
+								bind:value={monsterFormData.monster_classification}
+								options={[
+									{ value: 'monster', label: 'Monster' },
+									{ value: 'abyss_guardian', label: 'Abyss Guardian' },
+									{ value: 'boss', label: 'Stage Boss' },
+									{ value: 'final_boss', label: 'Final Boss' }
+								]}
+							/>
+						</FormField>
 
 					<FormField label="Icon (emoji)">
 						<Input type="text" bind:value={monsterFormData.icon} placeholder={monsterIcon} />
 					</FormField>
 
-					{#if showImageUpload}
-						<FormField label="Artwork">
-							<ImageUploader
-								bind:value={monsterFormData.image_path}
-								folder={imageUploadFolder}
-								aspectRatio={imageUploadAspectRatio}
-								cropTransparent={imageUploadCropTransparent}
-								maxSizeMB={imageUploadMaxSizeMB}
-								onerror={(err) => alert(`Upload failed: ${err}`)}
-							/>
-						</FormField>
-					{/if}
+						{#if showImageUpload}
+							<FormField label="Artwork">
+								<ImageUploader
+									bind:value={monsterFormData.image_path}
+									folder={imageUploadFolder}
+									aspectRatio={imageUploadAspectRatio}
+									cropTransparent={imageUploadCropTransparent}
+									maxSizeMB={imageUploadMaxSizeMB}
+									onerror={(err) => alert(`Upload failed: ${err}`)}
+								/>
+							</FormField>
+						{/if}
 
-					{#if showInvadeLocation}
-						<FormField label="Invade Location (optional)">
-							<Select
-								value={monsterFormData.invade_location_id ?? ''}
+						{#if showCardImageUpload}
+							<FormField label="Card Image (PNG)">
+								<ImageUploader
+									bind:value={monsterFormData.card_image_path}
+									folder={cardImageUploadFolder}
+									filename={editingId ?? undefined}
+									upsert={!!editingId}
+									aspectRatio={cardImageUploadAspectRatio}
+									cropTransparent={cardImageUploadCropTransparent}
+									maxSizeMB={cardImageUploadMaxSizeMB}
+									onerror={(err) => alert(`Upload failed: ${err}`)}
+								/>
+							</FormField>
+						{/if}
+
+						{#if showInvadeLocation}
+							<FormField label="Invade Location (optional)">
+								<Select
+									value={monsterFormData.invade_location_id ?? ''}
 								options={[
 									{ value: '', label: 'None' },
 									...locations.map((loc) => ({ value: loc.id, label: loc.name }))
@@ -1755,17 +1877,33 @@
 						{/if}
 					</div>
 				</form>
-			{:else if showEvents}
-				<form class="editor-form" onsubmit={(e) => (e.preventDefault(), void saveEvent())}>
-					<FormField label="Name (Internal)" required>
-						<Input type="text" bind:value={eventFormData.name} required />
-					</FormField>
-					<FormField label="Title (Displayed)" required>
-						<Input type="text" bind:value={eventFormData.title} required />
-					</FormField>
+				{:else if showEvents}
+					<form class="editor-form" onsubmit={(e) => (e.preventDefault(), void saveEvent())}>
+						<FormField label="Type" required>
+							<Select bind:value={eventFormData.event_type} options={EVENT_TYPE_OPTIONS} />
+						</FormField>
+						<FormField label="Style" required>
+							<Select bind:value={eventFormData.render_style} options={STAGE_EVENT_RENDER_STYLE_OPTIONS} />
+						</FormField>
+						<FormField label="Title" required>
+							<Input type="text" bind:value={eventFormData.title} required />
+						</FormField>
 					<FormField label="Description">
 						<Textarea rows={4} bind:value={eventFormData.description} />
 					</FormField>
+					<FormField label="Stage completion" helperText="When should this stage end? Shown at the bottom of the card.">
+						<Textarea
+							rows={2}
+							bind:value={eventFormData.stage_completion}
+							placeholder="e.g. Ends after the Stage Boss is defeated"
+						/>
+					</FormField>
+
+					{#if showEventRewardRows}
+						<div class="full-width">
+							<RewardRowsEditor bind:rewardRows={eventFormData.reward_rows} defaultType="all_players" />
+						</div>
+					{/if}
 
 					<div class="editor-actions">
 						<Button variant="primary" type="submit">Save</Button>
@@ -1996,6 +2134,20 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		max-width: 520px;
+	}
+
+	.invades {
+		font-size: 0.72rem;
+		font-weight: 700;
+		color: rgba(226, 232, 240, 0.82);
+		background: rgba(15, 23, 42, 0.5);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		border-radius: 999px;
+		padding: 0.12rem 0.45rem;
+		white-space: nowrap;
+		max-width: 260px;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.copies {

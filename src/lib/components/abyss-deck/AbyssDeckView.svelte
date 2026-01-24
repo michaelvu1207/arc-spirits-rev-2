@@ -2,6 +2,7 @@
 	import type { Monster, Event } from './types';
 	import { MonsterCardPreview } from '$lib/components/monsters';
 	import EventCardPreview from './EventCardPreview.svelte';
+	import { getMonsterStageLabel } from '$lib/utils/monsterStageLabels';
 
 	export type DeckCard = {
 		type: 'monster' | 'event';
@@ -168,13 +169,20 @@
 		return (card.data as Event).title;
 	}
 
-	function getStateColor(state: string | null | undefined): string {
-		switch (state) {
-			case 'tainted': return '#c084fc';
-			case 'corrupt': return '#6b21a8';
-			case 'fallen': return '#065f46';
-			case 'boss': return '#ef4444';
-			default: return '#94a3b8';
+	function getStageColor(stage: string | null | undefined): string {
+		switch (stage) {
+			case 'stage_1':
+				return '#c084fc';
+			case 'stage_2':
+				return '#6b21a8';
+			case 'stage_3':
+				return '#065f46';
+			case 'final_stage':
+				return '#a855f7';
+			case 'inactive':
+				return '#64748b';
+			default:
+				return '#94a3b8';
 		}
 	}
 
@@ -340,17 +348,17 @@
 					{/if}
 				</div>
 
-				{#if viewMode === 'list'}
-					<div class="card-list-info">
-						<h3 class="card-name">{getCardName(card)}</h3>
-						{#if card.type === 'monster'}
-							{@const monster = card.data as Monster}
-							<span class="card-state" style="--state-color: {getStateColor(monster.state)}">
-								{monster.state}
-							</span>
-						{/if}
-					</div>
-				{/if}
+					{#if viewMode === 'list'}
+						<div class="card-list-info">
+							<h3 class="card-name">{getCardName(card)}</h3>
+							{#if card.type === 'monster'}
+								{@const monster = card.data as Monster}
+								<span class="card-state" style="--state-color: {getStageColor(monster.stage)}">
+									{getMonsterStageLabel(monster.stage)}
+								</span>
+							{/if}
+						</div>
+					{/if}
 
 				<div class="drag-handle" title="Drag to reorder">
 					⋮⋮

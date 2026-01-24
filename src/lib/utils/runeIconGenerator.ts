@@ -6,6 +6,14 @@ export interface RuneIconOptions {
 	originIconUrl: string | null;
 	originIconEmoji: string | null;
 	backgroundUrl?: string | null;
+	/** Solid background fill when no backgroundUrl is provided. */
+	backgroundColor?: string | null;
+	/** Optional outer ring stroke (e.g. 'rgba(255,255,255,0.8)') */
+	outerRingColor?: string | null;
+	/** Optional outer ring width in px (defaults to ~3% of size when color is provided). */
+	outerRingWidthPx?: number | null;
+	/** When true, do not draw an outline around the center icon/emoji. */
+	disableIconOutline?: boolean;
 	size?: number;
 }
 
@@ -68,8 +76,13 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 	const scaledIconSize = iconSize * 0.7;
 	const iconPadding = (iconSize - scaledIconSize) / 2;
 	const canvasRadius = size / 2; // Radius for clipping the entire rune icon to a circle
-	const iconOutlinePx = Math.max(2, Math.round(scaledIconSize * 0.03));
+	const outlineEnabled = !options.disableIconOutline;
+	const iconOutlinePx = outlineEnabled ? Math.max(2, Math.round(scaledIconSize * 0.03)) : 0;
 	const iconOutlineColor = '#2b1a12';
+
+	const outerRingColor = options.outerRingColor ?? null;
+	const outerRingWidthPx =
+		outerRingColor ? (options.outerRingWidthPx ?? Math.max(2, Math.round(size * 0.03))) : 0;
 
 	// Determine background content
 	let backgroundContent = '';
@@ -78,6 +91,7 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 		backgroundContent = `<image href="${options.backgroundUrl}" x="${-bgOffset}" y="${-bgOffset}" width="${bgSize}" height="${bgSize}" preserveAspectRatio="xMidYMid slice" />`;
 	} else {
 		// Fallback to white hexagon
+		const fill = options.backgroundColor ?? 'white';
 		const iconRadius = iconSize / 2;
 		const hexRadius = iconRadius * 1.5;
 		const hexPoints: string[] = [];
@@ -88,7 +102,7 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 			hexPoints.push(`${x},${y}`);
 		}
 		const hexPath = hexPoints.join(' ');
-		backgroundContent = `<polygon points="${hexPath}" fill="white" stroke="rgba(0,0,0,0.1)" stroke-width="1" />`;
+		backgroundContent = `<polygon points="${hexPath}" fill="${fill}" stroke="rgba(0,0,0,0.15)" stroke-width="1" />`;
 	}
 
 	// Determine what to display in the center (30% smaller, NOT clipped to circle)
@@ -97,10 +111,10 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 		// Use image - preserve aspect ratio with xMidYMid meet, 30% smaller
 		const iconX = padding + iconPadding;
 		const iconY = padding + iconPadding;
-		centerContent = `<image href="${options.originIconUrl}" x="${iconX}" y="${iconY}" width="${scaledIconSize}" height="${scaledIconSize}" preserveAspectRatio="xMidYMid meet" filter="url(#iconOutline)" />`;
+		centerContent = `<image href="${options.originIconUrl}" x="${iconX}" y="${iconY}" width="${scaledIconSize}" height="${scaledIconSize}" preserveAspectRatio="xMidYMid meet"${outlineEnabled ? ' filter="url(#iconOutline)"' : ''} />`;
 	} else if (options.originIconEmoji) {
 		// Use emoji/text (rendered as text), 30% smaller
-		centerContent = `<text x="${center}" y="${center + scaledIconSize * 0.35}" font-size="${scaledIconSize * 0.7}" text-anchor="middle" dominant-baseline="middle" filter="url(#iconOutline)">${options.originIconEmoji}</text>`;
+		centerContent = `<text x="${center}" y="${center + scaledIconSize * 0.35}" font-size="${scaledIconSize * 0.7}" text-anchor="middle" dominant-baseline="middle"${outlineEnabled ? ' filter="url(#iconOutline)"' : ''}>${options.originIconEmoji}</text>`;
 	}
 
 	const svg = `
@@ -109,7 +123,9 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 				<clipPath id="runeCircle">
 					<circle cx="${center}" cy="${center}" r="${canvasRadius}" />
 				</clipPath>
-				<filter id="iconOutline" x="0" y="0" width="${size}" height="${size}" filterUnits="userSpaceOnUse">
+				${
+					outlineEnabled && iconOutlinePx > 0
+						? `<filter id="iconOutline" x="0" y="0" width="${size}" height="${size}" filterUnits="userSpaceOnUse">
 					<feMorphology in="SourceAlpha" operator="dilate" radius="${iconOutlinePx}" result="dilated" />
 					<feFlood flood-color="${iconOutlineColor}" result="flood" />
 					<feComposite in="flood" in2="dilated" operator="in" result="outline" />
@@ -117,12 +133,19 @@ export function generateRuneIconSVG(options: RuneIconOptions): string {
 						<feMergeNode in="outline" />
 						<feMergeNode in="SourceGraphic" />
 					</feMerge>
-				</filter>
+				</filter>`
+						: ''
+				}
 			</defs>
 			<g clip-path="url(#runeCircle)">
 				${backgroundContent}
 				${centerContent}
 			</g>
+			${
+				outerRingColor && outerRingWidthPx > 0
+					? `<circle cx="${center}" cy="${center}" r="${canvasRadius - outerRingWidthPx / 2}" fill="none" stroke="${outerRingColor}" stroke-width="${outerRingWidthPx}" />`
+					: ''
+			}
 		</svg>
 	`.trim();
 
@@ -153,7 +176,7 @@ export async function generateRuneIconCanvas(
 	const bgSize = size * 1.5;
 	const bgOffset = (bgSize - size) / 2; // Center the larger background
 
-	// Draw background image if provided, otherwise draw white hexagon
+	// Draw background image if provided, otherwise draw hexagon (solid fill)
 	if (options.backgroundUrl) {
 		try {
 			const bgImg = new Image();
@@ -167,11 +190,12 @@ export async function generateRuneIconCanvas(
 			ctx.drawImage(bgImg, -bgOffset, -bgOffset, bgSize, bgSize);
 		} catch (err) {
 			console.warn('Failed to load background image, falling back to hexagon:', err);
-			// Fallback to white hexagon
+			// Fallback to hexagon
+			const fill = options.backgroundColor ?? 'white';
 			const iconRadius = iconSize / 2;
 			const hexRadius = iconRadius * 1.5;
-			ctx.fillStyle = 'white';
-			ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+			ctx.fillStyle = fill;
+			ctx.strokeStyle = 'rgba(0,0,0,0.15)';
 			ctx.lineWidth = 1;
 			ctx.beginPath();
 			for (let i = 0; i < 6; i++) {
@@ -189,11 +213,12 @@ export async function generateRuneIconCanvas(
 			ctx.stroke();
 		}
 	} else {
-		// Draw white hexagon background - hexagon is 50% bigger than icon
+		// Draw hexagon background - hexagon is 50% bigger than icon
+		const fill = options.backgroundColor ?? 'white';
 		const iconRadius = iconSize / 2;
 		const hexRadius = iconRadius * 1.5; // 50% bigger
-		ctx.fillStyle = 'white';
-		ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+		ctx.fillStyle = fill;
+		ctx.strokeStyle = 'rgba(0,0,0,0.15)';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
 		for (let i = 0; i < 6; i++) {
@@ -214,8 +239,13 @@ export async function generateRuneIconCanvas(
 	// Icon size: 30% smaller than original iconSize
 	const scaledIconSize = iconSize * 0.7;
 	const iconPadding = (iconSize - scaledIconSize) / 2;
-	const iconOutlinePx = Math.max(2, Math.round(scaledIconSize * 0.03));
+	const outlineEnabled = !options.disableIconOutline;
+	const iconOutlinePx = outlineEnabled ? Math.max(2, Math.round(scaledIconSize * 0.03)) : 0;
 	const iconOutlineColor = '#2b1a12';
+
+	const outerRingColor = options.outerRingColor ?? null;
+	const outerRingWidthPx =
+		outerRingColor ? (options.outerRingWidthPx ?? Math.max(2, Math.round(size * 0.03))) : 0;
 
 	// Draw origin icon centered over background (NOT clipped to circle)
 	if (options.originIconUrl) {
@@ -254,10 +284,12 @@ export async function generateRuneIconCanvas(
 				ctx.font = `${scaledIconSize * 0.7}px sans-serif`;
 				ctx.textAlign = 'center';
 				ctx.textBaseline = 'middle';
-				ctx.lineJoin = 'round';
-				ctx.strokeStyle = iconOutlineColor;
-				ctx.lineWidth = iconOutlinePx * 2;
-				ctx.strokeText(options.originIconEmoji, center, center);
+				if (outlineEnabled && iconOutlinePx > 0) {
+					ctx.lineJoin = 'round';
+					ctx.strokeStyle = iconOutlineColor;
+					ctx.lineWidth = iconOutlinePx * 2;
+					ctx.strokeText(options.originIconEmoji, center, center);
+				}
 				ctx.fillStyle = '#1e293b';
 				ctx.fillText(options.originIconEmoji, center, center);
 			}
@@ -358,10 +390,12 @@ export async function generateRuneIconCanvas(
 			ctx.font = `${scaledIconSize * 0.7}px sans-serif`;
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
-			ctx.lineJoin = 'round';
-			ctx.strokeStyle = iconOutlineColor;
-			ctx.lineWidth = iconOutlinePx * 2;
-			ctx.strokeText(options.originIconEmoji, center, center);
+			if (outlineEnabled && iconOutlinePx > 0) {
+				ctx.lineJoin = 'round';
+				ctx.strokeStyle = iconOutlineColor;
+				ctx.lineWidth = iconOutlinePx * 2;
+				ctx.strokeText(options.originIconEmoji, center, center);
+			}
 			ctx.fillStyle = '#1e293b';
 			ctx.fillText(options.originIconEmoji, center, center);
 		}
@@ -384,6 +418,17 @@ export async function generateRuneIconCanvas(
 
 	// Draw the original canvas content onto the temp canvas
 	tempCtx.drawImage(canvas, 0, 0);
+
+	// Draw an outer ring if requested (inside the clipped circle)
+	if (outerRingColor && outerRingWidthPx > 0) {
+		tempCtx.save();
+		tempCtx.strokeStyle = outerRingColor;
+		tempCtx.lineWidth = outerRingWidthPx;
+		tempCtx.beginPath();
+		tempCtx.arc(canvasRadius, canvasRadius, canvasRadius - outerRingWidthPx / 2, 0, Math.PI * 2);
+		tempCtx.stroke();
+		tempCtx.restore();
+	}
 
 	return tempCanvas.toDataURL('image/png');
 }

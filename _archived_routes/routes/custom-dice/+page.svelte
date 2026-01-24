@@ -6,6 +6,8 @@
 	import { Modal } from '$lib/components/layout';
 	import { useFormModal, useFileUpload } from '$lib/composables';
 	import { getErrorMessage } from '$lib/utils';
+	import { supabase } from '$lib/api/supabaseClient';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue, normalizeLanguageCode, setTranslationValue } from '$lib/i18n/translations';
 	import {
 		DICE_TYPE_ICONS,
 		DICE_TYPE_LABELS,
@@ -29,7 +31,56 @@
 
 	let editingDice: CustomDiceWithSides | null = null;
 
+	// Language state
+	let diceLanguage: TranslationLanguage = BASE_LANGUAGE;
+	let diceLanguageSelect: TranslationLanguage = BASE_LANGUAGE;
+	let newDiceLanguageDraft = '';
+	let extraDiceLanguages: string[] = [];
+	let diceLanguageOptions: { value: TranslationLanguage; label: string }[] = [
+		{ value: BASE_LANGUAGE, label: 'Default' }
+	];
+
 	type AttackStats = { mean: number; sd: number } | null;
+
+	function ensureDiceLanguageListed(lang: string) {
+		if (!lang || lang === BASE_LANGUAGE) return;
+		if (!extraDiceLanguages.includes(lang)) extraDiceLanguages = [...extraDiceLanguages, lang];
+	}
+
+	function getDiceName(dice: CustomDiceWithSides, lang: TranslationLanguage = diceLanguage): string {
+		if (lang === BASE_LANGUAGE) return dice.name;
+		return getTranslationValue((dice as any).name_translations, String(lang)) ?? dice.name;
+	}
+
+	function getDiceDescription(dice: CustomDiceWithSides, lang: TranslationLanguage = diceLanguage): string {
+		const base = dice.description ?? '';
+		if (lang === BASE_LANGUAGE) return base;
+		return getTranslationValue((dice as any).description_translations, String(lang)) ?? base;
+	}
+
+	$: {
+		const out = new Set<string>();
+		for (const dice of diceList) {
+			const sources = [(dice as any).name_translations, (dice as any).description_translations];
+			for (const source of sources) {
+				if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+				for (const key of Object.keys(source as Record<string, unknown>)) {
+					const normalized = normalizeLanguageCode(key);
+					if (!normalized) continue;
+					out.add(normalized);
+				}
+			}
+		}
+
+		const merged = new Set<string>([...out, ...extraDiceLanguages]);
+		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
+		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+		diceLanguageOptions = [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
+	}
+
+	$: if (diceLanguageSelect !== diceLanguage) {
+		requestDiceLanguageChange(String(diceLanguageSelect));
+	}
 
 	onMount(async () => {
 		await loadDice();
@@ -48,13 +99,54 @@
 	}
 
 	function openCreate() {
+		if (diceLanguage !== BASE_LANGUAGE) {
+			alert('Create dice in Default language first, then add translations.');
+			return;
+		}
 		editingDice = null;
 		modal.open();
 	}
 
 	function openEdit(dice: CustomDiceWithSides) {
 		editingDice = dice;
-		modal.open(toFormData(dice));
+		const baseForm = toFormData(dice);
+		if (diceLanguage === BASE_LANGUAGE) {
+			modal.open(baseForm);
+			return;
+		}
+
+		modal.open({
+			...baseForm,
+			name: getTranslationValue((dice as any).name_translations, String(diceLanguage)) ?? '',
+			description: getTranslationValue((dice as any).description_translations, String(diceLanguage)) ?? ''
+		});
+	}
+
+	function requestDiceLanguageChange(nextRaw: string) {
+		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
+		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
+		if (next === diceLanguage) return;
+
+		if (modal.isOpen) {
+			const ok = confirm('Switching language will discard any unsaved changes in the editor. Continue?');
+			if (!ok) {
+				diceLanguageSelect = diceLanguage;
+				return;
+			}
+			modal.close();
+			editingDice = null;
+		}
+
+		diceLanguage = next;
+		diceLanguageSelect = next;
+	}
+
+	function addDiceLanguage() {
+		const normalized = normalizeLanguageCode(newDiceLanguageDraft);
+		if (!normalized) return;
+		ensureDiceLanguageListed(normalized);
+		newDiceLanguageDraft = '';
+		requestDiceLanguageChange(normalized);
 	}
 
 	function setDiceType(type: DiceType) {
@@ -100,13 +192,51 @@
 	}
 
 	async function saveDice() {
-		if (!modal.formData.name?.trim()) {
+		const isBase = diceLanguage === BASE_LANGUAGE;
+
+		if (isBase && !modal.formData.name?.trim()) {
 			alert('Dice name is required');
 			return;
 		}
 
+		if (!isBase && !editingDice?.id) {
+			alert('Create the dice in Default language first, then add translations.');
+			return;
+		}
+
 		try {
-			await saveDiceRecord(modal.formData);
+			if (isBase) {
+				await saveDiceRecord(modal.formData);
+			} else {
+				const translationName = modal.formData.name ?? '';
+				const translationDescription = modal.formData.description ?? '';
+
+				await saveDiceRecord({
+					...modal.formData,
+					id: editingDice!.id,
+					name: editingDice!.name,
+					description: editingDice!.description ?? ''
+				});
+
+				const { error: updateError } = await supabase
+					.from('custom_dice')
+					.update({
+						name_translations: setTranslationValue(
+							(editingDice as any).name_translations,
+							String(diceLanguage),
+							translationName
+						),
+						description_translations: setTranslationValue(
+							(editingDice as any).description_translations,
+							String(diceLanguage),
+							translationDescription
+						),
+						updated_at: new Date().toISOString()
+					})
+					.eq('id', editingDice!.id);
+
+				if (updateError) throw updateError;
+			}
 			modal.close();
 			await loadDice();
 		} catch (err) {
@@ -115,7 +245,7 @@
 	}
 
 	async function deleteDice(dice: CustomDiceWithSides) {
-		if (!confirm(`Delete custom dice "${dice.name}"?`)) return;
+		if (!confirm(`Delete custom dice "${getDiceName(dice)}"?`)) return;
 		try {
 			await deleteDiceRecord(dice.id);
 			await loadDice();
@@ -149,6 +279,20 @@
 		</div>
 	</header>
 
+	<div class="language-bar">
+		<FormField label="Language">
+			<Select bind:value={diceLanguageSelect} options={diceLanguageOptions} />
+		</FormField>
+		<FormField label="Add language">
+			<div class="language-bar__add">
+				<Input bind:value={newDiceLanguageDraft} placeholder="e.g. ja" />
+				<Button variant="secondary" onclick={addDiceLanguage} disabled={!newDiceLanguageDraft.trim()}>
+					Add
+				</Button>
+			</div>
+		</FormField>
+	</div>
+
 	{#if loading}
 		<div class="card loading">Loading dice…</div>
 	{:else if error}
@@ -157,15 +301,17 @@
 		<div class="dice-row">
 			{#each diceList as dice}
 				{@const stats = computeAttackStats(dice)}
+				{@const displayName = getDiceName(dice)}
+				{@const displayDescription = getDiceDescription(dice)}
 				<div
 					class="dice-panel"
 					style={`border-color: ${dice.color ?? '#4a9eff'}`}
 				>
 					<div class="dice-panel__icon">{dice.icon ?? '🎲'}</div>
 					<div class="dice-panel__content">
-						<h3>{dice.name}</h3>
-						{#if dice.description}
-							<p>{dice.description}</p>
+						<h3>{displayName}</h3>
+						{#if displayDescription}
+							<p>{displayDescription}</p>
 						{/if}
 						<div class="dice-panel__sides">
 							{dice.dice_sides.length} sides
@@ -203,8 +349,11 @@
 	<Modal bind:open={modal.isOpen} title={modal.isEditing ? 'Edit Dice' : 'Create Dice'} size="lg">
 		<form id="dice-editor-form" class="dice-editor" onsubmit={submitDiceForm}>
 			<section class="dice-editor__grid">
-				<FormField label="Name" required>
-					<Input bind:value={modal.formData.name} required />
+				<FormField
+					label={`Name${diceLanguage === BASE_LANGUAGE ? '' : ` (${diceLanguage})`}`}
+					required={diceLanguage === BASE_LANGUAGE}
+				>
+					<Input bind:value={modal.formData.name} required={diceLanguage === BASE_LANGUAGE} />
 				</FormField>
 
 				<FormField label="Icon">
@@ -227,7 +376,7 @@
 				</FormField>
 			</section>
 
-			<FormField label="Description">
+			<FormField label={`Description${diceLanguage === BASE_LANGUAGE ? '' : ` (${diceLanguage})`}`}>
 				<Textarea rows={2} bind:value={modal.formData.description} />
 			</FormField>
 
@@ -290,6 +439,23 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
+	}
+
+	.language-bar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		padding: 1rem;
+		background: rgba(15, 23, 42, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		border-radius: 10px;
+		align-items: flex-end;
+	}
+
+	.language-bar__add {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
 	}
 
 	.dice-row {

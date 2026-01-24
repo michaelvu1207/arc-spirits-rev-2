@@ -14,14 +14,14 @@ export type MonsterCardUiLanguage =
 	| 'ko'
 	| (string & {});
 
-type MonsterClassification = 'monster' | 'abyss_guardian' | 'boss';
-type MonsterState = 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive';
+type MonsterClassification = 'monster' | 'abyss_guardian' | 'boss' | 'final_boss';
+type MonsterStage = 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
 
 export type MonsterCardUi = {
 	lang: string;
 
 	classification: Record<MonsterClassification, string>;
-	state: Record<MonsterState, string>;
+	stage: Record<MonsterStage, string>;
 	effectType: Record<SpecialEffectType, string>;
 
 	invadesPrefix: string;
@@ -55,13 +55,14 @@ const EN: MonsterCardUi = {
 	classification: {
 		monster: 'Monster',
 		abyss_guardian: 'Abyss Guardian',
-		boss: 'Boss'
+		boss: 'Stage Boss',
+		final_boss: 'Final Boss'
 	},
-	state: {
-		tainted: 'Tainted',
-		corrupt: 'Corrupt',
-		fallen: 'Fallen',
-		arcane: 'Arcane',
+	stage: {
+		stage_1: 'Stage 1',
+		stage_2: 'Stage 2',
+		stage_3: 'Stage 3',
+		final_stage: 'Final Stage',
 		inactive: 'Inactive'
 	},
 	effectType: {
@@ -91,13 +92,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: '怪物',
 			abyss_guardian: '深渊守护者',
-			boss: '首领'
+			boss: '阶段首领',
+			final_boss: '最终首领'
 		},
-		state: {
-			tainted: '污秽',
-			corrupt: '腐化',
-			fallen: '堕落',
-			arcane: '奥术',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: '未激活'
 		},
 		effectType: {
@@ -124,13 +126,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: '怪物',
 			abyss_guardian: '深淵守護者',
-			boss: '首領'
+			boss: '階段首領',
+			final_boss: '最終首領'
 		},
-		state: {
-			tainted: '汙穢',
-			corrupt: '腐化',
-			fallen: '墮落',
-			arcane: '奧術',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: '未啟動'
 		},
 		effectType: {
@@ -157,13 +160,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'Monster',
 			abyss_guardian: 'Abgrundwächter',
-			boss: 'Boss'
+			boss: 'Stufenboss',
+			final_boss: 'Endboss'
 		},
-		state: {
-			tainted: 'Verunreinigt',
-			corrupt: 'Korrumpiert',
-			fallen: 'Gefallen',
-			arcane: 'Arkan',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: 'Inaktiv'
 		},
 		effectType: {
@@ -190,13 +194,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'Monstre',
 			abyss_guardian: 'Gardien des Abysses',
-			boss: 'Boss'
+			boss: 'Boss de phase',
+			final_boss: 'Boss final'
 		},
-		state: {
-			tainted: 'Souillé',
-			corrupt: 'Corrompu',
-			fallen: 'Déchu',
-			arcane: 'Arcane',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: 'Inactif'
 		},
 		effectType: {
@@ -223,13 +228,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'Monstruo',
 			abyss_guardian: 'Guardián del Abismo',
-			boss: 'Jefe'
+			boss: 'Jefe de fase',
+			final_boss: 'Jefe final'
 		},
-		state: {
-			tainted: 'Contaminado',
-			corrupt: 'Corrupto',
-			fallen: 'Caído',
-			arcane: 'Arcano',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: 'Inactivo'
 		},
 		effectType: {
@@ -256,13 +262,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'Mostro',
 			abyss_guardian: "Guardiano dell'Abisso",
-			boss: 'Boss'
+			boss: 'Boss di fase',
+			final_boss: 'Boss finale'
 		},
-		state: {
-			tainted: 'Contaminato',
-			corrupt: 'Corrotto',
-			fallen: 'Caduto',
-			arcane: 'Arcano',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: 'Inattivo'
 		},
 		effectType: {
@@ -289,13 +296,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'モンスター',
 			abyss_guardian: '深淵の守護者',
-			boss: 'ボス'
+			boss: 'ステージボス',
+			final_boss: '最終ボス'
 		},
-		state: {
-			tainted: '穢れ',
-			corrupt: '腐敗',
-			fallen: '堕落',
-			arcane: '秘術',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: '非アクティブ'
 		},
 		effectType: {
@@ -322,13 +330,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: 'Potwór',
 			abyss_guardian: 'Strażnik Otchłani',
-			boss: 'Boss'
+			boss: 'Boss etapu',
+			final_boss: 'Boss finałowy'
 		},
-		state: {
-			tainted: 'Skażony',
-			corrupt: 'Skorumpowany',
-			fallen: 'Upadły',
-			arcane: 'Arkaniczny',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: 'Nieaktywny'
 		},
 		effectType: {
@@ -355,13 +364,14 @@ const UI_BY_LANG: Record<string, MonsterCardUi> = {
 		classification: {
 			monster: '몬스터',
 			abyss_guardian: '심연 수호자',
-			boss: '보스'
+			boss: '스테이지 보스',
+			final_boss: '최종 보스'
 		},
-		state: {
-			tainted: '오염',
-			corrupt: '부패',
-			fallen: '타락',
-			arcane: '비전',
+		stage: {
+			stage_1: 'Stage 1',
+			stage_2: 'Stage 2',
+			stage_3: 'Stage 3',
+			final_stage: 'Final Stage',
 			inactive: '비활성'
 		},
 		effectType: {
@@ -394,4 +404,3 @@ export function getMonsterCardUi(lang: MonsterCardUiLanguage | null | undefined)
 	if (base && UI_BY_LANG[base]) return UI_BY_LANG[base];
 	return EN;
 }
-

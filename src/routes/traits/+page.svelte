@@ -26,6 +26,7 @@
 	import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
 	import { processAndUploadImage } from '$lib/utils/storage';
 	import { loadAllIcons, clearIconPoolCache } from '$lib/utils/iconPool';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue, normalizeLanguageCode, setTranslationValue } from '$lib/i18n/translations';
 
 	// Import feature modules
 	import {
@@ -60,7 +61,7 @@
 		type SpecialCategoryFormData
 	} from '$lib/features/special-categories/specialCategories';
 
-	import { fetchDiceRecords } from '$lib/features/dice/dice';
+	import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
 
 	// State
 	let origins = $state<OriginRow[]>([]);
@@ -121,9 +122,14 @@
 	let prismaticEnabled = $state(false);
 	let prismaticCache = $state<PrismaticForm>({ ...EMPTY_PRISMATIC });
 	let classSearch = $state('');
+	let classLanguage = $state<TranslationLanguage>(BASE_LANGUAGE);
+	let classLanguageSelect = $state<TranslationLanguage>(BASE_LANGUAGE);
+	let newClassLanguageDraft = $state('');
+	let extraClassLanguages = $state<string[]>([]);
 
 	let diceOptions = $state<{ id: string; name: string }[]>([]);
 	let diceNameById = $state(new Map<string, string>());
+	let diceRecords = $state<CustomDiceWithSides[]>([]);
 
 	let uploadingIconId = $state<string | null>(null);
 	let removingIconId = $state<string | null>(null);
@@ -151,6 +157,9 @@
 	let savingRune = $state(false);
 	let runeIconNeedsRegeneration = $state(false);
 	let runeIconStatus = $state<string | null>(null);
+	let bulkRecreatingRunes = $state(false);
+	let bulkRecreateProgress = $state<{ done: number; total: number; skipped: number } | null>(null);
+	let bulkRecreateStatus = $state<string | null>(null);
 	let runeBaseline = $state<{
 		runeType: 'origin' | 'class';
 		origin_id: string | null;
@@ -185,12 +194,102 @@
 
 	const sorcererName = 'sorcerer';
 
+	function ensureClassLanguageListed(lang: string) {
+		if (!lang || lang === BASE_LANGUAGE) return;
+		if (!extraClassLanguages.includes(lang)) extraClassLanguages = [...extraClassLanguages, lang];
+	}
+
+	function getClassName(entry: ClassRow, lang: TranslationLanguage = classLanguage): string {
+		if (lang === BASE_LANGUAGE) return entry.name;
+		return getTranslationValue(entry.name_translations, String(lang)) ?? entry.name;
+	}
+
+	function getClassDescription(entry: ClassRow, lang: TranslationLanguage = classLanguage): string {
+		if (lang === BASE_LANGUAGE) return entry.description ?? '';
+		return getTranslationValue(entry.description_translations, String(lang)) ?? entry.description ?? '';
+	}
+
+	function getClassFooter(entry: ClassRow, lang: TranslationLanguage = classLanguage): string {
+		if (lang === BASE_LANGUAGE) return entry.footer ?? '';
+		return getTranslationValue(entry.footer_translations, String(lang)) ?? entry.footer ?? '';
+	}
+
+	function getDiceName(entry: CustomDiceWithSides, lang: TranslationLanguage = classLanguage): string {
+		const baseName = entry.name?.trim() || `Dice ${entry.id.slice(0, 6)}`;
+		if (lang === BASE_LANGUAGE) return baseName;
+		return getTranslationValue(entry.name_translations, String(lang)) ?? baseName;
+	}
+
+	const detectedClassLanguages = $derived.by(() => {
+		const out = new Set<string>();
+		for (const entry of classes) {
+			const sources = [
+				(entry as any).name_translations,
+				(entry as any).description_translations,
+				(entry as any).footer_translations
+			];
+			for (const source of sources) {
+				if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+				for (const key of Object.keys(source as Record<string, unknown>)) {
+					const normalized = normalizeLanguageCode(key);
+					if (!normalized) continue;
+					out.add(normalized);
+				}
+			}
+		}
+		return Array.from(out).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+	});
+
+	const classLanguageOptions = $derived.by(() => {
+		const merged = new Set<string>([...detectedClassLanguages, ...extraClassLanguages]);
+		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
+		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+		return [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
+	});
+
+	$effect(() => {
+		if (classLanguageSelect !== classLanguage) {
+			requestClassLanguageChange(String(classLanguageSelect));
+		}
+	});
+
+	function requestClassLanguageChange(nextRaw: string) {
+		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
+		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
+		if (next === classLanguage) return;
+
+		if (showClassForm) {
+			const ok = confirm('Switching language will discard any unsaved changes in the class editor. Continue?');
+			if (!ok) {
+				classLanguageSelect = classLanguage;
+				return;
+			}
+			showClassForm = false;
+		}
+
+		classLanguage = next;
+		classLanguageSelect = next;
+
+		if (diceRecords.length > 0) {
+			diceOptions = diceRecords.map((entry) => ({ id: entry.id, name: getDiceName(entry, next) }));
+			diceNameById = new Map(diceOptions.map((option) => [option.id, option.name]));
+		}
+	}
+
+	function addClassLanguage() {
+		const normalized = normalizeLanguageCode(newClassLanguageDraft);
+		if (!normalized) return;
+		ensureClassLanguageListed(normalized);
+		newClassLanguageDraft = '';
+		requestClassLanguageChange(normalized);
+	}
+
 	const resolveDiceLabel = (id: string | null | undefined, fallback?: string) => {
 		if (id && diceNameById.has(id)) return diceNameById.get(id) ?? fallback ?? 'Custom Dice';
 		return fallback ?? (id ?? 'Custom Dice');
 	};
 
-	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel);
+	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel, classLanguage);
 
 	const specialCategoryClassIds = $derived(
 		new Set(
@@ -203,17 +302,20 @@
 	);
 
 	// Search-filtered classes (includes special category classes for lookup)
-	const searchFilteredClasses = $derived(
-		classes.filter((entry) => {
-			if (!classSearch.trim()) return true;
-			const term = classSearch.trim().toLowerCase();
-			return (
-				entry.name.toLowerCase().includes(term) ||
-				(entry.description ?? '').toLowerCase().includes(term) ||
-				(entry.footer ?? '').toLowerCase().includes(term)
-			);
-		})
-	);
+		const searchFilteredClasses = $derived(
+			classes.filter((entry) => {
+				if (!classSearch.trim()) return true;
+				const term = classSearch.trim().toLowerCase();
+				const displayName = getClassName(entry, classLanguage).toLowerCase();
+				const displayDescription = getClassDescription(entry, classLanguage).toLowerCase();
+				const displayFooter = getClassFooter(entry, classLanguage).toLowerCase();
+				return (
+					displayName.includes(term) ||
+					displayDescription.includes(term) ||
+					displayFooter.includes(term)
+				);
+			})
+		);
 
 	// Count of regular classes (excluding special category classes)
 	const filteredClassCount = $derived(
@@ -283,24 +385,16 @@
 		return data ?? [];
 	}
 
-	async function loadDiceOptions() {
-		try {
-			const records = await fetchDiceRecords();
-			diceOptions = records.map(({ id, name }) => ({
-				id,
-				name: name?.trim() || `Dice ${id.slice(0, 6)}`
-			}));
-			diceNameById = new Map(diceOptions.map((option) => [option.id, option.name]));
-			if (showClassForm) {
-				classFormData = {
-					...classFormData,
-					effect_schema: resolveDiceIdsInSchema(classFormData.effect_schema)
-				};
+		async function loadDiceOptions() {
+			try {
+				const records = await fetchDiceRecords();
+				diceRecords = records;
+				diceOptions = records.map((entry) => ({ id: entry.id, name: getDiceName(entry) }));
+				diceNameById = new Map(diceOptions.map((option) => [option.id, option.name]));
+			} catch (err) {
+				console.error('Failed to load dice options', err);
 			}
-		} catch (err) {
-			console.error('Failed to load dice options', err);
 		}
-	}
 
 	// Origins handlers
 	async function backfillMissingIcons(force = false) {
@@ -566,11 +660,10 @@
 	}
 
 	// Classes handlers
-	function getIconUrl(iconPng: string | null | undefined): string | null {
+	function getIconUrl(iconPng: string | null | undefined, updatedAt?: string | number | null): string | null {
 		if (!iconPng) return null;
 		const path = iconPng.startsWith('class_icons/') ? iconPng : `class_icons/${iconPng}`;
-		const { data } = gameAssetsStorage.getPublicUrl(path);
-		return data?.publicUrl ?? null;
+		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
 	function isIconImage(iconPng: string | null | undefined): boolean {
@@ -598,7 +691,7 @@
 
 		uploadingIconId = classEntry.id;
 		try {
-			if (isIconImage(classEntry.icon_png)) {
+			if (isIconImage(classEntry.icon_png) && classEntry.icon_png!.includes('/')) {
 				const oldPath = classEntry.icon_png!.startsWith('class_icons/')
 					? classEntry.icon_png!
 					: `class_icons/${classEntry.icon_png!}`;
@@ -618,13 +711,25 @@
 			if (uploadError) {
 				throw uploadError;
 			}
+			if (!data?.path) {
+				throw new Error('Upload failed');
+			}
 
-			const { error: updateError } = await supabase
-				.from('classes')
-				.update({ icon_png: data?.path, updated_at: new Date().toISOString() })
-				.eq('id', classEntry.id);
-			if (updateError) {
-				throw updateError;
+			// Always update local form state so subsequent "Save" doesn't overwrite the uploaded icon.
+			classFormData = { ...classFormData, icon_png: data.path };
+			if (editingClass?.id === classEntry.id) {
+				editingClass = { ...editingClass, icon_png: data.path, updated_at: new Date().toISOString() };
+			}
+
+			// Only attempt DB update if the class record exists (new class forms can upload before insert).
+			if (classes.some((c) => c.id === classEntry.id)) {
+				const { error: updateError } = await supabase
+					.from('classes')
+					.update({ icon_png: data.path, updated_at: new Date().toISOString() })
+					.eq('id', classEntry.id);
+				if (updateError) {
+					throw updateError;
+				}
 			}
 
 			await loadAllData();
@@ -644,12 +749,21 @@
 				? classEntry.icon_png!
 				: `class_icons/${classEntry.icon_png!}`;
 			await gameAssetsStorage.remove([path]);
-			const { error: updateError } = await supabase
-				.from('classes')
-				.update({ icon_png: null, updated_at: new Date().toISOString() })
-				.eq('id', classEntry.id);
-			if (updateError) {
-				throw updateError;
+
+			// Update local form state so "Save" doesn't re-introduce a removed icon.
+			classFormData = { ...classFormData, icon_png: null };
+			if (editingClass?.id === classEntry.id) {
+				editingClass = { ...editingClass, icon_png: null, updated_at: new Date().toISOString() };
+			}
+
+			if (classes.some((c) => c.id === classEntry.id)) {
+				const { error: updateError } = await supabase
+					.from('classes')
+					.update({ icon_png: null, updated_at: new Date().toISOString() })
+					.eq('id', classEntry.id);
+				if (updateError) {
+					throw updateError;
+				}
 			}
 			await loadAllData();
 		} catch (err) {
@@ -714,9 +828,28 @@
 	}
 
 	function openClassForm(entry?: ClassRow) {
+		if (!entry && classLanguage !== BASE_LANGUAGE) {
+			alert('Create new classes in Default language first, then add translations.');
+			return;
+		}
+
 		if (entry) {
 			editingClass = entry;
-			classFormData = classRowToForm(entry);
+			const baseForm = classRowToForm(entry);
+			const name =
+				classLanguage === BASE_LANGUAGE
+					? entry.name
+					: getTranslationValue(entry.name_translations, String(classLanguage)) ?? '';
+			const description =
+				classLanguage === BASE_LANGUAGE
+					? entry.description ?? ''
+					: getTranslationValue(entry.description_translations, String(classLanguage)) ?? '';
+			const footer =
+				classLanguage === BASE_LANGUAGE
+					? entry.footer ?? ''
+					: getTranslationValue(entry.footer_translations, String(classLanguage)) ?? '';
+
+			classFormData = { ...baseForm, name, description, footer };
 			classFormData = {
 				...classFormData,
 				effect_schema: resolveDiceIdsInSchema(classFormData.effect_schema)
@@ -764,10 +897,14 @@
 
 	function addBreakpoint() {
 		const lastCount = classFormData.effect_schema.at(-1)?.count ?? 2;
-		const nextCount =
+		const lastCountNumeric =
 			typeof lastCount === 'number'
-				? lastCount + 1
-				: Number.parseInt(String(lastCount), 10) + 1 || classFormData.effect_schema.length + 2;
+				? (Number.isFinite(lastCount) ? lastCount : null)
+				: /^\d+$/.test(String(lastCount ?? '').trim())
+					? Number.parseInt(String(lastCount ?? '').trim(), 10)
+					: null;
+		const nextCount =
+			lastCountNumeric !== null ? lastCountNumeric + 1 : classFormData.effect_schema.length + 2;
 		const nextBreakpoint: EffectBreakpoint = {
 			count: nextCount,
 			color: undefined,
@@ -786,9 +923,21 @@
 	}
 
 	function updateBreakpointCount(index: number, value: string) {
-		const updated = classFormData.effect_schema.map((bp, idx) =>
-			idx === index ? { ...bp, count: value } : bp
-		);
+		const updated = classFormData.effect_schema.map((bp, idx) => {
+			if (idx !== index) return bp;
+			const isTranslatedCount = classLanguage !== BASE_LANGUAGE && typeof bp.count === 'string';
+			if (isTranslatedCount) {
+				return {
+					...bp,
+					count_translations: setTranslationValue(
+						(bp as any).count_translations,
+						String(classLanguage),
+						value
+					)
+				};
+			}
+			return { ...bp, count: value };
+		});
 		classFormData = { ...classFormData, effect_schema: updated };
 	}
 
@@ -800,10 +949,40 @@
 	}
 
 	function updateBreakpointDescription(index: number, value: string) {
-		const updated = classFormData.effect_schema.map((bp, idx) =>
-			idx === index ? { ...bp, description: value } : bp
-		);
+		const updated = classFormData.effect_schema.map((bp, idx) => {
+			if (idx !== index) return bp;
+			if (classLanguage === BASE_LANGUAGE) return { ...bp, description: value };
+			return {
+				...bp,
+				description_translations: setTranslationValue(
+					(bp as any).description_translations,
+					String(classLanguage),
+					value
+				)
+			};
+		});
 		classFormData = { ...classFormData, effect_schema: updated };
+	}
+
+	function getBreakpointCountInputValue(breakpoint: EffectBreakpoint): string | number {
+		if (classLanguage === BASE_LANGUAGE) return breakpoint.count;
+		if (typeof breakpoint.count !== 'string') return breakpoint.count;
+		return getTranslationValue((breakpoint as any).count_translations, String(classLanguage)) ?? '';
+	}
+
+	function getBreakpointDescriptionInputValue(breakpoint: EffectBreakpoint): string {
+		if (classLanguage === BASE_LANGUAGE) return breakpoint.description ?? '';
+		return getTranslationValue((breakpoint as any).description_translations, String(classLanguage)) ?? '';
+	}
+
+	function getBenefitDescriptionInputValue(effect: BenefitEffect): string {
+		if (classLanguage === BASE_LANGUAGE) return effect.description ?? '';
+		return getTranslationValue((effect as any).description_translations, String(classLanguage)) ?? '';
+	}
+
+	function getConditionInputValue(effect: FlatStatEffect): string {
+		if (classLanguage === BASE_LANGUAGE) return effect.condition ?? '';
+		return getTranslationValue((effect as any).condition_translations, String(classLanguage)) ?? '';
 	}
 
 	function addEffectToBreakpoint(index: number, type: Effect['type'] = 'dice') {
@@ -897,8 +1076,15 @@
 	}
 
 	async function saveClass() {
-		if (!classFormData.name.trim()) {
+		const isBase = classLanguage === BASE_LANGUAGE;
+
+		if (isBase && !classFormData.name.trim()) {
 			alert('Class name is required.');
+			return;
+		}
+
+		if (!isBase && !editingClass?.id) {
+			alert('Create the class in Default language first, then add translations.');
 			return;
 		}
 
@@ -909,7 +1095,43 @@
 		};
 
 		try {
-			const saved = await saveClassRecord(payload);
+			if (isBase) {
+				const saved = await saveClassRecord(payload);
+				await loadAllData();
+				editingClass = saved;
+				closeClassForm();
+				return;
+			}
+
+			const basePayload: ClassFormData = {
+				...payload,
+				name: editingClass!.name,
+				description: editingClass!.description ?? '',
+				footer: editingClass!.footer ?? ''
+			};
+
+			const saved = await saveClassRecord(basePayload);
+
+			const { error: updateError } = await supabase
+				.from('classes')
+				.update({
+					name_translations: setTranslationValue((editingClass as any).name_translations, String(classLanguage), payload.name),
+					description_translations: setTranslationValue(
+						(editingClass as any).description_translations,
+						String(classLanguage),
+						payload.description
+					),
+					footer_translations: setTranslationValue(
+						(editingClass as any).footer_translations,
+						String(classLanguage),
+						payload.footer
+					),
+					updated_at: new Date().toISOString()
+				})
+				.eq('id', saved.id);
+
+			if (updateError) throw updateError;
+
 			await loadAllData();
 			editingClass = saved;
 			closeClassForm();
@@ -1151,7 +1373,100 @@
 		return { iconUrl: null, iconEmoji: null };
 	}
 
-		async function saveRune() {
+	async function recreateAllRuneIcons() {
+		if (bulkRecreatingRunes) return;
+		if (!runes.length) return;
+
+		const confirmed = confirm(
+			`Recreate icons for all ${runes.length} runes?\n\nThis overwrites the stored rune icon image files.`
+		);
+		if (!confirmed) return;
+
+		bulkRecreatingRunes = true;
+		bulkRecreateProgress = { done: 0, total: runes.length, skipped: 0 };
+		bulkRecreateStatus = 'Starting…';
+
+		try {
+			for (const rune of runes) {
+				const now = new Date().toISOString();
+				bulkRecreateStatus = `Generating: ${rune.name}`;
+
+				const isClassRune = Boolean(rune.class_id);
+				const backgroundUrl = isClassRune
+					? null
+					: publicAssetUrl(rune.icon_background_path, { updatedAt: Date.now() }) ??
+						publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
+				const backgroundColor = isClassRune ? '#ffffff' : null;
+				const outerRingColor = null;
+
+				const source =
+					rune.origin_id
+						? resolveIconSource(origins.find((o) => o.id === rune.origin_id))
+						: rune.class_id
+							? resolveIconSource(classes.find((c) => c.id === rune.class_id))
+							: { iconUrl: null, iconEmoji: null };
+
+				if (!source.iconUrl && !source.iconEmoji) {
+					bulkRecreateProgress = {
+						done: (bulkRecreateProgress?.done ?? 0) + 1,
+						total: bulkRecreateProgress?.total ?? runes.length,
+						skipped: (bulkRecreateProgress?.skipped ?? 0) + 1
+					};
+					continue;
+				}
+
+				const iconDataUrl = await generateRuneIcon({
+					originIconUrl: source.iconUrl,
+					originIconEmoji: source.iconEmoji,
+					backgroundUrl,
+					backgroundColor,
+					outerRingColor,
+					disableIconOutline: isClassRune,
+					size: 800
+				});
+
+				const iconBlob = dataUrlToBlob(iconDataUrl);
+				const { data, error: uploadError } = await processAndUploadImage(iconBlob, {
+					folder: `runes/${rune.id}`,
+					filename: 'icon',
+					cropTransparent: false,
+					upsert: true
+				});
+				if (uploadError || !data?.path) {
+					throw uploadError ?? new Error('Failed to upload rune icon.');
+				}
+
+				const { error: updateError } = await supabase
+					.from('runes')
+					.update({
+						icon_path: data.path,
+						updated_at: now
+					})
+					.eq('id', rune.id);
+				if (updateError) throw updateError;
+
+				bulkRecreateProgress = {
+					done: (bulkRecreateProgress?.done ?? 0) + 1,
+					total: bulkRecreateProgress?.total ?? runes.length,
+					skipped: bulkRecreateProgress?.skipped ?? 0
+				};
+			}
+
+			await loadAllData();
+			const skipped = bulkRecreateProgress?.skipped ?? 0;
+			bulkRecreateStatus = skipped
+				? `✓ Recreated rune icons (${skipped} skipped: missing origin/class icon)`
+				: '✓ Recreated rune icons';
+		} catch (err) {
+			console.error(err);
+			bulkRecreateStatus = null;
+			alert(`Failed to recreate rune icons: ${getErrorMessage(err)}`);
+		} finally {
+			bulkRecreatingRunes = false;
+		}
+	}
+
+			async function saveRune() {
 			const name = runeModal.formData.name?.trim() ?? '';
 			if (!name) {
 				alert('Rune name is required.');
@@ -1203,24 +1518,31 @@
 				return;
 			}
 
-			if (runeIconNeedsRegeneration) {
-				runeIconStatus = 'Generating rune icon...';
+				if (runeIconNeedsRegeneration) {
+					runeIconStatus = 'Generating rune icon...';
 
-				const backgroundUrl =
-					publicAssetUrl(payload.icon_background_path, { updatedAt: Date.now() }) ??
-					publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
+					const isClassRune = runeModal.formData.runeType === 'class';
+					const backgroundUrl = isClassRune
+						? null
+						: publicAssetUrl(payload.icon_background_path, { updatedAt: Date.now() }) ??
+							publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
+					const backgroundColor = isClassRune ? '#ffffff' : null;
+					const outerRingColor = null;
 
 				const source =
 					runeModal.formData.runeType === 'origin'
 						? resolveIconSource(origins.find((o) => o.id === payload.origin_id))
 						: resolveIconSource(classes.find((c) => c.id === payload.class_id));
 
-				const iconDataUrl = await generateRuneIcon({
-					originIconUrl: source.iconUrl,
-					originIconEmoji: source.iconEmoji,
-					backgroundUrl,
-					size: 800
-				});
+					const iconDataUrl = await generateRuneIcon({
+						originIconUrl: source.iconUrl,
+						originIconEmoji: source.iconEmoji,
+						backgroundUrl,
+						backgroundColor,
+						outerRingColor,
+						disableIconOutline: isClassRune,
+						size: 800
+					});
 
 				const iconBlob = dataUrlToBlob(iconDataUrl);
 				const { data, error: uploadError } = await processAndUploadImage(iconBlob, {
@@ -1346,6 +1668,17 @@
 			<Button variant="secondary" onclick={() => openSpecialCategoryForm()}>Create Special</Button>
 			<Button variant="primary" onclick={() => openClassForm()}>Create Class</Button>
 		{:else if activeMainTab === 'runes'}
+			<Button
+				variant="secondary"
+				onclick={recreateAllRuneIcons}
+				disabled={bulkRecreatingRunes || loading || runes.length === 0}
+			>
+				{#if bulkRecreatingRunes && bulkRecreateProgress}
+					Recreating… {bulkRecreateProgress.done}/{bulkRecreateProgress.total}
+				{:else}
+					Recreate All Rune Icons
+				{/if}
+			</Button>
 			<Button variant="primary" onclick={() => openRuneForm()}>Create Rune</Button>
 		{/if}
 	{/snippet}
@@ -1417,6 +1750,24 @@
 			/>
 		{/if}
 	{:else if activeMainTab === 'classes'}
+		<div class="language-bar">
+			<FormField label="Language">
+				<Select bind:value={classLanguageSelect} options={classLanguageOptions} />
+			</FormField>
+			<FormField label="Add language">
+				<div class="language-bar__add">
+					<Input bind:value={newClassLanguageDraft} placeholder="e.g. ja" />
+					<Button
+						variant="secondary"
+						onclick={addClassLanguage}
+						disabled={!newClassLanguageDraft.trim()}
+					>
+						Add
+					</Button>
+				</div>
+			</FormField>
+		</div>
+
 		<FilterBar
 			bind:searchValue={classSearch}
 			searchPlaceholder="Search classes"
@@ -1433,6 +1784,7 @@
 				classes={searchFilteredClasses}
 				{specialCategories}
 				{diceNameById}
+				language={classLanguage}
 				onEdit={(cls) => openClassForm(cls)}
 				onDelete={deleteClass}
 				onDeleteMultiple={deleteClasses}
@@ -1443,6 +1795,7 @@
 			<ClassesTableView
 				classes={searchFilteredClasses}
 				{diceNameById}
+				language={classLanguage}
 				onEdit={(cls) => openClassForm(cls)}
 			/>
 		{:else if activeClassSubTab === 'pdf'}
@@ -1450,6 +1803,7 @@
 				classes={classes}
 				{specialCategories}
 				{diceNameById}
+				language={classLanguage}
 			/>
 		{/if}
 	{:else if activeMainTab === 'runes'}
@@ -1475,6 +1829,22 @@
 				if (key === 'class') runeClassFilter = value?.toString() ?? 'all';
 			}}
 		/>
+
+		{#if bulkRecreateStatus || bulkRecreatingRunes}
+			<div class="bulk-status" aria-live="polite">
+				{#if bulkRecreatingRunes && bulkRecreateProgress}
+					Recreating rune icons… {bulkRecreateProgress.done}/{bulkRecreateProgress.total}
+					{#if bulkRecreateProgress.skipped > 0}
+						(skipped {bulkRecreateProgress.skipped})
+					{/if}
+					{#if bulkRecreateStatus}
+						— {bulkRecreateStatus}
+					{/if}
+				{:else if bulkRecreateStatus}
+					{bulkRecreateStatus}
+				{/if}
+			</div>
+		{/if}
 
 		{#if loading}
 			<div class="loading-state">Loading runes...</div>
@@ -1606,8 +1976,8 @@
 		<form id="class-editor-form" class="class-form" onsubmit={submitClassForm}>
 			<section class="class-form__grid">
 				<label>
-					Name
-					<input type="text" bind:value={classFormData.name} required />
+					Name{classLanguage === BASE_LANGUAGE ? '' : ` (${classLanguage})`}
+					<input type="text" bind:value={classFormData.name} required={classLanguage === BASE_LANGUAGE} />
 				</label>
 				<label>
 					Position
@@ -1676,12 +2046,12 @@
 			</section>
 
 			<label class="span-full">
-				Description
+				Description{classLanguage === BASE_LANGUAGE ? '' : ` (${classLanguage})`}
 				<textarea rows="3" bind:value={classFormData.description}></textarea>
 			</label>
 
 			<label class="span-full">
-				Footer
+				Footer{classLanguage === BASE_LANGUAGE ? '' : ` (${classLanguage})`}
 				<textarea rows="2" bind:value={classFormData.footer}></textarea>
 			</label>
 
@@ -1771,7 +2141,7 @@
 									Count
 									<input
 										type="text"
-										value={breakpoint.count}
+										value={getBreakpointCountInputValue(breakpoint)}
 										oninput={(event) => updateBreakpointCount(index, event.currentTarget.value)}
 									/>
 								</label>
@@ -1801,7 +2171,7 @@
 								Description
 								<textarea
 									rows="2"
-									value={breakpoint.description ?? ''}
+									value={getBreakpointDescriptionInputValue(breakpoint)}
 									oninput={(event) => updateBreakpointDescription(index, event.currentTarget.value)}
 								></textarea>
 							</label>
@@ -1847,7 +2217,7 @@
 													</button>
 												</header>
 												<p class="effect-row__summary">
-													{summarizeEffectWithScaling(classFormData.name ?? '', effect)}
+													{summarizeEffectWithScaling(editingClass?.name ?? classFormData.name ?? '', effect)}
 												</p>
 
 												{#if effect.type === 'dice'}
@@ -1907,7 +2277,7 @@
 														{/if}
 														{#if (classFormData.name ?? '').trim().toLowerCase() === sorcererName}
 															<p class="effect-body__note span-full">
-																Preview: {summarizeEffectWithScaling(classFormData.name ?? '', effect)}.
+																Preview: {summarizeEffectWithScaling(editingClass?.name ?? classFormData.name ?? '', effect)}.
 																Rune count multiplies the dice quantity during gameplay.
 															</p>
 														{/if}
@@ -1944,11 +2314,19 @@
 															Condition
 															<input
 																type="text"
-																value={effect.condition ?? ''}
+																value={getConditionInputValue(effect)}
 																oninput={(event) =>
 																	updateFlatStatEffect(index, effectIndex, (current) => ({
 																		...current,
-																		condition: event.currentTarget.value
+																		...(classLanguage === BASE_LANGUAGE
+																			? { condition: event.currentTarget.value }
+																			: {
+																					condition_translations: setTranslationValue(
+																						(current as any).condition_translations,
+																						String(classLanguage),
+																						event.currentTarget.value
+																					)
+																				})
 																	}))}
 															/>
 														</label>
@@ -1990,11 +2368,19 @@
 															Description
 															<textarea
 																rows="2"
-																value={effect.description}
+																value={getBenefitDescriptionInputValue(effect)}
 																oninput={(event) =>
 																	updateBenefitEffect(index, effectIndex, (current) => ({
 																		...current,
-																		description: event.currentTarget.value
+																		...(classLanguage === BASE_LANGUAGE
+																			? { description: event.currentTarget.value }
+																			: {
+																					description_translations: setTranslationValue(
+																						(current as any).description_translations,
+																						String(classLanguage),
+																						event.currentTarget.value
+																					)
+																				})
 																	}))}
 															></textarea>
 														</label>
@@ -2244,6 +2630,24 @@
 		color: #f87171;
 	}
 
+	.language-bar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		padding: 1rem;
+		margin-bottom: 0.75rem;
+		background: rgba(15, 23, 42, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		border-radius: 10px;
+		align-items: flex-end;
+	}
+
+	.language-bar__add {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+
 	/* Sub-tabs styling */
 	.sub-tabs {
 		background: rgba(15, 23, 42, 0.3);
@@ -2254,6 +2658,16 @@
 	.sub-tabs__bar {
 		display: flex;
 		gap: 2px;
+	}
+
+	.bulk-status {
+		margin: 0.75rem 1rem;
+		padding: 0.6rem 0.8rem;
+		border-radius: 10px;
+		background: rgba(15, 23, 42, 0.55);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		color: #cbd5e1;
+		font-size: 0.75rem;
 	}
 
 	.sub-tab {

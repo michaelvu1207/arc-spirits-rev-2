@@ -95,7 +95,7 @@
 
 			const uploadedPath = data?.path ?? '';
 			const { error: updateError } = await supabase
-				.from('traveler_quests')
+				.from('quests')
 				.update({ card_image_path: uploadedPath, updated_at: new Date().toISOString() })
 				.eq('id', quest.id);
 
@@ -214,7 +214,7 @@
 				{#if allQuests.length === 0}
 					<div class="empty-state">
 						<p>No quests available.</p>
-						<p class="hint">Create quests in the Quests tab to generate cards.</p>
+						<p class="hint">Create missions in the Missions page to generate cards.</p>
 					</div>
 				{:else}
 					<div class="gallery-grid">

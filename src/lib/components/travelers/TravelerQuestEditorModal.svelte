@@ -3,7 +3,7 @@
 	import { FormField, Input, Textarea, Button } from '$lib/components/ui';
 	import { IconPicker } from '$lib/components/shared';
 	import type { TravelerQuestRow } from '$lib/types/gameData';
-	import { getIconPoolUrl } from '$lib/utils/iconPool';
+	import { getIconPoolUrl, loadIconPool } from '$lib/utils/iconPool';
 
 	interface Props {
 		open?: boolean;
@@ -22,14 +22,20 @@
 	let showIconPicker = $state(false);
 	let rewardMode = $state<'icons' | 'text'>('icons');
 	let tagInput = $state('');
+	let vpRawIconId = $state<string | null>(null);
+	let vpRawCountDraft = $state<number | null>(null);
 
-	const titleText = $derived.by(() => (quest.id ? 'Edit Traveler Quest' : 'Create Traveler Quest'));
+	const VP_RAW_ICON_NAME = 'vp_raw';
+	const MAX_VP_ICONS = 10;
+
+	const titleText = $derived.by(() => (quest.id ? 'Edit Mission' : 'Create Mission'));
 
 	function ensureDefaults() {
 		if (!quest.reward_icon_ids) quest.reward_icon_ids = [];
 		if (quest.reward_text === undefined) quest.reward_text = null;
 		if (quest.description === undefined) quest.description = null;
 		if (!Array.isArray(quest.tags)) quest.tags = [];
+		if (quest.tags.length > 1) quest.tags = [quest.tags[0]];
 		if (quest.order_num === undefined || quest.order_num === null) quest.order_num = 0;
 		const rawQuantity = (quest as any).quantity;
 		const normalizedQuantity = Number.isFinite(Number(rawQuantity))
@@ -45,6 +51,7 @@
 			quest.reward_text = null;
 		} else {
 			quest.reward_icon_ids = [];
+			vpRawCountDraft = 0;
 		}
 	}
 
@@ -52,29 +59,23 @@
 		return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 	}
 
-	function addTag() {
+	function applyTag() {
 		ensureDefaults();
 		const next = normalizeTag(tagInput);
-		if (!next) {
-			tagInput = '';
-			return;
-		}
-		const tags = quest.tags ?? [];
-		if (!tags.includes(next)) {
-			quest.tags = [...tags, next];
-		}
-		tagInput = '';
+		quest.tags = next ? [next] : [];
+		tagInput = next;
 	}
 
-	function removeTag(tag: string) {
+	function clearTag() {
 		ensureDefaults();
-		quest.tags = (quest.tags ?? []).filter((t) => t !== tag);
+		quest.tags = [];
+		tagInput = '';
 	}
 
 	function handleTagKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter') {
 			event.preventDefault();
-			addTag();
+			applyTag();
 		}
 	}
 
@@ -87,10 +88,52 @@
 		ensureDefaults();
 		const icons = quest.reward_icon_ids ?? [];
 		quest.reward_icon_ids = icons.filter((_, i) => i !== index);
+		if (vpRawIconId) {
+			vpRawCountDraft = (quest.reward_icon_ids ?? []).filter((id) => id === vpRawIconId).length;
+		}
+	}
+
+	function handleRewardIconSelect(ids: string[]) {
+		ensureDefaults();
+		quest.reward_icon_ids = ids;
+		if (vpRawIconId) {
+			vpRawCountDraft = ids.filter((id) => id === vpRawIconId).length;
+		}
+	}
+
+	async function hydrateVpRawIcon() {
+		const icons = await loadIconPool();
+		vpRawIconId = icons.find((i) => i.name === VP_RAW_ICON_NAME)?.id ?? null;
+		if (!vpRawIconId) {
+			vpRawCountDraft = null;
+			return;
+		}
+		const count = (quest.reward_icon_ids ?? []).filter((id) => id === vpRawIconId).length;
+		vpRawCountDraft = count;
+	}
+
+	async function applyVpRawCount() {
+		ensureDefaults();
+		const raw = Number(vpRawCountDraft ?? 0);
+		const count = Number.isFinite(raw) ? Math.max(0, Math.min(MAX_VP_ICONS, Math.trunc(raw))) : 0;
+
+		if (!vpRawIconId) {
+			await hydrateVpRawIcon();
+		}
+
+		if (!vpRawIconId) {
+			alert(`Missing "${VP_RAW_ICON_NAME}" icon in icon_pool.`);
+			return;
+		}
+
+		setRewardMode('icons');
+		quest.reward_icon_ids = Array.from({ length: count }, () => vpRawIconId!);
+		showIconPicker = false;
 	}
 
 	function save() {
 		ensureDefaults();
+		applyTag();
 		const title = (quest.title ?? '').trim();
 		if (!title) {
 			alert('Title is required.');
@@ -99,8 +142,6 @@
 
 		const rewardText = (quest.reward_text ?? '').trim();
 		const rewardIconIds = quest.reward_icon_ids ?? [];
-		const tags = (quest.tags ?? []).map(normalizeTag).filter(Boolean);
-		quest.tags = Array.from(new Set(tags));
 		const quantity = Math.max(1, Math.trunc(Number((quest as any).quantity ?? 1)));
 
 		onsave?.({
@@ -119,9 +160,11 @@
 	$effect(() => {
 		if (open && !lastOpen) {
 			ensureDefaults();
+			// Preload icons so the picker doesn't stutter the first time it's opened.
+			void hydrateVpRawIcon();
 			rewardMode = (quest.reward_text ?? '').trim() ? 'text' : 'icons';
 			showIconPicker = false;
-			tagInput = '';
+			tagInput = quest.tags && quest.tags.length > 0 ? quest.tags[0] : '';
 		}
 		lastOpen = open;
 	});
@@ -130,35 +173,34 @@
 <Modal bind:open size="md" title={titleText} closeOnBackdrop={true} closeOnEscape={true}>
 		{#snippet children()}
 			<FormField label="Title" required>
-				<Input type="text" bind:value={quest.title} placeholder="Quest title..." />
+				<Input type="text" bind:value={quest.title} placeholder="Mission title..." />
 			</FormField>
 
 			<FormField label="Description">
-				<Textarea rows={4} bind:value={quest.description} placeholder="Quest description..." />
+				<Textarea rows={4} bind:value={quest.description} placeholder="Mission description..." />
 			</FormField>
 
-			<FormField label="Tags">
+			<FormField label="Tag" helperText="Optional; used to group missions.">
 				<div class="tag-editor">
 					<div class="tag-input">
 						<Input
 							type="text"
 							bind:value={tagInput}
-							placeholder="Add a tag (press Enter)…"
+							placeholder="Set a tag (press Enter)…"
 							onkeydown={handleTagKeydown}
+							onblur={() => applyTag()}
 						/>
-						<Button variant="secondary" onclick={addTag}>Add</Button>
+						<Button variant="secondary" onclick={applyTag}>Set</Button>
 					</div>
 
 					{#if quest.tags && quest.tags.length > 0}
 						<div class="tag-list">
-							{#each quest.tags as tag, idx (`tag-${idx}`)}
-								<button type="button" class="tag-pill" onclick={() => removeTag(tag)} title="Remove tag">
-									{tag} <span aria-hidden="true">×</span>
-								</button>
-							{/each}
+							<button type="button" class="tag-pill" onclick={clearTag} title="Clear tag">
+								{quest.tags[0]} <span aria-hidden="true">×</span>
+							</button>
 						</div>
 					{:else}
-						<div class="tag-empty">No tags</div>
+						<div class="tag-empty">No tag</div>
 					{/if}
 				</div>
 			</FormField>
@@ -177,20 +219,42 @@
 					{/if}
 				</div>
 
-				<div class="reward-mode">
-					<Button variant={rewardMode === 'icons' ? 'primary' : 'secondary'} onclick={() => setRewardMode('icons')}>
-						Icons
-					</Button>
-					<Button variant={rewardMode === 'text' ? 'primary' : 'secondary'} onclick={() => setRewardMode('text')}>
-						Text
-					</Button>
-				</div>
+			<div class="reward-mode">
+				<Button variant={rewardMode === 'icons' ? 'primary' : 'secondary'} onclick={() => setRewardMode('icons')}>
+					Icons
+				</Button>
+				<Button variant={rewardMode === 'text' ? 'primary' : 'secondary'} onclick={() => setRewardMode('text')}>
+					Text
+				</Button>
+			</div>
 
 				{#if rewardMode === 'text'}
 					<FormField label="Reward Text">
 						<Textarea rows={2} bind:value={quest.reward_text} placeholder="Reward text..." />
 					</FormField>
 				{:else}
+					<div class="reward-quick-vp">
+						<span class="reward-quick-vp__label">Quick VP</span>
+						<Input
+							type="number"
+							min={0}
+							max={MAX_VP_ICONS}
+							step={1}
+							bind:value={vpRawCountDraft}
+							placeholder="0"
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									void applyVpRawCount();
+								}
+							}}
+						/>
+						<Button variant="secondary" size="sm" onclick={() => void applyVpRawCount()}>
+							Set
+						</Button>
+						<span class="reward-quick-vp__hint">{VP_RAW_ICON_NAME} × N (max {MAX_VP_ICONS})</span>
+					</div>
+
 					<div class="reward-preview">
 						{#if quest.reward_icon_ids && quest.reward_icon_ids.length > 0}
 							{#each quest.reward_icon_ids as iconId, idx (`reward-${idx}`)}
@@ -212,7 +276,7 @@
 						<div class="reward-picker">
 							<IconPicker
 								selected={quest.reward_icon_ids ?? []}
-								onselect={(ids) => (quest.reward_icon_ids = ids)}
+								onselect={handleRewardIconSelect}
 								multiple={true}
 								maxSelection={10}
 								allowDuplicates={true}
@@ -300,13 +364,31 @@
 			align-items: center;
 		}
 
-		.reward-preview {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 0.4rem;
-			align-items: center;
-			min-height: 36px;
-		}
+	.reward-preview {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		align-items: center;
+		min-height: 36px;
+	}
+
+	.reward-quick-vp {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.reward-quick-vp__label {
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: rgba(226, 232, 240, 0.9);
+	}
+
+	.reward-quick-vp__hint {
+		font-size: 0.75rem;
+		color: rgba(148, 163, 184, 0.8);
+	}
 
 	.reward-pill {
 		width: 34px;

@@ -3,15 +3,17 @@
 	import { DICE_TYPE_ICONS, DICE_TYPE_LABELS } from '$lib/features/dice/dice';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
+	import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue } from '$lib/i18n/translations';
 
 	type Props = {
 		dices: CustomDiceWithSides[];
 		onEdit: (dice: CustomDiceWithSides) => void;
 		onDelete: (dice: CustomDiceWithSides) => void;
 		onDeleteMultiple?: (diceIds: string[]) => void;
+		language?: TranslationLanguage;
 	};
 
-	let { dices, onEdit, onDelete, onDeleteMultiple }: Props = $props();
+	let { dices, onEdit, onDelete, onDeleteMultiple, language = BASE_LANGUAGE }: Props = $props();
 
 	let selectedIds = $state<Set<string>>(new Set());
 
@@ -38,6 +40,17 @@
 			onDeleteMultiple(Array.from(selectedIds));
 			selectedIds = new Set();
 		}
+	}
+
+	function getDiceName(dice: CustomDiceWithSides): string {
+		if (language === BASE_LANGUAGE) return dice.name;
+		return getTranslationValue((dice as any).name_translations, String(language)) ?? dice.name;
+	}
+
+	function getDiceDescription(dice: CustomDiceWithSides): string | null {
+		const base = dice.description ?? null;
+		if (language === BASE_LANGUAGE) return base;
+		return getTranslationValue((dice as any).description_translations, String(language)) ?? base;
 	}
 
 	/**
@@ -83,6 +96,8 @@
 	{#each dices as dice (dice.id)}
 		{@const stats = calculateStats(dice)}
 		{@const isSelected = selectedIds.has(dice.id)}
+		{@const displayName = getDiceName(dice)}
+		{@const displayDescription = getDiceDescription(dice)}
 		<article class="card dice-card" class:selected={isSelected}>
 			<header>
 				<div class="checkbox-wrapper">
@@ -90,7 +105,7 @@
 						type="checkbox"
 						checked={isSelected}
 						onchange={() => toggleSelect(dice.id)}
-						aria-label="Select {dice.name}"
+						aria-label="Select {displayName}"
 					/>
 				</div>
 				<div class="header-content">
@@ -98,7 +113,7 @@
 						<span class="dice-icon">{dice.icon}</span>
 					{/if}
 					<div class="title-group">
-						<h2>{dice.name}</h2>
+						<h2>{displayName}</h2>
 						<div class="type-badge" data-type={dice.dice_type}>
 							<span class="type-icon">{DICE_TYPE_ICONS[dice.dice_type]}</span>
 							<span class="type-label">{DICE_TYPE_LABELS[dice.dice_type]}</span>
@@ -113,9 +128,9 @@
 			</header>
 
 			<div class="dice-details">
-				{#if dice.description}
+				{#if displayDescription}
 					<div class="detail-section">
-						<p class="description-text">{dice.description}</p>
+						<p class="description-text">{displayDescription}</p>
 					</div>
 				{/if}
 

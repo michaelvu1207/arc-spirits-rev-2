@@ -178,9 +178,13 @@
 					continue;
 				}
 
-				const backgroundUrl =
-					publicAssetUrl(rune.icon_background_path, { updatedAt: rune.updated_at ?? Date.now() }) ??
-					runeBackgroundUrl;
+					const isClassRune = Boolean(rune.class_id);
+					const backgroundUrl = isClassRune
+						? null
+						: publicAssetUrl(rune.icon_background_path, { updatedAt: rune.updated_at ?? Date.now() }) ??
+							runeBackgroundUrl;
+					const backgroundColor = isClassRune ? '#ffffff' : null;
+					const outerRingColor = null;
 
 				let originIconUrl: string | null = null;
 				let originIconEmoji: string | null = null;
@@ -199,12 +203,15 @@
 				}
 
 				try {
-					const runeIconUrl = await generateRuneIcon({
-						originIconUrl,
-						originIconEmoji,
-						backgroundUrl,
-						size: 800
-					});
+						const runeIconUrl = await generateRuneIcon({
+							originIconUrl,
+							originIconEmoji,
+							backgroundUrl,
+							backgroundColor,
+							outerRingColor,
+							disableIconOutline: isClassRune,
+							size: 800
+						});
 					runeImages.push({
 						name: rune.name,
 					url: runeIconUrl,

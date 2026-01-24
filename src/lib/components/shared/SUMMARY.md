@@ -148,8 +148,8 @@ All components follow these patterns:
   - `deleteStorageFile()` - Remove from storage
 
 ### Existing Patterns Analyzed
-- `/src/routes/origins/+page.svelte` - Image upload patterns
-- `/src/routes/shop-analysis/+page.svelte` - Number control patterns
+- `/src/routes/traits/+page.svelte` - Image upload patterns
+- `/src/routes/editions/+page.svelte` - Number control patterns
 - `/src/lib/components/CardActionMenu.svelte` - Dropdown menu patterns
 
 ## Testing

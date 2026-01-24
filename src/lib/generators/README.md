@@ -37,7 +37,7 @@ const artifactBlob = await generateArtifactCardPNG(artifact, origins, runes, tag
 const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewardTrackIconUrls, 'en');
 
 // Generate event card
-const eventBlob = await generateEventCardPNG(event, artUrl);
+const eventBlob = await generateEventCardPNG(event);
 
 // Generate traveler card
 const travelerBlob = await generateTravelerCardPNG(traveler);
@@ -117,7 +117,7 @@ The `shared/canvas.ts` module provides these utilities:
 ### Monster Cards
 - **Dimensions**: 600x437px (Blood Crimson template, exported at 2x resolution)
 - **Features**: Full-height art panel with floating stat bar, vein/slash overlays, effect list, kill/defeat reward icons
-- **States**: tainted/corrupt/fallen/boss (red spectrum)
+- **Stages**: stage_1/stage_2/stage_3/final_stage/inactive (formerly tainted/corrupt/fallen/arcane)
 
 ### Event Cards
 - **Dimensions**: 600x400px

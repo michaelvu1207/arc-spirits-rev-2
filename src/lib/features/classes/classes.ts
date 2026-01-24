@@ -10,6 +10,7 @@ import type {
 	FlatStatEffect,
 	MultiplierEffect
 } from '$lib/types/effects';
+import { BASE_LANGUAGE, type TranslationLanguage, getTranslationValue } from '$lib/i18n/translations';
 
 export interface PrismaticForm {
 	name: string;
@@ -129,7 +130,8 @@ export function parseEffectSchema(value: Json | null): EffectBreakpoint[] {
 
 export function formatEffectSummary(
     effect: Effect,
-    resolveDiceName?: (id: string | null | undefined, fallback?: string) => string
+    resolveDiceName?: (id: string | null | undefined, fallback?: string) => string,
+	language: TranslationLanguage = BASE_LANGUAGE
 ): string {
     switch (effect.type) {
         case 'dice': {
@@ -140,13 +142,28 @@ export function formatEffectSummary(
             return `${diceEffect.quantity}× ${label}`;
         }
         case 'flat_stat':
-            return `+${effect.value} ${effect.stat}${effect.condition ? ` (${effect.condition})` : ''}`;
+			{
+				const typed = effect as FlatStatEffect;
+				const baseCondition = typed.condition?.trim() ?? '';
+				const condition =
+					language !== BASE_LANGUAGE
+						? getTranslationValue(typed.condition_translations, String(language)) ?? baseCondition
+						: baseCondition;
+				return `+${typed.value} ${typed.stat}${condition ? ` (${condition})` : ''}`;
+			}
         case 'multiplier':
             return `${effect.value}× ${effect.stat}`;
         case 'backup_trim':
             return `Backup remove ${effect.value} die${effect.value === 1 ? '' : 's'}`;
         case 'benefit':
-            return effect.description;
+			if (language !== BASE_LANGUAGE) {
+				const translated = getTranslationValue(
+					(effect as BenefitEffect).description_translations,
+					String(language)
+				);
+				if (translated) return translated;
+			}
+			return effect.description;
         default:
             return JSON.stringify(effect);
     }
@@ -173,8 +190,8 @@ function coerceBreakpoint(raw: unknown): EffectBreakpoint | null {
 	if (!raw || typeof raw !== 'object') return null;
 	const record = raw as Record<string, unknown>;
 	const countRaw = record.count;
-	const countNumber = typeof countRaw === 'number' ? countRaw : parseInt(String(countRaw ?? ''), 10);
-	const count = Number.isFinite(countNumber) ? countNumber : String(countRaw ?? '');
+	const count = coerceBreakpointCount(countRaw);
+	const count_translations = coerceTranslationRecord(record.count_translations);
 
 	const colorRaw = record.color;
 	const color = EFFECT_COLORS.includes(colorRaw as BreakpointColor)
@@ -183,6 +200,7 @@ function coerceBreakpoint(raw: unknown): EffectBreakpoint | null {
 
 	const description =
 		typeof record.description === 'string' ? record.description.replace(/\r\n/g, '\n') : undefined;
+	const description_translations = coerceTranslationRecord(record.description_translations);
 
 	const effectsRaw = Array.isArray(record.effects) ? record.effects : [];
 	const effects: Effect[] = effectsRaw
@@ -191,10 +209,23 @@ function coerceBreakpoint(raw: unknown): EffectBreakpoint | null {
 
 	return {
 		count,
+		count_translations,
 		color,
 		description,
+		description_translations,
 		effects
 	};
+}
+
+function coerceBreakpointCount(value: unknown): EffectBreakpoint['count'] {
+	if (typeof value === 'number' && Number.isFinite(value)) return value;
+	const text = String(value ?? '').trim();
+	if (text.length === 0) return '';
+	if (/^\d+$/.test(text)) {
+		const parsed = Number.parseInt(text, 10);
+		return Number.isFinite(parsed) ? parsed : text;
+	}
+	return text;
 }
 
 function coerceEffect(raw: unknown): Effect | null {
@@ -220,7 +251,8 @@ function coerceEffect(raw: unknown): Effect | null {
 				type: 'flat_stat',
 				stat: record.stat === 'defense' ? 'defense' : 'attack',
 				value: toPositiveNumber(record.value, 1),
-				condition: typeof record.condition === 'string' ? record.condition : undefined
+				condition: typeof record.condition === 'string' ? record.condition : undefined,
+				condition_translations: coerceTranslationRecord(record.condition_translations)
 			};
 		case 'multiplier':
 			return {
@@ -232,6 +264,7 @@ function coerceEffect(raw: unknown): Effect | null {
 			return {
 				type: 'benefit',
 				description: typeof record.description === 'string' ? record.description : '',
+				description_translations: coerceTranslationRecord(record.description_translations),
 				value: typeof record.value === 'number' ? record.value : undefined,
 				benefit_type: typeof record.benefit_type === 'string' ? record.benefit_type : undefined
 			};
@@ -302,16 +335,14 @@ function sanitizeEffectSchema(schema: EffectBreakpoint[]): any[] {
 }
 
 function sanitizeBreakpoint(bp: EffectBreakpoint): Record<string, unknown> | null {
-	const countNumber =
-		typeof bp.count === 'number'
-			? bp.count
-			: Number.parseInt(String(bp.count ?? '').trim(), 10);
-	const count = Number.isFinite(countNumber) ? countNumber : String(bp.count ?? '').trim();
+	const count = coerceBreakpointCount(bp.count);
 
 	const color = EFFECT_COLORS.includes(bp.color ?? ('' as BreakpointColor))
 		? bp.color
 		: undefined;
 	const description = bp.description ? bp.description.replace(/\r\n/g, '\n').trim() : undefined;
+	const count_translations = sanitizeTranslationRecord(bp.count_translations);
+	const description_translations = sanitizeTranslationRecord(bp.description_translations);
 	const effects = Array.isArray(bp.effects)
 		? bp.effects
 				.map((effect) => sanitizeEffect(effect))
@@ -328,6 +359,8 @@ function sanitizeBreakpoint(bp: EffectBreakpoint): Record<string, unknown> | nul
 	};
 	if (color) payload.color = color;
 	if (description && description.length) payload.description = description;
+	if (count_translations) payload.count_translations = count_translations;
+	if (description_translations) payload.description_translations = description_translations;
 	return payload;
 }
 
@@ -351,10 +384,12 @@ function sanitizeEffect(effect: Effect): Record<string, unknown> | null {
         }
 		case 'flat_stat': {
 			const typed = effect as FlatStatEffect;
+			const condition_translations = sanitizeTranslationRecord(typed.condition_translations);
 			return {
 				type: 'flat_stat',
 				stat: typed.stat === 'defense' ? 'defense' : 'attack',
 				value: toPositiveNumber(typed.value, 1),
+				...(condition_translations ? { condition_translations } : {}),
 				...(typed.condition?.trim()
 					? {
 							condition: typed.condition.trim()
@@ -373,10 +408,12 @@ function sanitizeEffect(effect: Effect): Record<string, unknown> | null {
 		case 'benefit': {
 			const typed = effect as BenefitEffect;
 			const description = typed.description.trim();
+			const description_translations = sanitizeTranslationRecord(typed.description_translations);
 			const payload: Record<string, unknown> = {
 				type: 'benefit',
 				description
 			};
+			if (description_translations) payload.description_translations = description_translations;
 			if (typeof typed.value === 'number') payload.value = typed.value;
 			if (typed.benefit_type?.trim()) payload.benefit_type = typed.benefit_type.trim();
 			return payload;
@@ -411,6 +448,23 @@ function toPositiveInt(value: unknown, fallback: number): number {
 	const num = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
 	if (!Number.isFinite(num) || num <= 0) return fallback;
 	return Math.floor(num);
+}
+
+function coerceTranslationRecord(value: unknown): Record<string, string> | null {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+	const out: Record<string, string> = {};
+	for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+		if (typeof entry !== 'string') continue;
+		const trimmed = entry.trim();
+		if (!trimmed) continue;
+		out[key] = trimmed;
+	}
+	return Object.keys(out).length ? out : null;
+}
+
+function sanitizeTranslationRecord(value: unknown): Record<string, string> | undefined {
+	const record = coerceTranslationRecord(value);
+	return record ?? undefined;
 }
 
 function toPositiveNumber(value: unknown, fallback: number): number {

@@ -1,18 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { TravelerRow, TravelerQuestRow, IconPoolRow, TradeRow, GainRow } from '$lib/types/gameData';
+	import type { TravelerRow, IconPoolRow, TradeRow, GainRow } from '$lib/types/gameData';
 	import { publicAssetUrl, processAndUploadImage } from '$lib/utils/storage';
 	import { getErrorMessage } from '$lib/utils';
-	import { generateTravelerCardPNG, generateQuestCardPNG } from '$lib/generators/cards';
+	import { generateTravelerCardPNG } from '$lib/generators/cards';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { Button } from '$lib/components/ui';
 	import { MonsterCardGallery } from '$lib/components/monsters';
 	import TravelerCardCanvasPreview from '$lib/components/travelers/TravelerCardCanvasPreview.svelte';
-	import TravelerQuestGrid from '$lib/components/travelers/TravelerQuestGrid.svelte';
-	import TravelerQuestEditorModal from '$lib/components/travelers/TravelerQuestEditorModal.svelte';
-		import type { ResolvedRewardRow } from '$lib/components/abyss-deck';
+	import type { ResolvedRewardRow } from '$lib/components/abyss-deck';
 	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 	import type {
 		DeckOrderItem,
@@ -38,19 +36,15 @@
 	// Tab state
 	const tabs: Tab[] = [
 		{ id: 'deck', label: 'Deck Builder', icon: '🃏' },
-		{ id: 'quests', label: 'Traveler Quests', icon: '📜' },
-		{ id: 'gallery', label: 'Card Gallery', icon: '🖼️' },
-		{ id: 'quest-gallery', label: 'Quest Gallery', icon: '📜' }
+		{ id: 'gallery', label: 'Card Gallery', icon: '🖼️' }
 	];
 	let activeTab = $state('deck');
 
 	// Data state
 	let travelers = $state<Traveler[]>([]);
-	let travelerQuests = $state<TravelerQuestRow[]>([]);
 	let allCards = $state<CardItem[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let questError = $state<string | null>(null);
 
 	// Lookups
 	let iconPool = $state<IconPoolRow[]>([]);
@@ -70,94 +64,74 @@
 	let progressMessage = $state('');
 	let showGalleryModal = $state(false);
 
-	// Quest gallery state
-	let questSearchQuery = $state('');
-	let questStatusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
-	let selectedQuestIds = $state(new Set<string>());
-	let generatingQuests = $state(new Set<string>());
-	let questProgressMessage = $state('');
-
-	// Traveler quests editor state
-	let questEditorOpen = $state(false);
-	let questDraft = $state<Partial<TravelerQuestRow>>({});
-	let savingQuest = $state(false);
-	let deletingQuestIds = $state(new Set<string>());
-
-	// Quest list UI preferences
-	let showQuestRenderedPreview = $state(false);
-	let hasLoadedQuestPreviewPreference = $state(false);
-
-	$effect(() => {
-		if (hasLoadedQuestPreviewPreference) return;
-		if (typeof window === 'undefined') return;
-		const saved = localStorage.getItem('traveler-quests-rendered-preview');
-		if (saved !== null) {
-			showQuestRenderedPreview = saved === 'true';
-		}
-		hasLoadedQuestPreviewPreference = true;
-	});
-
-	$effect(() => {
-		if (!hasLoadedQuestPreviewPreference) return;
-		if (typeof window === 'undefined') return;
-		localStorage.setItem('traveler-quests-rendered-preview', String(showQuestRenderedPreview));
-	});
-
 	const selectedCount = $derived(selectedCardIds.size);
 	const generatedCount = $derived(allCards.filter(c => c.card_image_path).length);
 	const totalCount = $derived(allCards.length);
-	const filteredCards = $derived.by(() => {
-		const query = searchQuery.trim().toLowerCase();
-		return allCards.filter(card => {
-			if (typeFilter !== 'all' && card.type !== typeFilter) return false;
-			if (stateFilter !== 'all' && card.type === 'monster') {
-				const traveler = card.data as Traveler;
-				if (traveler.state !== stateFilter) return false;
-			}
+		const filteredCards = $derived.by(() => {
+			const query = searchQuery.trim().toLowerCase();
+			return allCards.filter(card => {
+				if (typeFilter !== 'all' && card.type !== typeFilter) return false;
+				if (stateFilter !== 'all' && card.type === 'monster') {
+					const traveler = card.data as Traveler;
+					if (traveler.state !== stateFilter) return false;
+				}
 			if (statusFilter === 'generated' && !card.card_image_path) return false;
 			if (statusFilter === 'not-generated' && card.card_image_path) return false;
 			if (query && !card.name.toLowerCase().includes(query)) {
 				return false;
 			}
 			return true;
+			});
 		});
-	});
 
-	const travelersAsMonsters = $derived.by(() => {
-		return travelers.map((traveler) => ({
-			...traveler,
-			// AbyssDeckWorkspace / MonsterCardGallery expect MonsterRow shape.
-			monster_classification: 'monster' as const,
-			// Travelers may still have legacy boss state; normalize for the shared UI.
-			state: traveler.state === 'boss' ? 'fallen' : traveler.state
-		}));
-	});
-
-	// Quest gallery derived values
-	const selectedQuestCount = $derived(selectedQuestIds.size);
-	const generatedQuestCount = $derived(travelerQuests.filter(q => q.card_image_path).length);
-	const totalQuestCount = $derived(travelerQuests.length);
-	const filteredQuests = $derived.by(() => {
-		const query = questSearchQuery.trim().toLowerCase();
-		return travelerQuests.filter(quest => {
-			if (questStatusFilter === 'generated' && !quest.card_image_path) return false;
-			if (questStatusFilter === 'not-generated' && quest.card_image_path) return false;
-			if (query && !quest.title.toLowerCase().includes(query)) {
-				return false;
+		function travelerStateToStage(state: Traveler['state'] | null | undefined): AbyssMonsterFormData['stage'] {
+			switch (state) {
+				case 'tainted':
+					return 'stage_1';
+				case 'corrupt':
+					return 'stage_2';
+				case 'fallen':
+					return 'stage_3';
+				case 'boss':
+					return 'stage_3';
+				default:
+					return 'stage_1';
 			}
-			return true;
+		}
+
+		function stageToTravelerState(stage: AbyssMonsterFormData['stage'] | null | undefined): Traveler['state'] {
+			switch (stage) {
+				case 'stage_1':
+					return 'tainted';
+				case 'stage_2':
+					return 'corrupt';
+				case 'stage_3':
+					return 'fallen';
+				case 'final_stage':
+					return 'boss';
+				case 'inactive':
+				default:
+					return 'tainted';
+			}
+		}
+
+		const travelersAsMonsters = $derived.by(() => {
+			return travelers.map((traveler) => ({
+				...traveler,
+				// AbyssDeckWorkspace / MonsterCardGallery expect MonsterRow shape.
+				monster_classification: 'monster' as const,
+				stage: travelerStateToStage(traveler.state)
+			}));
 		});
-	});
 
 	onMount(loadData);
 
 	async function loadData() {
 		loading = true;
 		error = null;
-		questError = null;
 		try {
 			iconPool = await loadAllIcons();
-			await Promise.all([loadTravelers(), loadTravelerQuests()]);
+			await loadTravelers();
 		} catch (err) {
 			error = getErrorMessage(err);
 		} finally {
@@ -209,113 +183,6 @@
 				data: m
 			}))
 		];
-	}
-
-		async function loadTravelerQuests() {
-			const { data, error: err } = await supabase
-				.from('traveler_quests')
-				.select('*')
-				.order('order_num')
-				.order('title');
-
-			if (err) {
-				questError = err.message;
-				travelerQuests = [];
-				return;
-			}
-
-				travelerQuests = (data ?? []).map((row) => ({
-					...row,
-					reward_text: typeof (row as any).reward_text === 'string' ? (row as any).reward_text : null,
-					reward_icon_ids: Array.isArray((row as any).reward_icon_ids) ? (row as any).reward_icon_ids : [],
-					tags: Array.isArray((row as any).tags)
-						? (row as any).tags.filter((tag: unknown): tag is string => typeof tag === 'string')
-						: [],
-					quantity: Number.isFinite(Number((row as any).quantity))
-						? Math.max(1, Math.trunc(Number((row as any).quantity)))
-						: 1
-				}));
-			}
-
-			function openCreateQuest() {
-				questDraft = {
-					title: '',
-					description: null,
-					reward_text: null,
-					reward_icon_ids: [],
-					tags: [],
-					order_num: travelerQuests.length,
-					quantity: 1
-				};
-				questEditorOpen = true;
-			}
-
-	function openEditQuest(quest: TravelerQuestRow) {
-		questDraft = JSON.parse(JSON.stringify(quest));
-		questEditorOpen = true;
-	}
-
-			async function saveQuest(quest: Partial<TravelerQuestRow>) {
-				const title = (quest.title ?? '').trim();
-				if (!title) {
-					alert('Title is required.');
-					return;
-				}
-
-				const rewardText = (quest.reward_text ?? '').trim();
-				const rewardIconIds = Array.isArray(quest.reward_icon_ids) ? quest.reward_icon_ids : [];
-				const tags = Array.isArray(quest.tags) ? quest.tags.filter((t): t is string => typeof t === 'string') : [];
-				const quantity = Number.isFinite(Number((quest as any).quantity))
-					? Math.max(1, Math.trunc(Number((quest as any).quantity)))
-					: 1;
-
-				const payload = {
-					title,
-					description: (quest.description ?? null) || null,
-					reward_text: rewardText ? rewardText : null,
-					reward_icon_ids: rewardText ? [] : rewardIconIds,
-					tags,
-					order_num: quest.order_num ?? 0,
-					quantity,
-					updated_at: new Date().toISOString()
-				};
-
-		savingQuest = true;
-		try {
-			if (quest.id) {
-				const { error: err } = await supabase.from('traveler_quests').update(payload).eq('id', quest.id);
-				if (err) throw err;
-			} else {
-				const { error: err } = await supabase.from('traveler_quests').insert(payload);
-				if (err) throw err;
-			}
-
-			await loadTravelerQuests();
-		} catch (err) {
-			console.error('Failed to save traveler quest:', err);
-			alert(`Failed to save quest: ${getErrorMessage(err)}`);
-		} finally {
-			savingQuest = false;
-		}
-	}
-
-	async function deleteQuest(quest: TravelerQuestRow) {
-		if (!confirm(`Delete "${quest.title}"?`)) return;
-
-		deletingQuestIds.add(quest.id);
-		deletingQuestIds = new Set(deletingQuestIds);
-
-		try {
-			const { error: err } = await supabase.from('traveler_quests').delete().eq('id', quest.id);
-			if (err) throw err;
-			travelerQuests = travelerQuests.filter((q) => q.id !== quest.id);
-		} catch (err) {
-			console.error('Failed to delete traveler quest:', err);
-			alert(`Failed to delete quest: ${getErrorMessage(err)}`);
-		} finally {
-			deletingQuestIds.delete(quest.id);
-			deletingQuestIds = new Set(deletingQuestIds);
-		}
 	}
 
 	function getTravelerIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
@@ -600,17 +467,17 @@
 		if (id) {
 			const { error: err } = await supabase
 				.from('travelers')
-				.update({
-					name: formData.name,
-					traveler_subtext: formData.subtext ?? null,
-					traveler_description: formData.description ?? null,
-					damage: 0,
-					barrier: 0,
-					state: formData.state,
-					icon: formData.icon,
-					image_path: formData.image_path,
-					invade_location_id: null,
-					order_num: formData.order_num,
+					.update({
+						name: formData.name,
+						traveler_subtext: formData.subtext ?? null,
+						traveler_description: formData.description ?? null,
+						damage: 0,
+						barrier: 0,
+						state: stageToTravelerState(formData.stage),
+						icon: formData.icon,
+						image_path: formData.image_path,
+						invade_location_id: null,
+						order_num: formData.order_num,
 					reward_rows: [],
 					trade_left_icon_ids: firstRow.left_icon_ids ?? [],
 					trade_right_icon_ids: firstRow.right_icon_ids ?? [],
@@ -625,17 +492,17 @@
 		} else {
 			const { data, error: err } = await supabase
 				.from('travelers')
-				.insert({
-					name: formData.name,
-					traveler_subtext: formData.subtext ?? null,
-					traveler_description: formData.description ?? null,
-					damage: 0,
-					barrier: 0,
-					state: formData.state,
-					icon: formData.icon,
-					image_path: formData.image_path,
-					invade_location_id: null,
-					order_num: formData.order_num,
+					.insert({
+						name: formData.name,
+						traveler_subtext: formData.subtext ?? null,
+						traveler_description: formData.description ?? null,
+						damage: 0,
+						barrier: 0,
+						state: stageToTravelerState(formData.stage),
+						icon: formData.icon,
+						image_path: formData.image_path,
+						invade_location_id: null,
+						order_num: formData.order_num,
 					reward_rows: [],
 					trade_left_icon_ids: firstRow.left_icon_ids ?? [],
 					trade_right_icon_ids: firstRow.right_icon_ids ?? [],
@@ -754,108 +621,6 @@
 		progressMessage = `✓ Generated ${filteredCards.length} cards`;
 	}
 
-	// Quest gallery selection
-	function toggleQuestSelection(questId: string) {
-		if (selectedQuestIds.has(questId)) {
-			selectedQuestIds.delete(questId);
-		} else {
-			selectedQuestIds.add(questId);
-		}
-		selectedQuestIds = new Set(selectedQuestIds);
-	}
-
-	function selectAllQuests() {
-		selectedQuestIds = new Set(filteredQuests.map(q => q.id));
-	}
-
-	function deselectAllQuests() {
-		selectedQuestIds.clear();
-		selectedQuestIds = new Set(selectedQuestIds);
-	}
-
-	// Quest card generation
-	async function generateQuestCard(quest: TravelerQuestRow) {
-		generatingQuests.add(quest.id);
-		generatingQuests = new Set(generatingQuests);
-		questProgressMessage = `Generating card for "${quest.title}"...`;
-
-		try {
-			const blob = await generateQuestCardPNG(quest);
-			const folder = 'traveler_quest_cards';
-
-			const { data, error: uploadError } = await processAndUploadImage(blob, {
-				folder,
-				filename: quest.id,
-				cropTransparent: false,
-				upsert: true
-			});
-
-			if (uploadError) throw uploadError;
-
-			const uploadedPath = data?.path ?? '';
-			const { error: updateError } = await supabase
-				.from('traveler_quests')
-				.update({ card_image_path: uploadedPath, updated_at: new Date().toISOString() })
-				.eq('id', quest.id);
-
-			if (updateError) throw updateError;
-
-			// Update local state
-			const idx = travelerQuests.findIndex(q => q.id === quest.id);
-			if (idx !== -1) {
-				travelerQuests[idx] = { ...travelerQuests[idx], card_image_path: uploadedPath };
-				travelerQuests = [...travelerQuests];
-			}
-
-			questProgressMessage = `✓ Generated card for "${quest.title}"`;
-		} catch (err) {
-			console.error('Failed to generate quest card:', err);
-			questProgressMessage = `✗ Failed to generate card for "${quest.title}"`;
-		} finally {
-			generatingQuests.delete(quest.id);
-			generatingQuests = new Set(generatingQuests);
-		}
-	}
-
-	async function generateSelectedQuests() {
-		const selectedQuests = filteredQuests.filter(q => selectedQuestIds.has(q.id));
-		if (selectedQuests.length === 0) {
-			alert('No quests selected');
-			return;
-		}
-
-		questProgressMessage = `Generating ${selectedQuests.length} quest cards...`;
-
-		for (let i = 0; i < selectedQuests.length; i++) {
-			const quest = selectedQuests[i];
-			questProgressMessage = `Generating card ${i + 1}/${selectedQuests.length}: "${quest.title}"...`;
-			await generateQuestCard(quest);
-		}
-
-		questProgressMessage = `✓ Generated ${selectedQuests.length} quest cards`;
-		deselectAllQuests();
-	}
-
-	async function generateAllQuests() {
-		if (!confirm(`Generate cards for all ${filteredQuests.length} quests?`)) return;
-
-		questProgressMessage = `Generating ${filteredQuests.length} quest cards...`;
-
-		for (let i = 0; i < filteredQuests.length; i++) {
-			const quest = filteredQuests[i];
-			questProgressMessage = `Generating card ${i + 1}/${filteredQuests.length}: "${quest.title}"...`;
-			await generateQuestCard(quest);
-		}
-
-		questProgressMessage = `✓ Generated ${filteredQuests.length} quest cards`;
-	}
-
-	function getQuestCardImageUrl(quest: TravelerQuestRow): string | null {
-		if (!quest.card_image_path) return null;
-		const { data } = supabase.storage.from('game_assets').getPublicUrl(quest.card_image_path);
-		return data?.publicUrl || null;
-	}
-
 	function handleTabChange(tabId: string) {
 		activeTab = tabId;
 	}
@@ -871,8 +636,6 @@
 	{#snippet headerActions()}
 		{#if activeTab === 'gallery'}
 			<Button variant="secondary" onclick={() => showGalleryModal = true}>View Gallery</Button>
-		{:else if activeTab === 'quests'}
-			<Button variant="primary" onclick={openCreateQuest}>+ Quest</Button>
 		{:else if activeTab === 'deck'}
 			<Button variant="secondary" onclick={generateSampleCards} disabled={sampleLoading}>
 				{sampleLoading ? 'Generating Samples...' : 'Generate Sample Cards'}
@@ -883,12 +646,8 @@
 	{#snippet tabActions()}
 		{#if activeTab === 'deck'}
 			<span class="count">{travelers.length} travelers</span>
-		{:else if activeTab === 'quests'}
-			<span class="count">{travelerQuests.length} quests</span>
 		{:else if activeTab === 'gallery'}
 			<span class="count">{generatedCount}/{totalCount} generated</span>
-		{:else if activeTab === 'quest-gallery'}
-			<span class="count">{generatedQuestCount}/{totalQuestCount} generated</span>
 		{/if}
 	{/snippet}
 
@@ -954,82 +713,6 @@
 			showTradeRow={true}
 			monsterPreviewComponent={TravelerCardCanvasPreview}
 		/>
-	{:else if activeTab === 'quests'}
-		<section class="quests">
-			<div class="quests-toolbar">
-				<Button
-					variant="secondary"
-					size="sm"
-					onclick={() => (showQuestRenderedPreview = !showQuestRenderedPreview)}
-				>
-					{showQuestRenderedPreview ? 'Disable Preview' : 'Enable Preview'}
-				</Button>
-			</div>
-
-			{#if questError}
-				<div class="error-state">Error: {questError}</div>
-			{:else if travelerQuests.length === 0}
-				<div class="empty-state">No traveler quests yet. Click “+ Quest” to create one.</div>
-			{:else}
-				{#if showQuestRenderedPreview}
-					<TravelerQuestGrid
-						quests={travelerQuests}
-						on:edit={(e) => openEditQuest(e.detail)}
-						on:delete={(e) => deleteQuest(e.detail)}
-					/>
-				{:else}
-					<div class="quest-list" role="list">
-						{#each travelerQuests as quest (quest.id)}
-							{@const isDeleting = deletingQuestIds.has(quest.id)}
-							{@const rewardSummary =
-								quest.reward_text && quest.reward_text.trim()
-									? `Reward: ${quest.reward_text}`
-									: quest.reward_icon_ids && quest.reward_icon_ids.length > 0
-										? `Reward: ${quest.reward_icon_ids.length} icon${quest.reward_icon_ids.length === 1 ? '' : 's'}`
-										: 'Reward: none'}
-
-								<div class="quest-row" role="listitem">
-									<button type="button" class="quest-row__main" onclick={() => openEditQuest(quest)}>
-										<div class="quest-row__title-line">
-											<span class="quest-row__order">#{quest.order_num}</span>
-											{#if quest.quantity > 1}
-												<span class="quest-row__qty">×{quest.quantity}</span>
-											{/if}
-											<span class="quest-row__title">{quest.title}</span>
-										</div>
-										<div class="quest-row__meta">
-											<span class="quest-row__reward">{rewardSummary}</span>
-											{#if quest.tags && quest.tags.length > 0}
-											<span class="quest-row__tags">Tags: {quest.tags.join(', ')}</span>
-										{/if}
-									</div>
-								</button>
-
-								<div class="quest-row__actions">
-									<Button variant="secondary" size="sm" onclick={() => openEditQuest(quest)}>
-										Edit
-									</Button>
-									<Button variant="danger" size="sm" onclick={() => deleteQuest(quest)} loading={isDeleting}>
-										Delete
-									</Button>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			{/if}
-
-			<TravelerQuestEditorModal
-				bind:open={questEditorOpen}
-				bind:quest={questDraft}
-				onsave={(q) => void saveQuest(q)}
-				onclose={() => (questEditorOpen = false)}
-			/>
-
-			{#if savingQuest}
-				<div class="saving-banner">Saving…</div>
-			{/if}
-		</section>
 	{:else if activeTab === 'gallery'}
 		<div class="gallery-container">
 			<div class="controls-bar">
@@ -1155,110 +838,6 @@
 
 			{#if filteredCards.length === 0}
 				<div class="empty-state">No cards match the current filters</div>
-			{/if}
-		</div>
-	{:else if activeTab === 'quest-gallery'}
-		<div class="gallery-container">
-			<div class="controls-bar">
-				<div class="filters">
-					<input
-						type="text"
-						placeholder="Search quests..."
-						bind:value={questSearchQuery}
-						class="search-input"
-					/>
-
-					<select bind:value={questStatusFilter} class="filter-select">
-						<option value="all">All Status</option>
-						<option value="generated">Generated</option>
-						<option value="not-generated">Not Generated</option>
-					</select>
-				</div>
-
-				<div class="actions">
-					{#if selectedQuestCount > 0}
-						<Button variant="secondary" onclick={deselectAllQuests}>
-							Deselect All
-						</Button>
-						<Button variant="primary" onclick={generateSelectedQuests}>
-							Generate Selected ({selectedQuestCount})
-						</Button>
-					{:else}
-						<Button variant="secondary" onclick={selectAllQuests}>
-							Select All ({filteredQuests.length})
-						</Button>
-					{/if}
-
-					<Button variant="primary" onclick={generateAllQuests}>
-						Generate All
-					</Button>
-				</div>
-			</div>
-
-			{#if questProgressMessage}
-				<div class="progress-message">{questProgressMessage}</div>
-			{/if}
-
-			<div class="cards-grid quest-cards-grid">
-				{#each filteredQuests as quest (quest.id)}
-					{@const isSelected = selectedQuestIds.has(quest.id)}
-					{@const isGenerating = generatingQuests.has(quest.id)}
-					{@const hasCardImage = !!quest.card_image_path}
-					{@const cardImageUrl = getQuestCardImageUrl(quest)}
-
-					<div class="card-item quest-card-item" class:selected={isSelected}>
-						<div class="card-checkbox">
-							<input
-								type="checkbox"
-								checked={isSelected}
-								onchange={() => toggleQuestSelection(quest.id)}
-								disabled={isGenerating}
-							/>
-						</div>
-
-						<div class="card-preview quest-card-preview">
-							{#if hasCardImage && cardImageUrl}
-								<img src={cardImageUrl} alt={quest.title} loading="lazy" />
-								<div class="card-status generated">
-									<span class="status-icon">✓</span>
-								</div>
-							{:else}
-								<div class="card-placeholder quest-placeholder">
-									<div class="placeholder-emoji">📜</div>
-									<span class="placeholder-text">{quest.title}</span>
-								</div>
-							{/if}
-
-							{#if isGenerating}
-								<div class="card-generating">
-									<div class="spinner"></div>
-								</div>
-							{/if}
-						</div>
-
-						<div class="card-info">
-							<div class="card-header">
-								<h3 class="card-name">{quest.title}</h3>
-							</div>
-
-							<div class="card-footer">
-								<span class="card-order">#{quest.order_num}</span>
-								<Button
-									variant="secondary"
-									size="sm"
-									onclick={() => generateQuestCard(quest)}
-									disabled={isGenerating}
-								>
-									{isGenerating ? 'Generating...' : hasCardImage ? 'Regenerate' : 'Generate'}
-								</Button>
-							</div>
-						</div>
-					</div>
-				{/each}
-			</div>
-
-			{#if filteredQuests.length === 0}
-				<div class="empty-state">No quests match the current filters</div>
 			{/if}
 		</div>
 	{/if}
@@ -1623,128 +1202,6 @@
 		background: rgba(201, 168, 108, 0.08);
 		color: rgba(232, 213, 181, 0.9);
 		font-size: 0.85rem;
-	}
-
-	.quests {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.quests-toolbar {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-	}
-
-	.quest-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.quest-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		align-items: center;
-		gap: 0.75rem;
-		padding: 0.6rem 0.8rem;
-		border-radius: 12px;
-		border: 1px solid rgba(148, 163, 184, 0.14);
-		background: rgba(15, 23, 42, 0.55);
-	}
-
-	.quest-row__main {
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-		min-width: 0;
-		text-align: left;
-		border: none;
-		background: transparent;
-		color: inherit;
-		padding: 0;
-		cursor: pointer;
-	}
-
-	.quest-row__main:focus-visible {
-		outline: none;
-		box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.25);
-		border-radius: 10px;
-	}
-
-	.quest-row__title-line {
-		display: flex;
-		align-items: baseline;
-		gap: 0.5rem;
-		min-width: 0;
-	}
-
-	.quest-row__order {
-		font-size: 0.75rem;
-		color: #64748b;
-		font-weight: 600;
-		flex-shrink: 0;
-	}
-
-	.quest-row__qty {
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: rgba(226, 232, 240, 0.9);
-		background: rgba(30, 41, 59, 0.55);
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 999px;
-		padding: 0.05rem 0.4rem;
-		flex-shrink: 0;
-	}
-
-	.quest-row__title {
-		font-size: 0.9rem;
-		font-weight: 600;
-		color: #f8fafc;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.quest-row__meta {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		font-size: 0.75rem;
-		color: rgba(148, 163, 184, 0.9);
-	}
-
-	.quest-row__reward {
-		color: rgba(226, 232, 240, 0.8);
-	}
-
-	.quest-row__tags {
-		color: rgba(148, 163, 184, 0.9);
-	}
-
-	.quest-row__actions {
-		display: flex;
-		gap: 0.35rem;
-		align-items: center;
-		flex-shrink: 0;
-	}
-
-	/* Quest Gallery Styles */
-	.quest-cards-grid {
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-	}
-
-	.quest-card-preview {
-		aspect-ratio: 7 / 5;
-	}
-
-	.quest-placeholder {
-		background: linear-gradient(135deg, rgba(42, 35, 24, 0.8), rgba(26, 22, 16, 0.9));
-	}
-
-	.quest-placeholder .placeholder-emoji {
-		font-size: 3rem;
 	}
 
 </style>

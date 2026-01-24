@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { RewardRow } from '$lib/types/gameData';
+	import type { RewardRow, RewardRowType } from '$lib/types/gameData';
 	import { loadIconPool } from '$lib/utils/iconPool';
 	import { Button } from '$lib/components/ui';
 	import RewardRowEditor from './RewardRowEditor.svelte';
 
 	interface Props {
 		rewardRows?: RewardRow[];
+		defaultType?: RewardRowType;
 		onchange?: (rows: RewardRow[]) => void;
 	}
 
-	let { rewardRows = $bindable<RewardRow[]>([]), onchange }: Props = $props();
+	let { rewardRows = $bindable<RewardRow[]>([]), defaultType = 'all_in_combat', onchange }: Props = $props();
 
 	let iconPoolLoaded = $state(false);
 
@@ -22,7 +23,7 @@
 
 	function addRow() {
 		const newRow: RewardRow = {
-			type: 'all_in_combat',
+			type: defaultType,
 			icon_ids: []
 		};
 		rewardRows = [...rewardRows, newRow];

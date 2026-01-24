@@ -41,6 +41,26 @@ async function handleGenerate(originId: string, imageBlob: Blob) {
 	import { publicAssetUrl } from '$lib/utils/storage';
 	import { SvelteMap } from 'svelte/reactivity';
 
+	function drawImageContain(
+		ctx: CanvasRenderingContext2D,
+		img: HTMLImageElement,
+		x: number,
+		y: number,
+		w: number,
+		h: number
+	) {
+		const naturalW = img.naturalWidth || img.width || w;
+		const naturalH = img.naturalHeight || img.height || h;
+		const safeW = naturalW > 0 ? naturalW : w;
+		const safeH = naturalH > 0 ? naturalH : h;
+		const scale = Math.min(w / safeW, h / safeH);
+		const drawW = safeW * scale;
+		const drawH = safeH * scale;
+		const drawX = x + (w - drawW) / 2;
+		const drawY = y + (h - drawH) / 2;
+		ctx.drawImage(img, drawX, drawY, drawW, drawH);
+	}
+
 	interface Props {
 		origins: OriginRow[];
 		iconPool: IconPoolRow[];
@@ -439,7 +459,7 @@ async function handleGenerate(originId: string, imageBlob: Blob) {
 				const iconY = (pos.y / 100) * CANVAS_HEIGHT - (iconSize / 2);
 
 				// Draw icon
-				ctx.drawImage(iconImg, iconX, iconY, iconSize, iconSize);
+				drawImageContain(ctx, iconImg, iconX, iconY, iconSize, iconSize);
 			}
 		}
 

@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { rarityColors, type Rarity, type RarityColors } from '$lib/stores/rarityColors';
+	import { eventCardBackground } from '$lib/stores/eventCardBackground';
+	import {
+		defaultEventCardBackgroundSettings,
+		type EventCardBackgroundSettings
+	} from '$lib/settings/eventCardBackground';
+	import { EventCardPreview, type Event } from '$lib/components/abyss-deck';
+	import { ImageUploader } from '$lib/components/shared';
 
 	let colors: RarityColors = {
 		Rare: '#60a5fa',
@@ -8,15 +15,50 @@
 		Legendary: '#fbbf24'
 	};
 
-let previewRarity: Rarity = 'Rare';
+	let previewRarity: Rarity = 'Rare';
 
-const rarities: Rarity[] = ['Rare', 'Epic', 'Legendary'];
+	const rarities: Rarity[] = ['Rare', 'Epic', 'Legendary'];
+
+	let eventBg: EventCardBackgroundSettings = defaultEventCardBackgroundSettings;
+	let eventBgStoragePath: string | null = null;
+	let eventBgUrl = '';
+
+	const sampleEvent: Event = {
+		id: 'settings-preview',
+		name: 'settings_preview',
+		card_kind: 'event',
+		stage: 'stage_1',
+		title: 'Veil of Shadows',
+		description:
+			'Darkness descends as the boundary between realms weakens. Hidden truths emerge from the depths.',
+		stage_completion: null,
+		image_path: null,
+		card_image_path: null,
+		reward_rows: [],
+		order_num: 7,
+		created_at: null,
+		updated_at: null,
+		data: {},
+		game_location_id: null,
+		traveler_id: null,
+		art_url: null
+	};
 
 	onMount(() => {
 		const unsubscribe = rarityColors.subscribe((value) => {
 			colors = { ...value };
 		});
-		return unsubscribe;
+
+		const unsubscribeBg = eventCardBackground.subscribe((value) => {
+			eventBg = value;
+			eventBgStoragePath = value.image.source === 'storage' ? value.image.path : null;
+			eventBgUrl = value.image.source === 'url' ? value.image.url ?? '' : '';
+		});
+
+		return () => {
+			unsubscribe();
+			unsubscribeBg();
+		};
 	});
 
 	function updateColor(rarity: Rarity, color: string) {
@@ -48,13 +90,68 @@ function getRarityColor(rarity: Rarity) {
 $: previewColor = getRarityColor(previewRarity);
 $: previewGlow = hexToRgba(previewColor, 0.25);
 $: previewBackground = hexToRgba(previewColor, 0.15);
+
+	function setEventBgMode(mode: EventCardBackgroundSettings['mode']) {
+		eventCardBackground.update((current) => ({ ...current, mode }));
+	}
+
+	function updateEventBgGradient(patch: Partial<EventCardBackgroundSettings['gradient']>) {
+		eventCardBackground.update((current) => ({
+			...current,
+			gradient: { ...current.gradient, ...patch }
+		}));
+	}
+
+	function setEventBgUrl(url: string) {
+		eventCardBackground.update((current) => ({
+			...current,
+			mode: 'image',
+			image: {
+				...current.image,
+				source: 'url',
+				url,
+				path: null,
+				version: Date.now()
+			}
+		}));
+	}
+
+	function handleEventBgUpload(path: string) {
+		eventCardBackground.update((current) => ({
+			...current,
+			mode: 'image',
+			image: {
+				...current.image,
+				source: 'storage',
+				path,
+				url: null,
+				version: Date.now()
+			}
+		}));
+	}
+
+	function handleEventBgRemove() {
+		eventCardBackground.update((current) => ({
+			...current,
+			image: {
+				...current.image,
+				path: null,
+				url: null,
+				version: Date.now()
+			}
+		}));
+	}
+
+	function resetEventBg() {
+		eventCardBackground.reset();
+	}
 </script>
 
 <section class="page">
 	<header class="page__header">
 		<div>
 			<h1>Settings</h1>
-			<p>Customize card appearance by rarity</p>
+			<p>Customize card appearance</p>
 		</div>
 	</header>
 
@@ -93,6 +190,144 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 
 			<div class="settings-actions">
 				<button class="btn" onclick={resetColors}>Reset to Defaults</button>
+			</div>
+		</section>
+
+		<section class="settings-section">
+			<h2>Event Card Background</h2>
+			<p class="section-description">
+				Set the single shared background used by all Event cards (preview + PNG export).
+			</p>
+
+			<div class="event-bg-controls">
+				<div class="event-bg-mode">
+					<label class="mode-option">
+						<input
+							type="radio"
+							name="event-bg-mode"
+							checked={eventBg.mode === 'gradient'}
+							onchange={() => setEventBgMode('gradient')}
+						/>
+						<span>Gradient</span>
+					</label>
+					<label class="mode-option">
+						<input
+							type="radio"
+							name="event-bg-mode"
+							checked={eventBg.mode === 'image'}
+							onchange={() => setEventBgMode('image')}
+						/>
+						<span>Image</span>
+					</label>
+				</div>
+
+				{#if eventBg.mode === 'gradient'}
+					<div class="event-bg-gradient">
+						<div class="color-control">
+							<label>
+								<span class="color-label">Accent A</span>
+								<div class="color-input-wrapper">
+									<input
+										type="color"
+										value={eventBg.gradient.accentAHex}
+										oninput={(e) => updateEventBgGradient({ accentAHex: e.currentTarget.value })}
+										class="color-input"
+									/>
+									<input
+										type="text"
+										value={eventBg.gradient.accentAHex}
+										oninput={(e) => updateEventBgGradient({ accentAHex: e.currentTarget.value })}
+										class="color-text-input"
+										pattern="#[0-9A-Fa-f]{6}"
+									/>
+								</div>
+							</label>
+							<label class="alpha-row">
+								<span class="alpha-label">Opacity</span>
+								<input
+									type="range"
+									min="0"
+									max="100"
+									step="1"
+									value={Math.round(eventBg.gradient.accentAAlpha * 100)}
+									oninput={(e) =>
+										updateEventBgGradient({ accentAAlpha: Number(e.currentTarget.value) / 100 })
+									}
+								/>
+								<span class="alpha-value">{Math.round(eventBg.gradient.accentAAlpha * 100)}%</span>
+							</label>
+						</div>
+
+						<div class="color-control">
+							<label>
+								<span class="color-label">Accent B</span>
+								<div class="color-input-wrapper">
+									<input
+										type="color"
+										value={eventBg.gradient.accentBHex}
+										oninput={(e) => updateEventBgGradient({ accentBHex: e.currentTarget.value })}
+										class="color-input"
+									/>
+									<input
+										type="text"
+										value={eventBg.gradient.accentBHex}
+										oninput={(e) => updateEventBgGradient({ accentBHex: e.currentTarget.value })}
+										class="color-text-input"
+										pattern="#[0-9A-Fa-f]{6}"
+									/>
+								</div>
+							</label>
+							<label class="alpha-row">
+								<span class="alpha-label">Opacity</span>
+								<input
+									type="range"
+									min="0"
+									max="100"
+									step="1"
+									value={Math.round(eventBg.gradient.accentBAlpha * 100)}
+									oninput={(e) =>
+										updateEventBgGradient({ accentBAlpha: Number(e.currentTarget.value) / 100 })
+									}
+								/>
+								<span class="alpha-value">{Math.round(eventBg.gradient.accentBAlpha * 100)}%</span>
+							</label>
+						</div>
+					</div>
+				{:else}
+					<div class="event-bg-image-grid">
+						<div>
+							<p class="small-label">Upload (Supabase storage)</p>
+							<ImageUploader
+								bind:value={eventBgStoragePath}
+								folder="ui/event-card-background"
+								aspectRatio="600 / 437"
+								cropTransparent={false}
+								onupload={handleEventBgUpload}
+								onremove={handleEventBgRemove}
+							/>
+						</div>
+
+						<div>
+							<p class="small-label">Or use a direct URL</p>
+							<input
+								class="text-input"
+								type="text"
+								placeholder="https://.../background.png"
+								value={eventBgUrl}
+								oninput={(e) => setEventBgUrl(e.currentTarget.value)}
+							/>
+							<p class="help-text">For consistent exports, prefer the upload option.</p>
+						</div>
+					</div>
+				{/if}
+
+				<div class="settings-actions">
+					<button class="btn" onclick={resetEventBg}>Reset to Defaults</button>
+				</div>
+
+				<div class="event-card-preview-wrapper">
+					<EventCardPreview event={sampleEvent} />
+				</div>
 			</div>
 		</section>
 
@@ -222,6 +457,88 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 		border-top: 1px solid rgba(148, 163, 184, 0.18);
 	}
 
+	.event-bg-controls {
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
+	}
+
+	.event-bg-mode {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+	}
+
+	.mode-option {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		color: #e2e8f0;
+		font-weight: 600;
+	}
+
+	.event-bg-gradient {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 1.25rem;
+	}
+
+	.alpha-row {
+		display: grid;
+		grid-template-columns: 70px 1fr 52px;
+		gap: 0.75rem;
+		align-items: center;
+		margin-top: 0.5rem;
+		color: #cbd5f5;
+	}
+
+	.alpha-label {
+		font-size: 0.85rem;
+	}
+
+	.alpha-value {
+		text-align: right;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.85rem;
+		color: #e2e8f0;
+	}
+
+	.event-bg-image-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+		gap: 1.25rem;
+		align-items: start;
+	}
+
+	.small-label {
+		margin: 0 0 0.5rem 0;
+		font-size: 0.85rem;
+		color: #cbd5f5;
+		font-weight: 600;
+	}
+
+	.text-input {
+		width: 100%;
+		font-family: 'JetBrains Mono', monospace;
+		background: rgba(15, 23, 42, 0.8);
+		border: 1px solid rgba(148, 163, 184, 0.3);
+		padding: 0.6rem 0.75rem;
+		border-radius: 6px;
+		color: #f8fafc;
+	}
+
+	.help-text {
+		margin: 0.5rem 0 0 0;
+		font-size: 0.85rem;
+		color: #94a3b8;
+	}
+
+	.event-card-preview-wrapper {
+		display: flex;
+		justify-content: center;
+		padding-top: 0.5rem;
+	}
+
 	.preview-controls {
 		margin-bottom: 1.5rem;
 	}
@@ -295,4 +612,3 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 		display: inline-block;
 	}
 </style>
-

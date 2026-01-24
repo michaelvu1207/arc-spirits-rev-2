@@ -73,7 +73,7 @@
 				<div class="header-bar">
 					<div class="quest-label">
 						<span class="label-ornament">~</span>
-						<span class="label-text">Quest</span>
+						<span class="label-text">Mission</span>
 						<span class="label-ornament">~</span>
 					</div>
 					{#if quest.quantity > 1}

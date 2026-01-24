@@ -112,7 +112,7 @@ export async function fetchDiceRecords(client: Rev2Client = supabase): Promise<C
 	const { data, error } = await client
 		.from('custom_dice')
 		.select(
-			'id, name, description, icon, color, dice_type, background_image_path, exported_template_path, created_at, updated_at, dice_sides (id, dice_id, side_number, reward_type, reward_value, reward_description, icon, image_path, template_x, template_y, created_at)'
+			'id, name, name_translations, description, description_translations, icon, color, dice_type, background_image_path, exported_template_path, created_at, updated_at, dice_sides (id, dice_id, side_number, reward_type, reward_value, reward_description, reward_description_translations, icon, image_path, template_x, template_y, created_at)'
 		)
 		.order('created_at', { ascending: false });
 
@@ -263,7 +263,7 @@ async function fetchDiceById(client: Rev2Client, id: string): Promise<CustomDice
 	const { data, error } = await client
 		.from('custom_dice')
 		.select(
-			'id, name, description, icon, color, dice_type, background_image_path, exported_template_path, created_at, updated_at, dice_sides (id, dice_id, side_number, reward_type, reward_value, reward_description, icon, image_path, template_x, template_y, created_at)'
+			'id, name, name_translations, description, description_translations, icon, color, dice_type, background_image_path, exported_template_path, created_at, updated_at, dice_sides (id, dice_id, side_number, reward_type, reward_value, reward_description, reward_description_translations, icon, image_path, template_x, template_y, created_at)'
 		)
 		.eq('id', id)
 		.maybeSingle();

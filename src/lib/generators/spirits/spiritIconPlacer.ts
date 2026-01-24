@@ -3,7 +3,27 @@
  * Composites origin/class icons and rune icons onto hex spirit game print images
  */
 
-import { createCanvas, getContext, loadImage, canvasToBlob } from '../shared/canvas';
+import { createCanvas, getContext, loadImage, canvasToBlob, solidifyNonTransparentPixels } from '../shared/canvas';
+
+function drawImageContain(
+	ctx: CanvasRenderingContext2D,
+	img: HTMLImageElement,
+	x: number,
+	y: number,
+	w: number,
+	h: number
+) {
+	const naturalW = img.naturalWidth || img.width || w;
+	const naturalH = img.naturalHeight || img.height || h;
+	const safeW = naturalW > 0 ? naturalW : w;
+	const safeH = naturalH > 0 ? naturalH : h;
+	const scale = Math.min(w / safeW, h / safeH);
+	const drawW = safeW * scale;
+	const drawH = safeH * scale;
+	const drawX = x + (w - drawW) / 2;
+	const drawY = y + (h - drawH) / 2;
+	ctx.drawImage(img, drawX, drawY, drawW, drawH);
+}
 
 // Cost to folder mapping (matches Python script)
 export const COST_TO_FOLDER: Record<number, string> = {
@@ -132,6 +152,11 @@ export async function generateSpiritWithIcons(
 	// Draw base game print
 	ctx.drawImage(gamePrintImage, 0, 0);
 
+	// Draw icons onto a separate layer so we can force any non-empty icon pixels to be fully opaque
+	// without changing transparency in the base image.
+	const iconLayer = createCanvas(gamePrintImage.width, gamePrintImage.height);
+	const iconCtx = getContext(iconLayer);
+
 	// Get placement config for this folder
 	const folderConfig = config[folderType];
 	if (typeof folderConfig === 'number') {
@@ -151,7 +176,7 @@ export async function generateSpiritWithIcons(
 
 		try {
 			const iconImage = await loadImage(slot.iconUrl);
-			ctx.drawImage(iconImage, placement.x, placement.y, iconSize, iconSize);
+			drawImageContain(iconCtx, iconImage, placement.x, placement.y, iconSize, iconSize);
 		} catch (err) {
 			console.warn(`Failed to load icon at index ${i}:`, err);
 		}
@@ -164,11 +189,20 @@ export async function generateSpiritWithIcons(
 
 		try {
 			const runeImage = await loadImage(slot.iconUrl);
-			ctx.drawImage(runeImage, placement.x, placement.y, runeSize, runeSize);
+			drawImageContain(iconCtx, runeImage, placement.x, placement.y, runeSize, runeSize);
 		} catch (err) {
 			console.warn(`Failed to load rune at index ${i}:`, err);
 		}
 	}
+
+	// Force any icon layer pixel with alpha > 0 to full opacity; keeps fully-transparent pixels transparent.
+	solidifyNonTransparentPixels(iconLayer, 0);
+	ctx.drawImage(iconLayer, 0, 0);
+
+	// If the base game print has any semi-transparent pixels inside the artwork,
+	// force all non-empty pixels in the final composite to be fully opaque.
+	// Fully-transparent pixels remain transparent.
+	solidifyNonTransparentPixels(canvas, 0);
 
 	return canvasToBlob(canvas);
 }

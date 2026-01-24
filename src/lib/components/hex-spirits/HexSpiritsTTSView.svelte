@@ -35,6 +35,8 @@
 
 	let showSuccessMessage = $state(false);
 
+	const enabledSpirits = $derived(spirits.filter((spirit) => spirit.is_enabled));
+
 	const originLookup = $derived(
 		new Map(origins.map((o) => [o.id, o.name]))
 	);
@@ -48,7 +50,7 @@
 	);
 
 	const ttsData = $derived.by(() => {
-		const spiritData: TTSSpiritData[] = spirits.map((spirit) => {
+		const spiritData: TTSSpiritData[] = enabledSpirits.map((spirit) => {
 			const originNames = (spirit.traits?.origin_ids ?? [])
 				.map((id) => originLookup.get(id) ?? 'Unknown')
 				.filter((name) => name !== 'Unknown');
@@ -90,13 +92,13 @@
 	const jsonString = $derived(JSON.stringify(ttsData, null, 2));
 
 	const stats = $derived.by(() => {
-		const total = spirits.length;
-		const withImages = spirits.filter((s) => s.game_print_image_url).length;
+		const total = enabledSpirits.length;
+		const withImages = enabledSpirits.filter((s) => s.game_print_image_url).length;
 		const uniqueOrigins = new Set(
-			spirits.flatMap((s) => s.traits?.origin_ids ?? [])
+			enabledSpirits.flatMap((s) => s.traits?.origin_ids ?? [])
 		).size;
 		const uniqueClasses = new Set(
-			spirits.flatMap((s) => s.traits?.class_ids ?? [])
+			enabledSpirits.flatMap((s) => s.traits?.class_ids ?? [])
 		).size;
 
 		return {

@@ -4,6 +4,8 @@
 	import EventCardV2 from '$lib/components/events/card-variations/EventCardV2.svelte';
 	import EventCardV3 from '$lib/components/events/card-variations/EventCardV3.svelte';
 	import EventCardV4 from '$lib/components/events/card-variations/EventCardV4.svelte';
+	import EventCardV5 from '$lib/components/events/card-variations/EventCardV5.svelte';
+	import EventCardV6 from '$lib/components/events/card-variations/EventCardV6.svelte';
 
 	import { REWARD_ROW_CONFIG } from '$lib/types/gameData';
 
@@ -117,6 +119,18 @@
 			title: 'Celestial Alignment',
 			description: 'The stars align in a pattern not seen for millennia. All spells cost 1 less to cast. Players gain vision of the top 3 cards of any deck. The cosmos reveals hidden truths to those who look.',
 			order_num: 4
+		},
+		{
+			name: 'arcane_convergence',
+			title: 'Arcane Convergence',
+			description: 'Ancient ley lines surge with power as the veil between worlds grows thin. Spirits whisper forgotten secrets to those who listen. Each player may commune with the arcane to glimpse fate itself.',
+			order_num: 5
+		},
+		{
+			name: 'veil_of_shadows',
+			title: 'Veil of Shadows',
+			description: 'Darkness descends as the boundary between realms weakens. Hidden truths emerge from the depths. All players must face what lurks within their own shadows.',
+			order_num: 6
 		}
 	];
 
@@ -129,7 +143,9 @@
 		{ component: EventCardV1, name: 'V1: Mystical Tome', description: 'Open book with aged pages' },
 		{ component: EventCardV2, name: 'V2: Crystal Portal', description: 'Ethereal energy portal aesthetic' },
 		{ component: EventCardV3, name: 'V3: Ancient Tablet', description: 'Weathered stone with carved runes' },
-		{ component: EventCardV4, name: 'V4: Celestial Cosmic', description: 'Starfield with nebula effects' }
+		{ component: EventCardV4, name: 'V4: Celestial Cosmic', description: 'Starfield with nebula effects' },
+		{ component: EventCardV5, name: 'V5: Arcane Mysterious', description: 'Monster-card layout with ethereal purple aesthetic' },
+		{ component: EventCardV6, name: 'V6: Symmetrical Arcane', description: 'Centered text with symmetrical frame design' }
 	];
 
 	let activeSection: 'monsters' | 'events' | 'all' = $state('all');
@@ -202,7 +218,7 @@
 				Event Card Variations
 			</h2>
 			<p class="section-description">
-				Four unique event card designs with thematic visual treatments
+				Six unique event card designs with thematic visual treatments
 			</p>
 
 			<div class="cards-grid">

@@ -37,13 +37,14 @@
 	const modal = useFormModal<EditionFormData>(emptyEditionForm());
 	const originLookup = useLookup(() => origins);
 
-	const ALL_COSTS = ['1', '3', '5', '7', '9', '11', '13', '15', '17'];
+	const ALL_COSTS = ['1', '3', '4', '5', '7', '9', '11', '13', '15', '17'];
 
 	const selectedEdition = $derived(editions.find((e) => e.id === selectedEditionId) ?? null);
 
 	const filteredSpirits = $derived(
 		selectedEdition
 			? hexSpirits.filter((spirit) => {
+					if (!spirit.is_enabled) return false;
 					const spiritOriginIds = spirit.traits?.origin_ids ?? [];
 					return spiritOriginIds.some((oid) => selectedEdition.origin_ids.includes(oid));
 				})
@@ -67,6 +68,7 @@
 		new Map(
 			editions.map((edition) => {
 				const spirits = hexSpirits.filter((spirit) => {
+					if (!spirit.is_enabled) return false;
 					const spiritOriginIds = spirit.traits?.origin_ids ?? [];
 					return spiritOriginIds.some((oid) => edition.origin_ids.includes(oid));
 				});

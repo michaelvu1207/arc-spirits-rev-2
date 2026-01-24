@@ -1384,6 +1384,14 @@
 			Name
 			<input type="text" bind:value={modal.formData.name} required />
 		</label>
+		<label class="enabled-toggle span-full">
+			<input type="checkbox" bind:checked={modal.formData.is_enabled} />
+			<span>
+				{modal.formData.is_enabled
+					? 'Enabled (included in editions/exports)'
+					: 'Disabled (excluded from editions/exports)'}
+			</span>
+		</label>
 		<div class="span-full translations-editor">
 			<div class="translations-editor__header">
 				<div class="translations-editor__title">Alternate Names (Languages)</div>
@@ -2075,6 +2083,45 @@
 	}
 
 	.manual-toggle span {
+		font-size: 0.8rem;
+		color: #e2e8f0;
+	}
+
+	.enabled-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 0.75rem;
+		background: rgba(30, 41, 59, 0.5);
+		border-radius: 6px;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.enabled-toggle:hover {
+		background: rgba(30, 41, 59, 0.7);
+		border-color: rgba(148, 163, 184, 0.4);
+	}
+
+	.enabled-toggle:has(input:checked) {
+		background: rgba(34, 197, 94, 0.12);
+		border-color: rgba(34, 197, 94, 0.35);
+	}
+
+	.enabled-toggle:has(input:not(:checked)) {
+		background: rgba(248, 113, 113, 0.12);
+		border-color: rgba(248, 113, 113, 0.35);
+	}
+
+	.enabled-toggle input[type='checkbox'] {
+		cursor: pointer;
+		width: 16px;
+		height: 16px;
+		accent-color: #22c55e;
+	}
+
+	.enabled-toggle span {
 		font-size: 0.8rem;
 		color: #e2e8f0;
 	}

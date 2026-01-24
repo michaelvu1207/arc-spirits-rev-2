@@ -260,7 +260,7 @@ type QuestLikeRow = Pick<TravelerQuestRow, 'title' | 'description' | 'reward_tex
 export async function drawQuestCard(
 	ctx: CanvasRenderingContext2D,
 	quest: QuestLikeRow,
-	headerLabel: string = 'Quest'
+	headerLabel: string = 'Mission'
 ): Promise<void> {
 	const displayTitle = quest.title || headerLabel;
 	const displayDescription = quest.description || 'Details yet unknown...';
@@ -466,7 +466,6 @@ export async function generateQuestCardPNG(quest: TravelerQuestRow): Promise<Blo
 
 	const canvas = createCanvas(QUEST_CARD_WIDTH, QUEST_CARD_HEIGHT);
 	const ctx = getContext(canvas);
-	await drawQuestCard(ctx, quest, 'Quest');
+	await drawQuestCard(ctx, quest, 'Mission');
 	return canvasToBlob(canvas);
 }
-

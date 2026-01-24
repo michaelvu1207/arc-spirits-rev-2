@@ -18,7 +18,7 @@
 	});
 </script>
 
-<!-- Single Quest Card for PNG Export -->
+<!-- Single Mission Card for PNG Export -->
 <div
 	class="quest-card-export"
 	style="--card-width: {width}px; --card-height: {height}px;"
@@ -55,7 +55,7 @@
 		<div class="header-bar">
 			<div class="quest-label">
 				<span class="label-ornament">~</span>
-				<span class="label-text">Quest</span>
+				<span class="label-text">Mission</span>
 				<span class="label-ornament">~</span>
 			</div>
 		</div>

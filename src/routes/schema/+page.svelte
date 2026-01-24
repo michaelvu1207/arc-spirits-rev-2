@@ -15,6 +15,7 @@
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'name', type: 'text' },
+				{ name: 'is_enabled', type: 'boolean' },
 				{ name: 'cost', type: 'integer' },
 				{ name: 'traits', type: 'jsonb', note: '→ classes, origins' },
 				{ name: 'rune_cost', type: 'uuid[]', note: '→ runes' },
@@ -201,42 +202,113 @@
 				{ name: 'position', type: 'integer' }
 			]
 		},
-		// Events & Scenarios
+		// Scenarios (unified deck)
 		{
-			id: 'events',
-			name: 'events',
+			id: 'scenarios',
+			name: 'scenarios',
 			color: '#06b6d4',
 			category: 'Abyss',
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'edition_id', type: 'uuid', fk: 'editions' },
 				{ name: 'name', type: 'text' },
-				{ name: 'title', type: 'text' },
+				{ name: 'display_name', type: 'text', note: 'optional' },
 				{ name: 'description', type: 'text' },
-				{ name: 'image_path', type: 'text' }
+				{ name: 'game_location_ids', type: 'uuid[]', note: '→ game_locations (optional curated list)' },
+				{ name: 'display_image_path', type: 'text', note: 'storage path (optional)' },
+				{ name: 'order_num', type: 'integer' }
 			]
 		},
 		{
-			id: 'abyss_scenarios',
-			name: 'abyss_scenarios',
+			id: 'scenario_deck_entries',
+			name: 'scenario_deck_entries',
 			color: '#06b6d4',
 			category: 'Abyss',
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
+				{ name: 'scenario_id', type: 'uuid', fk: 'scenarios' },
+				{ name: 'kind', type: 'text', note: 'monster|location|traveler|event' },
+				{ name: 'order_num', type: 'integer' },
+				{ name: 'quantity', type: 'integer', note: 'monster only' },
+				{ name: 'entry_stage', type: 'text', note: 'location/traveler only' },
+				{ name: 'monster_id', type: 'uuid', fk: 'monsters' },
+				{ name: 'game_location_id', type: 'uuid', fk: 'game_locations' },
+				{ name: 'traveler_id', type: 'uuid', fk: 'travelers' },
+				{ name: 'event_id', type: 'uuid', fk: 'event_cards' },
+				{ name: 'data', type: 'jsonb' }
+			]
+		},
+		{
+			id: 'event_cards',
+			name: 'event_cards',
+			color: '#06b6d4',
+			category: 'Abyss',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'internal_name', type: 'text' },
+				{ name: 'stage', type: 'text', note: 'stage_1..endgame' },
+				{ name: 'title', type: 'text' },
 				{ name: 'description', type: 'text' },
+				{ name: 'stage_completion', type: 'text' },
+				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
+				{ name: 'image_path', type: 'text' },
+				{ name: 'card_image_path', type: 'text' },
+				{ name: 'data', type: 'jsonb' },
+				{ name: 'order_num', type: 'integer' }
+			]
+		},
+		{
+			id: 'missions',
+			name: 'missions',
+			color: '#06b6d4',
+			category: 'Core',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'title', type: 'text' },
+				{ name: 'description', type: 'text' },
+				{ name: 'reward_text', type: 'text' },
+				{ name: 'reward_icon_ids', type: 'jsonb', note: '→ icon_pool' },
+				{ name: 'tags', type: 'text[]' },
+				{ name: 'order_num', type: 'integer' },
+				{ name: 'quantity', type: 'integer' },
+				{ name: 'card_image_path', type: 'text' }
+			]
+		},
+		// Legacy (pre-unified scenarios)
+		{
+			id: 'stage_cards',
+			name: 'stage_cards (legacy)',
+			color: '#06b6d4',
+			category: 'Legacy',
+			columns: [
+				{ name: 'id', type: 'uuid', pk: true },
+				{ name: 'name', type: 'text' },
+				{ name: 'card_kind', type: 'text', note: 'event|stage_location|…' },
+				{ name: 'stage', type: 'text', note: 'stage_1..endgame' },
+				{ name: 'title', type: 'text' },
+				{ name: 'description', type: 'text' },
+				{ name: 'stage_completion', type: 'text', note: 'event only' },
+				{ name: 'reward_rows', type: 'jsonb', note: 'event only → icon_pool' },
+				{ name: 'image_path', type: 'text' },
+				{ name: 'card_image_path', type: 'text' },
+				{ name: 'game_location_id', type: 'uuid', fk: 'game_locations', note: 'stage_location only' },
+				{ name: 'traveler_id', type: 'uuid', fk: 'travelers', note: 'traveler only' },
+				{ name: 'data', type: 'jsonb' },
 				{ name: 'order_num', type: 'integer' }
 			]
 		},
 		{
 			id: 'scenario_cards',
-			name: 'scenario_cards',
+			name: 'scenario_cards (legacy)',
 			color: '#06b6d4',
-			category: 'Abyss',
+			category: 'Legacy',
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'scenario_id', type: 'uuid', fk: 'abyss_scenarios' },
-				{ name: 'card_type', type: 'text', note: 'monster|event' },
-				{ name: 'card_id', type: 'uuid', note: '→ monsters|events' }
+				{ name: 'scenario_id', type: 'uuid', fk: 'scenarios' },
+				{ name: 'card_type', type: 'text', note: 'monster|stage_card' },
+				{ name: 'card_id', type: 'uuid', note: '→ monsters|stage_cards' },
+				{ name: 'order_num', type: 'integer' },
+				{ name: 'quantity', type: 'integer', note: 'monster only' }
 			]
 		},
 		// Dice System
@@ -385,7 +457,14 @@
 		{ source: 'monster_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
 		{ source: 'traveler_special_effects', target: 'travelers', type: 'fk', label: 'traveler_id' },
 		{ source: 'traveler_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
-		{ source: 'scenario_cards', target: 'abyss_scenarios', type: 'fk', label: 'scenario_id' },
+		{ source: 'scenarios', target: 'editions', type: 'fk', label: 'edition_id' },
+		{ source: 'scenario_deck_entries', target: 'scenarios', type: 'fk', label: 'scenario_id' },
+		{ source: 'scenario_deck_entries', target: 'monsters', type: 'fk', label: 'monster_id' },
+		{ source: 'scenario_deck_entries', target: 'game_locations', type: 'fk', label: 'game_location_id' },
+		{ source: 'scenario_deck_entries', target: 'travelers', type: 'fk', label: 'traveler_id' },
+		{ source: 'scenario_deck_entries', target: 'event_cards', type: 'fk', label: 'event_id' },
+		{ source: 'stage_cards', target: 'game_locations', type: 'fk', label: 'game_location_id' },
+		{ source: 'scenario_cards', target: 'scenarios', type: 'fk', label: 'scenario_id' },
 		{ source: 'calling_orb_images', target: 'origins', type: 'fk', label: 'origin_id' },
 
 		// JSON/Array references
@@ -405,8 +484,8 @@
 		{ source: 'icon_pool', target: 'origins', type: 'poly', label: 'source_id (origin)' },
 		{ source: 'icon_pool', target: 'classes', type: 'poly', label: 'source_id (class)' },
 		{ source: 'scenario_cards', target: 'monsters', type: 'poly', label: 'card_id (monster)' },
-		{ source: 'scenario_cards', target: 'events', type: 'poly', label: 'card_id (event)' }
-	];
+		{ source: 'scenario_cards', target: 'stage_cards', type: 'poly', label: 'card_id (stage_card)' }
+		];
 
 	type TableNode = (typeof tables)[0] & { x?: number; y?: number; width?: number; height?: number };
 	type Relationship = (typeof relationships)[0];

@@ -7,7 +7,8 @@ const STORAGE_OBJECT_PATH_PREFIX = `/storage/v1/object/public/${BUCKET}/`;
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+  "Access-Control-Expose-Headers": "content-disposition, last-modified, content-type",
 };
 
 function addNonceToUrls(value: unknown, nonce: string): unknown {
@@ -53,7 +54,7 @@ serve(async (req) => {
   }
 
   const upstreamUrl = new URL(req.url);
-  upstreamUrl.pathname = "/export-all-tts-json";
+  upstreamUrl.pathname = "/functions/v1/export-all-tts-json";
 
   const upstreamRes = await fetch(upstreamUrl.toString(), {
     method: "GET",

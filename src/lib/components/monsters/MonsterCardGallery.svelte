@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { fly, fade } from 'svelte/transition';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { MonsterRow, EventRow } from '$lib/types/gameData';
+	import type { MonsterRow, StageCardRow } from '$lib/types/gameData';
 
 	export let isOpen = false;
 	export let monsters: MonsterRow[] = [];
-	export let events: EventRow[] = [];
+	export let events: StageCardRow[] = [];
 
 	type GalleryItem = {
 		type: 'monster' | 'event';
@@ -282,4 +282,3 @@
 		}
 	}
 </style>
-

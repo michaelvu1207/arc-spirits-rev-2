@@ -1,220 +1,55 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { SpecialEffectRow, GameLocationRow, SpecialEffectType } from '$lib/types/gameData';
-	import { publicAssetUrl, processAndUploadImage } from '$lib/utils/storage';
-	import { getErrorMessage } from '$lib/utils';
+	import type { GameLocationRow, SpecialEffectRow, SpecialEffectType } from '$lib/types/gameData';
 	import { generateMonsterCardPNG } from '$lib/generators/cards';
-	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
-	import { PageLayout, type Tab } from '$lib/components/layout';
+	import { getErrorMessage } from '$lib/utils';
+	import { processAndUploadImage, publicAssetUrl } from '$lib/utils/storage';
+	import { getIconPoolUrl, loadIconPool } from '$lib/utils/iconPool';
+	import { Modal, PageLayout, type Tab } from '$lib/components/layout';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
-	import { MonsterCardGallery } from '$lib/components/monsters';
 	import type { Monster } from '$lib/components/abyss-deck';
 	import AbyssDeckWorkspace from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
-	import type {
-		DeckOrderItem,
-		MonsterFormData as AbyssMonsterFormData
-	} from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
+	import type { MonsterFormData as AbyssMonsterFormData } from '$lib/components/abyss-deck/AbyssDeckWorkspace.svelte';
 
-	// Card gallery types
-	type CardItem = {
-		id: string;
-		name: string;
-		order_num: number;
-		card_image_path: string | null;
-		data: Monster;
-	};
+	type InvadeLocationOption = Pick<GameLocationRow, 'id' | 'name'>;
 
-	// Tab state
 	const tabs: Tab[] = [
-		{ id: 'deck', label: 'Deck Builder', icon: '🃏' },
-		{ id: 'special-effects', label: 'Special Effects', icon: '✨' },
-		{ id: 'gallery', label: 'Card Gallery', icon: '🖼️' }
+		{ id: 'monsters', label: 'Monsters', icon: '👹' },
+		{ id: 'gallery', label: 'Card Gallery', icon: '🖼️' },
+		{ id: 'special-effects', label: 'Special Effects', icon: '✨' }
 	];
-	let activeTab = $state('deck');
+	let activeTab = $state('monsters');
 
-	// Data state
-	let monstersRaw = $state<Monster[]>([]);
+	let monsters = $state<Monster[]>([]);
+	let invadeLocations = $state<InvadeLocationOption[]>([]);
+	let specialEffects = $state<SpecialEffectRow[]>([]);
+	let monsterSpecialEffects = $state<Record<string, string[]>>({});
+
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	// Lookups
-	let specialEffectsRaw = $state<SpecialEffectRow[]>([]);
-	let monsterSpecialEffects = $state<Record<string, string[]>>({});
-	let invadeLocations = $state<Pick<GameLocationRow, 'id' | 'name'>[]>([]);
+	let gallerySearchQuery = $state('');
+	let galleryStageFilter = $state<'all' | Monster['stage']>('all');
+	let galleryStatusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
+	let selectedMonsterIds = $state<Set<string>>(new Set());
+	let generatingMonsterIds = $state<Set<string>>(new Set());
+	let galleryProgressMessage = $state<string | null>(null);
 
-	// Gallery state
-	let searchQuery = $state('');
-	let stateFilter = $state<'all' | 'tainted' | 'corrupt' | 'fallen' | 'arcane' | 'inactive'>('all');
-	let classificationFilter = $state<'all' | 'monster' | 'abyss_guardian' | 'boss'>('all');
-	let statusFilter = $state<'all' | 'generated' | 'not-generated'>('all');
-	let selectedCardIds = $state(new Set<string>());
-	let generatingCards = $state(new Set<string>());
-	let progressMessage = $state('');
-	let showGalleryModal = $state(false);
-	let workspaceSelectedMonster = $state<Monster | null>(null);
-
-	type AbyssLanguage = 'base' | string;
-	const BASE_LANGUAGE: AbyssLanguage = 'base';
-	const BASE_STORAGE_LANG = 'en';
-
-	const DEFAULT_EXTRA_LANGS = ['zh-hans', 'zh-hant', 'de', 'fr', 'es', 'it', 'ja', 'pl', 'ko'];
-	let abyssLanguage = $state<AbyssLanguage>(BASE_LANGUAGE);
-	let abyssLanguageSelect = $state<AbyssLanguage>(BASE_LANGUAGE);
-	let newAbyssLanguageDraft = $state('');
-	let extraAbyssLanguages = $state<string[]>([...DEFAULT_EXTRA_LANGS]);
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function getTranslationValue(input: unknown, lang: string): string | null {
-		if (!lang || lang === BASE_LANGUAGE) return null;
-		if (!input || typeof input !== 'object') return null;
-		const record = input as Record<string, unknown>;
-		const direct = record[lang];
-		if (typeof direct === 'string') return normalizeOptionalText(direct);
-		for (const [key, value] of Object.entries(record)) {
-			if (normalizeLanguageCode(key) !== lang) continue;
-			if (typeof value !== 'string') continue;
-			return normalizeOptionalText(value);
-		}
-		return null;
-	}
-
-	function setTranslationValue(record: unknown, lang: string, next: string | null): Record<string, string> {
-		const current: Record<string, string> =
-			record && typeof record === 'object' && !Array.isArray(record)
-				? ({ ...(record as Record<string, unknown>) } as Record<string, string>)
-				: {};
-
-		if (!lang || lang === BASE_LANGUAGE) return current;
-		if (next && next.trim().length > 0) current[lang] = next.trim();
-		else delete current[lang];
-		return current;
-	}
-
-	function ensureLanguageListed(lang: string) {
-		if (!lang || lang === BASE_LANGUAGE) return;
-		if (!extraAbyssLanguages.includes(lang)) extraAbyssLanguages = [...extraAbyssLanguages, lang];
-	}
-
-	function sanitizeLanguageForPath(lang: AbyssLanguage): string {
-		const normalized = lang === BASE_LANGUAGE ? BASE_STORAGE_LANG : String(lang);
-		return normalized
-			.trim()
-			.toLowerCase()
-			.replace(/[^a-z0-9-]+/g, '-')
-			.replace(/-+/g, '-')
-			.replace(/^-+|-+$/g, '');
-	}
-
-	function getMonsterName(monster: Monster, lang: AbyssLanguage = abyssLanguage): string {
-		if (lang === BASE_LANGUAGE) return monster.name;
-		return getTranslationValue((monster as any).name_translations, lang) ?? monster.name;
-	}
-
-	function getMonsterCardImagePath(monster: Monster, lang: AbyssLanguage = abyssLanguage): string | null {
-		if (lang === BASE_LANGUAGE) return monster.card_image_path ?? null;
-		return getTranslationValue((monster as any).card_image_path_translations, lang) ?? null;
-	}
-
-	function getSpecialEffectName(effect: SpecialEffectRow, lang: AbyssLanguage = abyssLanguage): string {
-		if (lang === BASE_LANGUAGE) return effect.name;
-		return getTranslationValue((effect as any).name_translations, lang) ?? effect.name;
-	}
-
-	function getSpecialEffectDescription(effect: SpecialEffectRow, lang: AbyssLanguage = abyssLanguage): string | null {
-		if (lang === BASE_LANGUAGE) return effect.description ?? null;
-		return getTranslationValue((effect as any).description_translations, lang) ?? effect.description ?? null;
-	}
-
-	function addAbyssLanguage() {
-		const normalized = normalizeLanguageCode(newAbyssLanguageDraft);
-		if (!normalized) return;
-		ensureLanguageListed(normalized);
-		newAbyssLanguageDraft = '';
-		requestAbyssLanguageChange(normalized);
-	}
-
-	function requestAbyssLanguageChange(nextRaw: string) {
-		const normalized = nextRaw === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(nextRaw);
-		const next = normalized.length > 0 ? normalized : BASE_LANGUAGE;
-		if (next === abyssLanguage) return;
-
-		if (showEffectDrawer || activeTab === 'deck' || workspaceSelectedMonster) {
-			const ok = confirm('Switching language will close any open editors and discard unsaved changes. Continue?');
-			if (!ok) {
-				abyssLanguageSelect = abyssLanguage;
-				return;
-			}
-			showEffectDrawer = false;
-			workspaceSelectedMonster = null;
-		}
-
-		abyssLanguage = next;
-		abyssLanguageSelect = next;
-	}
-
-	$effect(() => {
-		if (abyssLanguageSelect !== abyssLanguage) {
-			requestAbyssLanguageChange(String(abyssLanguageSelect));
-		}
+	const filteredGalleryMonsters = $derived.by(() => {
+		const term = gallerySearchQuery.trim().toLowerCase();
+			return monsters
+				.filter((monster) => {
+					if (galleryStageFilter !== 'all' && monster.stage !== galleryStageFilter) return false;
+					if (galleryStatusFilter === 'generated' && !monster.card_image_path) return false;
+					if (galleryStatusFilter === 'not-generated' && monster.card_image_path) return false;
+					if (!term) return true;
+					return monster.name.toLowerCase().includes(term);
+				})
+			.sort((a, b) => (a.order_num ?? 999) - (b.order_num ?? 999));
 	});
 
-	const detectedAbyssLanguages = $derived.by(() => {
-		const out = new Set<string>();
-		for (const monster of monstersRaw) {
-			const sources = [
-				(monster as any).name_translations,
-				(monster as any).card_image_path_translations,
-				(monster as any).special_conditions_translations
-			];
-			for (const source of sources) {
-				if (!source || typeof source !== 'object') continue;
-				for (const key of Object.keys(source as Record<string, unknown>)) {
-					const normalized = normalizeLanguageCode(key);
-					if (!normalized) continue;
-					out.add(normalized);
-				}
-			}
-		}
-		for (const effect of specialEffectsRaw) {
-			const sources = [(effect as any).name_translations, (effect as any).description_translations];
-			for (const source of sources) {
-				if (!source || typeof source !== 'object') continue;
-				for (const key of Object.keys(source as Record<string, unknown>)) {
-					const normalized = normalizeLanguageCode(key);
-					if (!normalized) continue;
-					out.add(normalized);
-				}
-			}
-		}
-		return Array.from(out).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-	});
-
-	const abyssLanguageOptions = $derived.by(() => {
-		const merged = new Set<string>([...detectedAbyssLanguages, ...extraAbyssLanguages]);
-		const langs = Array.from(merged).filter((l) => l && l !== BASE_LANGUAGE);
-		langs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-		return [{ value: BASE_LANGUAGE, label: 'Default' }, ...langs.map((l) => ({ value: l, label: l }))];
-	});
-
-	// Special Effect editing state
-	let showEffectDrawer = $state(false);
-	let editingEffectId = $state<string | null>(null);
-	let effectFormData = $state({
-		name: '',
-		description: null as string | null,
-		icon: null as string | null,
-		color: '#a855f7',
-		effect_type: 'during_combat' as SpecialEffectType
-	});
+	const selectedGalleryCount = $derived.by(() => selectedMonsterIds.size);
 
 	const effectTypeOptions: { value: SpecialEffectType; label: string }[] = [
 		{ value: 'before_combat', label: 'Before Combat' },
@@ -223,82 +58,30 @@
 		{ value: 'combat_type', label: 'Combat Type' }
 	];
 
-	const effectTypeColors: Record<SpecialEffectType, string> = {
-		before_combat: '#f59e0b',
-		during_combat: '#ef4444',
-		after_combat: '#22c55e',
-		combat_type: '#8b5cf6'
-	};
-
-	const isEditingEffect = $derived(editingEffectId !== null);
-	const selectedCount = $derived(selectedCardIds.size);
-
-	const specialEffectsById = $derived.by(() => new Map(specialEffectsRaw.map((effect) => [effect.id, effect])));
-	const specialEffects = $derived.by(() => {
-		const localized = specialEffectsRaw.map((effect) => ({
-			...effect,
-			name: getSpecialEffectName(effect, abyssLanguage),
-			description: getSpecialEffectDescription(effect, abyssLanguage)
-		}));
-		return localized.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+	let effectModalOpen = $state(false);
+	let effectModalSaving = $state(false);
+	let editingEffectId = $state<string | null>(null);
+	let effectFormData = $state({
+		name: '',
+		description: '',
+		icon: '',
+		color: '#a855f7',
+		effect_type: 'during_combat' as SpecialEffectType
 	});
 
-	const monsters = $derived.by(() =>
-		monstersRaw.map((monster) => {
-			const effectIds = monsterSpecialEffects[monster.id] ?? [];
-			const effects = effectIds
-				.map((id) => specialEffectsById.get(id))
-				.filter((e): e is SpecialEffectRow => e !== undefined)
-				.map((effect) => ({
-					...effect,
-					name: getSpecialEffectName(effect, abyssLanguage),
-					description: getSpecialEffectDescription(effect, abyssLanguage)
-				}));
-
-			return {
-				...monster,
-				name: getMonsterName(monster, abyssLanguage),
-				card_image_path: getMonsterCardImagePath(monster, abyssLanguage),
-				effects
-			};
-		})
-	);
-
-	const allCards = $derived.by(() =>
-		monsters.map((m) => ({
-			id: m.id,
-			name: m.name,
-			order_num: m.order_num ?? 999,
-			card_image_path: m.card_image_path,
-			data: m
-		}))
-	);
-
-	const filteredCards = $derived.by(() =>
-		allCards.filter((card) => {
-			if (stateFilter !== 'all') if (card.data.state !== stateFilter) return false;
-			if (classificationFilter !== 'all')
-				if ((card.data.monster_classification ?? 'monster') !== classificationFilter) return false;
-			if (statusFilter === 'generated' && !card.card_image_path) return false;
-			if (statusFilter === 'not-generated' && card.card_image_path) return false;
-			if (searchQuery.trim() && !card.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-				return false;
-			}
-			return true;
-		})
-	);
-
-	const generatedCount = $derived(allCards.filter((c) => c.card_image_path).length);
-	const totalCount = $derived(allCards.length);
+	const isEditingEffect = $derived(editingEffectId !== null);
 
 	onMount(loadData);
+
+	function handleTabChange(tabId: string) {
+		activeTab = tabId;
+	}
 
 	async function loadData() {
 		loading = true;
 		error = null;
 		try {
-			await loadAllIcons();
-			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadInvadeLocations()]);
+			await Promise.all([loadInvadeLocations(), loadSpecialEffects(), loadMonsterSpecialEffects(), loadIconPool()]);
 			await loadMonsters();
 		} catch (err) {
 			error = getErrorMessage(err);
@@ -307,50 +90,29 @@
 		}
 	}
 
+	async function loadInvadeLocations() {
+		const { data, error: err } = await supabase.from('game_locations').select('id, name').order('name');
+		if (err) throw err;
+		invadeLocations = (data ?? []) as InvadeLocationOption[];
+	}
+
 	async function loadSpecialEffects() {
-		const { data, error: err } = await supabase
-			.from('special_effects')
-			.select('*')
-			.order('name');
-		if (err) throw new Error(err.message);
-		specialEffectsRaw = data ?? [];
+		const { data, error: err } = await supabase.from('special_effects').select('*').order('name');
+		if (err) throw err;
+		specialEffects = (data ?? []) as SpecialEffectRow[];
 	}
 
 	async function loadMonsterSpecialEffects() {
 		const { data, error: err } = await supabase
 			.from('monster_special_effects')
 			.select('monster_id, special_effect_id');
-		if (err) throw new Error(err.message);
+		if (err) throw err;
 
 		monsterSpecialEffects = (data ?? []).reduce((acc, row) => {
 			if (!acc[row.monster_id]) acc[row.monster_id] = [];
 			acc[row.monster_id].push(row.special_effect_id);
 			return acc;
 		}, {} as Record<string, string[]>);
-	}
-
-	async function loadInvadeLocations() {
-		const { data, error: err } = await supabase.from('game_locations').select('id, name').order('name');
-		if (err) throw new Error(err.message);
-		invadeLocations = (data ?? []) as Pick<GameLocationRow, 'id' | 'name'>[];
-	}
-
-	async function loadMonsters() {
-		const { data, error: err } = await supabase.from('monsters').select('*').order('order_num');
-		if (err) throw new Error(err.message);
-
-		monstersRaw = (data ?? []).map((monster) => {
-			const invadeLocation = monster.invade_location_id
-				? invadeLocations.find((loc) => loc.id === monster.invade_location_id)
-				: null;
-
-			return {
-				...monster,
-				icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
-				art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
-				invade_location_name: invadeLocation?.name ?? null
-			};
-		});
 	}
 
 	function getMonsterIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
@@ -368,125 +130,237 @@
 		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
-	function getStateColor(state: string | null | undefined): string {
-		switch (state) {
-			case 'tainted':
+	function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
+		const barrier = Math.max(0, Math.round(barrierValue));
+		const killedIndex = Math.max(1, barrier);
+		const targetLen = killedIndex + 1; // includes slot0 participation
+
+		const safe: string[][] = Array.isArray(track)
+			? track.map((slot) =>
+					Array.isArray(slot)
+						? slot
+								.filter((id): id is string => typeof id === 'string')
+								.map((id) => id.trim())
+								.filter(Boolean)
+						: []
+				)
+			: [];
+
+		while (safe.length < targetLen) safe.push([]);
+		return safe.slice(0, targetLen);
+	}
+
+	async function loadMonsters() {
+		const { data, error: err } = await supabase.from('monsters').select('*').order('order_num', { ascending: true });
+		if (err) throw err;
+
+		const invadeById = new Map(invadeLocations.map((loc) => [loc.id, loc.name]));
+		const effectById = new Map(specialEffects.map((effect) => [effect.id, effect]));
+
+		monsters = (data ?? []).map((monster: any) => {
+			const effectIds = monsterSpecialEffects[monster.id] ?? [];
+			const effects = effectIds.map((id) => effectById.get(id)).filter(Boolean) as SpecialEffectRow[];
+
+			return {
+				...monster,
+				quantity: 1,
+				icon_url: getMonsterIconUrl(monster.icon, monster.updated_at),
+				art_url: getMonsterImageUrl(monster.image_path, monster.updated_at),
+				effects,
+				invade_location_name: monster.invade_location_id ? invadeById.get(monster.invade_location_id) ?? null : null
+			} as Monster;
+		});
+	}
+
+	function getMonsterCardImageUrl(monster: Monster): string | null {
+		return publicAssetUrl(monster.card_image_path, { updatedAt: monster.updated_at ?? undefined });
+	}
+
+	function getMonsterStageColor(stage: string | null | undefined): string {
+		switch (stage) {
+			case 'stage_1':
 				return '#c084fc';
-			case 'corrupt':
+			case 'stage_2':
 				return '#6b21a8';
-			case 'fallen':
+			case 'stage_3':
 				return '#065f46';
-			case 'arcane':
-				return '#0ea5e9';
+			case 'final_stage':
+				return '#a855f7';
 			case 'inactive':
 				return '#64748b';
-			default: return '#94a3b8';
+			default:
+				return '#94a3b8';
 		}
 	}
 
-		function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
-			const barrier = Math.max(0, Math.round(barrierValue));
-			const killedIndex = Math.max(1, barrier);
-			const targetLen = killedIndex + 1; // includes slot0 participation
-
-			const safe: string[][] = Array.isArray(track)
-				? track.map((slot) =>
-						Array.isArray(slot)
-							? slot
-									.filter((id): id is string => typeof id === 'string')
-									.map((id) => id.trim())
-									.filter(Boolean)
-							: []
-					)
-				: [];
-
-			while (safe.length < targetLen) safe.push([]);
-			return safe.slice(0, targetLen);
-		}
-
-	function getCardImageUrl(card: CardItem): string | null {
-		if (!card.card_image_path) return null;
-		const { data } = supabase.storage.from('game_assets').getPublicUrl(card.card_image_path);
-		return data?.publicUrl || null;
+	function toggleMonsterGallerySelection(monsterId: string) {
+		const next = new Set(selectedMonsterIds);
+		if (next.has(monsterId)) next.delete(monsterId);
+		else next.add(monsterId);
+		selectedMonsterIds = next;
 	}
 
-	async function saveDeckOrder(order: DeckOrderItem[]) {
-		const monsterUpdates = order
-			.map((item, order_num) => (item.type === 'monster' ? { id: item.id, order_num } : null))
-			.filter((x): x is { id: string; order_num: number } => x !== null);
-
-		if (monsterUpdates.length > 0) {
-			for (const update of monsterUpdates) {
-				const { error: err } = await supabase
-					.from('monsters')
-					.update({ order_num: update.order_num })
-					.eq('id', update.id);
-				if (err) throw err;
-			}
-		}
-
-		await loadMonsters();
+	function selectAllGalleryMonsters() {
+		selectedMonsterIds = new Set(filteredGalleryMonsters.map((m) => m.id));
 	}
 
-	async function handleWorkspaceMonsterSave(formData: AbyssMonsterFormData, id: string | null): Promise<string> {
+	function deselectAllGalleryMonsters() {
+		selectedMonsterIds = new Set();
+	}
+
+	async function generateMonsterCard(monster: Monster) {
+		const monsterId = monster.id;
+		if (!monsterId) return;
+
+		generatingMonsterIds = new Set([...generatingMonsterIds, monsterId]);
+		galleryProgressMessage = `Generating card for ${monster.name}...`;
+
+		try {
+			await loadIconPool();
+
+			const rewardTrackIconUrls = (monster.reward_track ?? []).map((slot) =>
+				(slot ?? []).map((iconId) => getIconPoolUrl(iconId))
+			);
+
+			const blob = await generateMonsterCardPNG(
+				monster,
+				monster.art_url,
+				monster.icon_url,
+				rewardTrackIconUrls,
+				'base'
+			);
+
+			const folder = 'card_images/monsters/en';
+			const { data, error: uploadError } = await processAndUploadImage(blob, {
+				folder,
+				filename: monsterId,
+				cropTransparent: false,
+				upsert: true
+			});
+			if (uploadError) throw uploadError;
+
+			const uploadedPath = data?.path ?? '';
+			const updatedAt = new Date().toISOString();
+			const { error: updateError } = await supabase
+				.from('monsters')
+				.update({ card_image_path: uploadedPath, updated_at: updatedAt })
+				.eq('id', monsterId);
+			if (updateError) throw updateError;
+
+			monsters = monsters.map((m) =>
+				m.id === monsterId
+					? {
+							...m,
+							card_image_path: uploadedPath,
+							updated_at: updatedAt,
+							icon_url: getMonsterIconUrl(m.icon, updatedAt),
+							art_url: getMonsterImageUrl(m.image_path, updatedAt)
+						}
+					: m
+			);
+
+			galleryProgressMessage = `✓ Generated card for ${monster.name}`;
+		} catch (err) {
+			console.error('Failed to generate monster card', err);
+			galleryProgressMessage = `✗ Failed to generate card for ${monster.name}`;
+		} finally {
+			const next = new Set(generatingMonsterIds);
+			next.delete(monsterId);
+			generatingMonsterIds = next;
+		}
+	}
+
+	async function generateSelectedMonsterCards() {
+		const targets = filteredGalleryMonsters.filter((m) => selectedMonsterIds.has(m.id));
+		if (targets.length === 0) {
+			alert('No monsters selected.');
+			return;
+		}
+
+		if (!confirm(`Generate card images for ${targets.length} selected monster${targets.length === 1 ? '' : 's'}?`)) {
+			return;
+		}
+
+		for (let i = 0; i < targets.length; i++) {
+			const monster = targets[i];
+			galleryProgressMessage = `Generating ${i + 1}/${targets.length}: ${monster.name}...`;
+			await generateMonsterCard(monster);
+		}
+
+		galleryProgressMessage = `✓ Generated ${targets.length} card${targets.length === 1 ? '' : 's'}`;
+		deselectAllGalleryMonsters();
+	}
+
+	async function generateAllMonsterCards() {
+		const targets = filteredGalleryMonsters;
+		if (targets.length === 0) return;
+
+		if (!confirm(`Generate card images for all ${targets.length} monster${targets.length === 1 ? '' : 's'}?`)) {
+			return;
+		}
+
+		for (let i = 0; i < targets.length; i++) {
+			const monster = targets[i];
+			galleryProgressMessage = `Generating ${i + 1}/${targets.length}: ${monster.name}...`;
+			await generateMonsterCard(monster);
+		}
+
+		galleryProgressMessage = `✓ Generated ${targets.length} card${targets.length === 1 ? '' : 's'}`;
+	}
+
+	async function handleMonsterSave(formData: AbyssMonsterFormData, id: string | null): Promise<string> {
 		if (!formData.name.trim()) {
 			throw new Error('Monster name is required.');
 		}
 
-		if (!id && abyssLanguage !== BASE_LANGUAGE) {
-			throw new Error('Create monsters in Default language first, then add translations.');
-		}
+		const rewardTrack = normalizeRewardTrack(formData.barrier ?? 0, (formData as any).reward_track);
+		const now = new Date().toISOString();
 
 		let monsterId: string;
-		const rewardTrack = normalizeRewardTrack(formData.barrier ?? 0, (formData as any).reward_track);
-
-		if (id) {
-			const current = monstersRaw.find((m) => m.id === id) as any | undefined;
-			const nameTranslations =
-				abyssLanguage === BASE_LANGUAGE
-					? undefined
-					: setTranslationValue(current?.name_translations, String(abyssLanguage), formData.name);
-
-			const updatePayload: Record<string, unknown> = {
-				...(abyssLanguage === BASE_LANGUAGE ? { name: formData.name } : { name_translations: nameTranslations }),
-				damage: formData.damage,
-				barrier: formData.barrier,
-				state: formData.state,
-				monster_classification: formData.monster_classification,
-				icon: formData.icon,
-				image_path: formData.image_path,
-				show_tutorial: (formData as any).show_tutorial ?? true,
-				invade_location_id: formData.invade_location_id,
-				order_num: formData.order_num,
-				reward_track: rewardTrack,
-				quantity: formData.quantity,
-				updated_at: new Date().toISOString()
-			};
-
-			const { error: err } = await supabase.from('monsters').update(updatePayload).eq('id', id);
+			if (id) {
+				const { error: err } = await supabase
+					.from('monsters')
+					.update({
+						name: formData.name,
+						damage: formData.damage,
+						barrier: formData.barrier,
+						stage: formData.stage,
+						monster_classification: formData.monster_classification,
+						icon: formData.icon,
+						image_path: formData.image_path,
+						card_image_path: formData.card_image_path ?? null,
+						show_tutorial: (formData as any).show_tutorial ?? true,
+						invade_location_id: formData.invade_location_id,
+						reward_track: rewardTrack,
+						order_num: Math.max(0, Math.trunc(Number(formData.order_num ?? 0))),
+						updated_at: now
+					})
+					.eq('id', id);
 			if (err) throw err;
 			monsterId = id;
 		} else {
-			const { data, error: err } = await supabase
-				.from('monsters')
-				.insert({
-					name: formData.name,
-					damage: formData.damage,
-					barrier: formData.barrier,
-					state: formData.state,
-					monster_classification: formData.monster_classification,
-					icon: formData.icon,
-					image_path: formData.image_path,
-					show_tutorial: (formData as any).show_tutorial ?? true,
-					invade_location_id: formData.invade_location_id,
-					order_num: formData.order_num,
-					reward_track: rewardTrack,
-					quantity: formData.quantity
+			const nextOrderNum = monsters.reduce((max, m) => Math.max(max, m.order_num ?? 0), -1) + 1;
+				const { data, error: err } = await supabase
+					.from('monsters')
+					.insert({
+						name: formData.name,
+						damage: formData.damage,
+						barrier: formData.barrier,
+						stage: formData.stage,
+						monster_classification: formData.monster_classification,
+						icon: formData.icon,
+						image_path: formData.image_path,
+						card_image_path: formData.card_image_path ?? null,
+						show_tutorial: (formData as any).show_tutorial ?? true,
+						invade_location_id: formData.invade_location_id,
+						reward_track: rewardTrack,
+						order_num: nextOrderNum,
+					updated_at: now
 				})
 				.select('id')
 				.single();
 			if (err) throw err;
-			monsterId = data.id;
+			monsterId = data.id as string;
 		}
 
 		const { error: deleteErr } = await supabase
@@ -505,44 +379,55 @@
 		}
 
 		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
-
 		return monsterId;
 	}
 
-	async function handleWorkspaceMonsterDelete(id: string) {
-		const { error: err } = await supabase.from('monsters').delete().eq('id', id);
-		if (err) throw err;
+	async function handleMonsterDelete(monsterId: string) {
+		const { error: scenarioErr } = await supabase
+			.from('scenario_cards')
+			.delete()
+			.eq('card_type', 'monster')
+			.eq('card_id', monsterId);
+		if (scenarioErr) throw scenarioErr;
+
+		const { error: effectsErr } = await supabase
+			.from('monster_special_effects')
+			.delete()
+			.eq('monster_id', monsterId);
+		if (effectsErr) throw effectsErr;
+
+		const { error: monsterErr } = await supabase.from('monsters').delete().eq('id', monsterId);
+		if (monsterErr) throw monsterErr;
+
 		await Promise.all([loadMonsterSpecialEffects(), loadMonsters()]);
 	}
 
-	// Special Effect CRUD
-	function openEffectForm() {
-		if (abyssLanguage !== BASE_LANGUAGE) {
-			alert('Create special effects in Default language first, then add translations.');
-			return;
-		}
+	async function saveNoOrder() {
+		// Monster catalog ordering is intentionally disabled.
+	}
+
+	function openNewEffect() {
 		editingEffectId = null;
 		effectFormData = {
 			name: '',
-			description: null,
-			icon: null,
+			description: '',
+			icon: '',
 			color: '#a855f7',
 			effect_type: 'during_combat'
 		};
-		showEffectDrawer = true;
+		effectModalOpen = true;
 	}
 
-	function openEffectEditForm(effect: SpecialEffectRow) {
-		const raw = specialEffectsRaw.find((e) => e.id === effect.id) ?? effect;
-		editingEffectId = raw.id;
+	function openEditEffect(effect: SpecialEffectRow) {
+		editingEffectId = effect.id;
 		effectFormData = {
-			name: getSpecialEffectName(raw, abyssLanguage),
-			description: getSpecialEffectDescription(raw, abyssLanguage),
-			icon: raw.icon,
-			color: raw.color || '#a855f7',
-			effect_type: raw.effect_type || 'during_combat'
+			name: effect.name ?? '',
+			description: effect.description ?? '',
+			icon: effect.icon ?? '',
+			color: effect.color || '#a855f7',
+			effect_type: effect.effect_type || 'during_combat'
 		};
-		showEffectDrawer = true;
+		effectModalOpen = true;
 	}
 
 	async function saveEffect() {
@@ -550,483 +435,172 @@
 			alert('Effect name is required.');
 			return;
 		}
+		if (effectModalSaving) return;
 
+		effectModalSaving = true;
 		try {
-			if (isEditingEffect) {
-				const current = specialEffectsRaw.find((e) => e.id === editingEffectId) as any | undefined;
-				const nameTranslations =
-					abyssLanguage === BASE_LANGUAGE
-						? undefined
-						: setTranslationValue(current?.name_translations, String(abyssLanguage), effectFormData.name);
-				const descriptionTranslations =
-					abyssLanguage === BASE_LANGUAGE
-						? undefined
-						: setTranslationValue(current?.description_translations, String(abyssLanguage), effectFormData.description);
+			const payload = {
+				name: effectFormData.name.trim(),
+				description: effectFormData.description.trim() ? effectFormData.description.trim() : null,
+				icon: effectFormData.icon.trim() ? effectFormData.icon.trim() : null,
+				color: effectFormData.color,
+				effect_type: effectFormData.effect_type,
+				updated_at: new Date().toISOString()
+			};
 
-				const { error: err } = await supabase
-					.from('special_effects')
-					.update({
-						...(abyssLanguage === BASE_LANGUAGE
-							? { name: effectFormData.name, description: effectFormData.description }
-							: { name_translations: nameTranslations, description_translations: descriptionTranslations }),
-						icon: effectFormData.icon,
-						color: effectFormData.color,
-						effect_type: effectFormData.effect_type,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', editingEffectId);
+			if (editingEffectId) {
+				const { error: err } = await supabase.from('special_effects').update(payload).eq('id', editingEffectId);
 				if (err) throw err;
 			} else {
-				const { error: err } = await supabase
-					.from('special_effects')
-					.insert({
-						name: effectFormData.name,
-						description: effectFormData.description,
-						icon: effectFormData.icon,
-						color: effectFormData.color,
-						effect_type: effectFormData.effect_type
-					});
+				const { error: err } = await supabase.from('special_effects').insert(payload);
 				if (err) throw err;
 			}
 
-			await loadSpecialEffects();
-			showEffectDrawer = false;
+			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadMonsters()]);
+			effectModalOpen = false;
 			editingEffectId = null;
 		} catch (err) {
 			alert(`Failed to save special effect: ${getErrorMessage(err)}`);
+		} finally {
+			effectModalSaving = false;
 		}
 	}
 
 	async function deleteEffect(effectId: string) {
-		if (!confirm('Are you sure you want to delete this special effect?')) return;
-
+		if (!confirm('Delete this special effect?')) return;
 		try {
-			const { error: err } = await supabase
-				.from('special_effects')
-				.delete()
-				.eq('id', effectId);
+			const { error: err } = await supabase.from('special_effects').delete().eq('id', effectId);
 			if (err) throw err;
-			await loadSpecialEffects();
+			await Promise.all([loadSpecialEffects(), loadMonsterSpecialEffects(), loadMonsters()]);
 		} catch (err) {
 			alert(`Failed to delete special effect: ${getErrorMessage(err)}`);
 		}
 	}
-
-	function submitEffectForm(e: SubmitEvent) {
-		e.preventDefault();
-		void saveEffect();
-	}
-
-	// Gallery selection
-	function toggleSelection(cardId: string) {
-		if (selectedCardIds.has(cardId)) {
-			selectedCardIds.delete(cardId);
-		} else {
-			selectedCardIds.add(cardId);
-		}
-		selectedCardIds = new Set(selectedCardIds);
-	}
-
-	function selectAll() {
-		selectedCardIds = new Set(filteredCards.map(c => c.id));
-	}
-
-	function deselectAll() {
-		selectedCardIds.clear();
-		selectedCardIds = new Set(selectedCardIds);
-	}
-
-	// Card generation
-	function renderMonsterForLanguage(monster: Monster, lang: AbyssLanguage): Monster {
-		const effectIds = monsterSpecialEffects[monster.id] ?? [];
-		const effects = effectIds
-			.map((id) => specialEffectsRaw.find((e) => e.id === id))
-			.filter((e): e is SpecialEffectRow => e !== undefined)
-			.map((effect) => ({
-				...effect,
-				name: getSpecialEffectName(effect, lang),
-				description: getSpecialEffectDescription(effect, lang)
-			}));
-
-		return {
-			...monster,
-			name: getMonsterName(monster, lang),
-			effects
-		};
-	}
-
-	async function generateCardForLanguage(
-		card: CardItem,
-		lang: AbyssLanguage,
-		progress?: { current: number; total: number }
-	): Promise<boolean> {
-		const rawMonster = monstersRaw.find((m) => m.id === card.id);
-		if (!rawMonster) {
-			progressMessage = `✗ Missing monster data for ${card.name}`;
-			return false;
-		}
-
-		const langLabel = lang === BASE_LANGUAGE ? 'Default' : lang;
-		const prefix = progress ? `${progress.current}/${progress.total} ` : '';
-
-		generatingCards.add(card.id);
-		generatingCards = new Set(generatingCards);
-		progressMessage = `${prefix}Generating (${langLabel}) card for ${getMonsterName(rawMonster, lang)}...`;
-
-		try {
-			const renderMonster = renderMonsterForLanguage(rawMonster, lang);
-			const rewardTrackIds = normalizeRewardTrack(renderMonster.barrier ?? 0, (renderMonster as any).reward_track);
-			const rewardTrackIconUrls = rewardTrackIds.map((slot) =>
-				slot
-					.map((id) => getIconPoolUrl(id))
-					.filter((url): url is string => typeof url === 'string' && url.length > 0)
-			);
-			const blob = await generateMonsterCardPNG(
-				renderMonster,
-				renderMonster.art_url,
-				renderMonster.icon_url,
-				rewardTrackIconUrls,
-				lang
-			);
-
-			const safeLang = sanitizeLanguageForPath(lang) || BASE_STORAGE_LANG;
-			const folder = `card_images/monsters/${safeLang}`;
-
-			const { data, error: uploadError } = await processAndUploadImage(blob, {
-				folder,
-				filename: card.id,
-				cropTransparent: true,
-				upsert: true
-			});
-
-			if (uploadError) throw uploadError;
-
-			const uploadedPath = data?.path ?? '';
-
-			const updatePayload: Record<string, unknown> = {
-				updated_at: new Date().toISOString()
-			};
-
-			if (lang === BASE_LANGUAGE) {
-				updatePayload.card_image_path = uploadedPath;
-			} else {
-				const current = (monstersRaw.find((m) => m.id === card.id) as any)?.card_image_path_translations ?? {};
-				updatePayload.card_image_path_translations = {
-					...(current as Record<string, string>),
-					[String(lang)]: uploadedPath
-				};
-			}
-
-			const { error: updateError } = await supabase.from('monsters').update(updatePayload).eq('id', card.id);
-			if (updateError) throw updateError;
-
-			monstersRaw = monstersRaw.map((m) => {
-				if (m.id !== card.id) return m;
-				if (lang === BASE_LANGUAGE) {
-					return { ...m, card_image_path: uploadedPath };
-				}
-				const currentTranslations = ((m as any).card_image_path_translations ?? {}) as Record<string, string>;
-				return { ...m, card_image_path_translations: { ...currentTranslations, [String(lang)]: uploadedPath } };
-			});
-
-			progressMessage = `${prefix}✓ Generated (${langLabel}) card for ${getMonsterName(rawMonster, lang)}`;
-			return true;
-		} catch (err) {
-			console.error('Failed to generate card:', err);
-			progressMessage = `${prefix}✗ Failed to generate (${langLabel}) card for ${getMonsterName(rawMonster, lang)}`;
-			return false;
-		} finally {
-			generatingCards.delete(card.id);
-			generatingCards = new Set(generatingCards);
-		}
-	}
-
-	function getAllAbyssLanguages(): AbyssLanguage[] {
-		const raw = abyssLanguageOptions.map((opt) =>
-			typeof opt === 'string' ? opt : String(opt.value)
-		);
-		const normalized = raw
-			.map((lang) => (lang === BASE_LANGUAGE ? BASE_LANGUAGE : normalizeLanguageCode(lang)))
-			.filter((lang) => lang.trim().length > 0);
-
-		const seen = new Set<string>();
-		const out: AbyssLanguage[] = [];
-		for (const lang of normalized) {
-			if (seen.has(lang)) continue;
-			seen.add(lang);
-			out.push(lang as AbyssLanguage);
-		}
-		if (!out.includes(BASE_LANGUAGE)) out.unshift(BASE_LANGUAGE);
-		return out;
-	}
-
-	async function generateCardsBatch(cards: CardItem[], langs: AbyssLanguage[], label: string) {
-		const targets = cards.filter((c) => Boolean(c.id));
-		if (targets.length === 0 || langs.length === 0) return;
-
-		const total = targets.length * langs.length;
-		let done = 0;
-		const errors: string[] = [];
-
-		for (const lang of langs) {
-			for (const card of targets) {
-				done += 1;
-				const ok = await generateCardForLanguage(card, lang, { current: done, total });
-				if (!ok) errors.push(`${lang}:${card.name}`);
-				await new Promise((resolve) => setTimeout(resolve, 50));
-			}
-		}
-
-		if (errors.length > 0) {
-			alert(`Generated ${total - errors.length}/${total} card exports.\n\nErrors (${errors.length}):\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
-		} else {
-			progressMessage = `✓ Generated ${total} card export(s) (${label})`;
-		}
-	}
-
-	async function generateSelected() {
-		const selectedCards = filteredCards.filter(c => selectedCardIds.has(c.id));
-		if (selectedCards.length === 0) {
-			alert('No cards selected');
-			return;
-		}
-
-		await generateCardsBatch(selectedCards, [abyssLanguage], abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage);
-		deselectAll();
-	}
-
-	async function generateAll() {
-		if (!confirm(`Generate cards for all ${filteredCards.length} items (${abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage})?`)) return;
-		await generateCardsBatch(filteredCards, [abyssLanguage], abyssLanguage === BASE_LANGUAGE ? 'Default' : abyssLanguage);
-	}
-
-	async function generateSelectedAllLanguages() {
-		const selectedCards = filteredCards.filter((c) => selectedCardIds.has(c.id));
-		if (selectedCards.length === 0) {
-			alert('No cards selected');
-			return;
-		}
-
-		const langs = getAllAbyssLanguages();
-		if (!confirm(`Generate cards for ${selectedCards.length} selected monsters in ALL languages (${langs.length})? This may take a while.`)) return;
-
-		await generateCardsBatch(selectedCards, langs, 'All Languages');
-		deselectAll();
-	}
-
-	async function generateAllAllLanguages() {
-		const langs = getAllAbyssLanguages();
-		if (!confirm(`Generate cards for all ${filteredCards.length} monsters in ALL languages (${langs.length})? This may take a while.`)) return;
-		await generateCardsBatch(filteredCards, langs, 'All Languages');
-	}
-
-	function handleTabChange(tabId: string) {
-		activeTab = tabId;
-	}
 </script>
 
 <PageLayout
-	title="Arcane Abyss"
-	subtitle="Monsters and card generation for the abyss deck"
+	title="Monster Cards"
+	subtitle="Manage monster card definitions (grouped by stage)"
 	{tabs}
 	{activeTab}
 	onTabChange={handleTabChange}
 >
 	{#snippet headerActions()}
 		{#if activeTab === 'special-effects'}
-			<Button variant="primary" onclick={openEffectForm}>+ Effect</Button>
-		{:else if activeTab === 'gallery'}
-			<Button variant="secondary" onclick={() => showGalleryModal = true}>View Gallery</Button>
+			<Button variant="primary" onclick={openNewEffect}>+ Effect</Button>
 		{/if}
 	{/snippet}
 
-	{#snippet tabActions()}
-		<div class="abyss-actions-row">
-			{#if activeTab === 'deck'}
-				<span class="count">{monsters.length} monsters</span>
-			{:else if activeTab === 'special-effects'}
-				<span class="count">{specialEffects.length} effects</span>
-			{:else if activeTab === 'gallery'}
-				<span class="count">{generatedCount}/{totalCount} generated</span>
-			{/if}
-
-			<div class="abyss-language">
-				<span class="abyss-language__label">Language</span>
-				<Select bind:value={abyssLanguageSelect} options={abyssLanguageOptions} disabled={loading || generatingCards.size > 0} />
-				<Input
-					bind:value={newAbyssLanguageDraft}
-					placeholder="Add lang (e.g. es, fr-CA)"
-					disabled={loading || generatingCards.size > 0}
-				/>
-				<Button
-					variant="secondary"
-					size="sm"
-					onclick={addAbyssLanguage}
-					disabled={loading || generatingCards.size > 0 || newAbyssLanguageDraft.trim().length === 0}
-				>
-					Add
-				</Button>
-			</div>
-		</div>
-	{/snippet}
-
 	{#if loading}
-		<div class="loading-state">Loading...</div>
+		<div class="loading-state">Loading…</div>
 	{:else if error}
 		<div class="error-state">Error: {error}</div>
-	{:else if activeTab === 'deck'}
-		{#key abyssLanguage}
-			<AbyssDeckWorkspace
-				{monsters}
-				events={[]}
-				locations={invadeLocations}
-				{specialEffects}
-				{monsterSpecialEffects}
-				language={abyssLanguage}
-				onMonsterSave={handleWorkspaceMonsterSave}
-				onMonsterDelete={handleWorkspaceMonsterDelete}
-				onSaveDeckOrder={saveDeckOrder}
-				onSelectMonster={(m) => (workspaceSelectedMonster = m)}
-				defaultShowCardPreviews={false}
-				showEvents={false}
-			/>
-		{/key}
-	{:else if activeTab === 'special-effects'}
-		<div class="effects-grid">
-			{#each specialEffects as effect (effect.id)}
-				{@const typeLabel = effectTypeOptions.find(o => o.value === effect.effect_type)?.label ?? 'During Combat'}
-				{@const typeColor = effectTypeColors[effect.effect_type] ?? effectTypeColors.during_combat}
-				<div class="effect-card" style="--effect-color: {effect.color || '#a855f7'}">
-					<div class="effect-card__type-badge" style="--type-color: {typeColor}">
-						{typeLabel}
-					</div>
-					<div class="effect-card__header">
-						{#if effect.icon}
-							<span class="effect-card__icon">{effect.icon}</span>
-						{/if}
-						<h3 class="effect-card__name">{effect.name}</h3>
-						<button class="effect-card__menu" onclick={() => openEffectEditForm(effect)}>
-							Edit
-						</button>
-					</div>
-					{#if effect.description}
-						<p class="effect-card__desc">{effect.description}</p>
-					{/if}
-					<div class="effect-card__footer">
-						<span class="effect-card__color-preview"></span>
-						<button class="effect-card__delete" onclick={() => deleteEffect(effect.id)}>
-							Delete
-						</button>
-					</div>
-				</div>
-			{/each}
-			{#if specialEffects.length === 0}
-				<div class="empty-state">No special effects yet. Click "+ Effect" to create one.</div>
-			{/if}
-		</div>
+	{:else if activeTab === 'monsters'}
+		<AbyssDeckWorkspace
+			{monsters}
+			events={[]}
+			locations={invadeLocations}
+			{specialEffects}
+			{monsterSpecialEffects}
+			onMonsterSave={handleMonsterSave}
+			onMonsterDelete={handleMonsterDelete}
+			onSaveDeckOrder={saveNoOrder}
+			defaultShowCardPreviews={false}
+			showEvents={false}
+			enableOrdering={false}
+			enableQuantities={false}
+			showImageUpload={true}
+			imageUploadFolder="monsters"
+			imageUploadCropTransparent={false}
+		/>
 	{:else if activeTab === 'gallery'}
 		<div class="gallery-container">
 			<div class="controls-bar">
 				<div class="filters">
 					<input
 						type="text"
-						placeholder="Search cards..."
-						bind:value={searchQuery}
+						placeholder="Search monsters..."
+						bind:value={gallerySearchQuery}
 						class="search-input"
 					/>
 
-					<select bind:value={stateFilter} class="filter-select">
-						<option value="all">All States</option>
-						<option value="tainted">Tainted</option>
-						<option value="corrupt">Corrupt</option>
-						<option value="fallen">Fallen</option>
-						<option value="arcane">Arcane</option>
+					<select bind:value={galleryStageFilter} class="filter-select">
+						<option value="all">All Stages</option>
+						<option value="stage_1">Stage 1</option>
+						<option value="stage_2">Stage 2</option>
+						<option value="stage_3">Stage 3</option>
+						<option value="final_stage">Final Stage</option>
 						<option value="inactive">Inactive</option>
 					</select>
 
-					<select bind:value={classificationFilter} class="filter-select">
-						<option value="all">All Classifications</option>
-						<option value="monster">Monster</option>
-						<option value="abyss_guardian">Abyss Guardian</option>
-						<option value="boss">Boss</option>
-					</select>
-
-					<select bind:value={statusFilter} class="filter-select">
+					<select bind:value={galleryStatusFilter} class="filter-select">
 						<option value="all">All Status</option>
 						<option value="generated">Generated</option>
 						<option value="not-generated">Not Generated</option>
 					</select>
 				</div>
 
-					<div class="actions">
-						{#if selectedCount > 0}
-							<Button variant="secondary" onclick={deselectAll} disabled={generatingCards.size > 0}>
-								Deselect All
-							</Button>
-							<Button variant="primary" onclick={generateSelected} disabled={generatingCards.size > 0}>
-								Generate Selected ({selectedCount})
-							</Button>
-							<Button
-								variant="secondary"
-								onclick={generateSelectedAllLanguages}
-								disabled={generatingCards.size > 0 || abyssLanguageOptions.length <= 1}
-							>
-								Generate Selected (All Languages)
-							</Button>
-						{:else}
-							<Button variant="secondary" onclick={selectAll} disabled={generatingCards.size > 0}>
-								Select All ({filteredCards.length})
-							</Button>
-						{/if}
+				<div class="actions">
+					{#if selectedGalleryCount > 0}
+						<Button variant="secondary" onclick={deselectAllGalleryMonsters}>
+							Deselect All
+						</Button>
+						<Button variant="primary" onclick={generateSelectedMonsterCards} disabled={generatingMonsterIds.size > 0}>
+							Generate Selected ({selectedGalleryCount})
+						</Button>
+					{:else}
+						<Button variant="secondary" onclick={selectAllGalleryMonsters}>
+							Select All ({filteredGalleryMonsters.length})
+						</Button>
+					{/if}
 
-						<Button variant="primary" onclick={generateAll} disabled={generatingCards.size > 0}>
-							Generate All
-						</Button>
-						<Button
-							variant="secondary"
-							onclick={generateAllAllLanguages}
-							disabled={generatingCards.size > 0 || abyssLanguageOptions.length <= 1}
-						>
-							Generate All (All Languages)
-						</Button>
-					</div>
+					<Button
+						variant="primary"
+						onclick={generateAllMonsterCards}
+						disabled={filteredGalleryMonsters.length === 0 || generatingMonsterIds.size > 0}
+					>
+						Generate All
+					</Button>
 				</div>
+			</div>
 
-			{#if progressMessage}
-				<div class="progress-message">{progressMessage}</div>
+			{#if galleryProgressMessage}
+				<div class="progress-message">{galleryProgressMessage}</div>
 			{/if}
 
 			<div class="cards-grid">
-				{#each filteredCards as card (card.id)}
-					{@const isSelected = selectedCardIds.has(card.id)}
-					{@const isGenerating = generatingCards.has(card.id)}
-					{@const hasCardImage = !!card.card_image_path}
-					{@const cardImageUrl = getCardImageUrl(card)}
+				{#each filteredGalleryMonsters as monster (monster.id)}
+					{@const isSelected = selectedMonsterIds.has(monster.id)}
+					{@const isGenerating = generatingMonsterIds.has(monster.id)}
+					{@const hasCardImage = !!monster.card_image_path}
+					{@const cardImageUrl = getMonsterCardImageUrl(monster)}
 
 					<div class="card-item" class:selected={isSelected}>
 						<div class="card-checkbox">
 							<input
 								type="checkbox"
 								checked={isSelected}
-								onchange={() => toggleSelection(card.id)}
+								onchange={() => toggleMonsterGallerySelection(monster.id)}
 								disabled={isGenerating}
 							/>
 						</div>
 
 						<div class="card-preview">
 							{#if hasCardImage && cardImageUrl}
-								<img src={cardImageUrl} alt={card.name} loading="lazy" />
+								<img src={cardImageUrl} alt={monster.name} loading="lazy" />
 								<div class="card-status generated">
 									<span class="status-icon">✓</span>
 								</div>
 							{:else}
 								<div class="card-placeholder">
-									{#if card.data.icon_url}
-										<img src={card.data.icon_url} alt={card.name} class="placeholder-icon" />
-									{:else if card.data.icon}
-										<div class="placeholder-emoji">{card.data.icon}</div>
+									{#if monster.icon_url}
+										<img src={monster.icon_url} alt={monster.name} class="placeholder-icon" />
+									{:else if monster.icon}
+										<div class="placeholder-emoji">{monster.icon}</div>
+									{:else}
+										<div class="placeholder-emoji">👹</div>
 									{/if}
-									<span class="placeholder-text">{card.name}</span>
+									<span class="placeholder-text">{monster.name}</span>
 								</div>
 							{/if}
 
@@ -1039,18 +613,18 @@
 
 						<div class="card-info">
 							<div class="card-header">
-								<h3 class="card-name">{card.name}</h3>
-								<span class="card-badge state-badge" style="--state-color: {getStateColor(card.data.state)}">
-									{card.data.state}
-								</span>
-							</div>
+								<h3 class="card-name">{monster.name}</h3>
+									<span class="card-badge state-badge" style="--state-color: {getMonsterStageColor(monster.stage)}">
+										{monster.stage}
+									</span>
+								</div>
 
 							<div class="card-footer">
-								<span class="card-order">#{card.order_num}</span>
+								<span class="card-order">#{(monster.order_num ?? 0) + 1}</span>
 								<Button
 									variant="secondary"
 									size="sm"
-									onclick={() => generateCardForLanguage(card, abyssLanguage)}
+									onclick={() => generateMonsterCard(monster)}
 									disabled={isGenerating}
 								>
 									{isGenerating ? 'Generating...' : hasCardImage ? 'Regenerate' : 'Generate'}
@@ -1061,118 +635,84 @@
 				{/each}
 			</div>
 
-			{#if filteredCards.length === 0}
-				<div class="empty-state">No cards match the current filters</div>
+			{#if filteredGalleryMonsters.length === 0}
+				<div class="empty-state">No monsters match the current filters.</div>
+			{/if}
+		</div>
+	{:else if activeTab === 'special-effects'}
+		<div class="effects-grid">
+			{#each specialEffects as effect (effect.id)}
+				{@const typeLabel = effectTypeOptions.find((o) => o.value === effect.effect_type)?.label ?? 'During Combat'}
+				<div class="effect-card">
+					<div class="effect-card__header">
+						<div class="effect-card__title">
+							{#if effect.icon}
+								<span class="effect-card__icon">{effect.icon}</span>
+							{/if}
+							<span class="effect-card__name">{effect.name}</span>
+						</div>
+						<div class="effect-card__actions">
+							<button class="btn" onclick={() => openEditEffect(effect)}>Edit</button>
+							<button class="btn danger" onclick={() => deleteEffect(effect.id)}>Delete</button>
+						</div>
+					</div>
+					<div class="effect-card__meta">
+						<span class="pill">{typeLabel}</span>
+						<span class="pill" style={`border-color:${effect.color ?? '#a855f7'}; color:${effect.color ?? '#a855f7'};`}>
+							{effect.color ?? '#a855f7'}
+						</span>
+					</div>
+					{#if effect.description}
+						<p class="effect-card__desc">{effect.description}</p>
+					{/if}
+				</div>
+			{/each}
+			{#if specialEffects.length === 0}
+				<div class="empty-state">No special effects yet. Click “+ Effect” to create one.</div>
 			{/if}
 		</div>
 	{/if}
 </PageLayout>
 
-<!-- Special Effect Drawer -->
-{#if showEffectDrawer}
-	<div
-		class="drawer-backdrop"
-		role="button"
-		tabindex="0"
-		onclick={(e) => e.currentTarget === e.target && (showEffectDrawer = false)}
-		onkeydown={(e) => e.key === 'Escape' && (showEffectDrawer = false)}
-	>
-		<div
-			class="drawer"
-			role="dialog"
-			tabindex="-1"
-		>
-			<div class="drawer-header">
-				<h2>{isEditingEffect ? 'Edit Special Effect' : 'Create Special Effect'}</h2>
-				<button class="close-btn" onclick={() => showEffectDrawer = false}>&times;</button>
-			</div>
-			<div class="drawer-content">
-					<form id="effect-form" class="form-grid" onsubmit={submitEffectForm}>
-						<div class="full-width">
-							<FormField label={abyssLanguage === BASE_LANGUAGE ? 'Name' : `Name (${abyssLanguage})`} required>
-								<Input
-									type="text"
-									bind:value={effectFormData.name}
-									required
-									placeholder={abyssLanguage === BASE_LANGUAGE ? 'Effect name' : (specialEffectsRaw.find((e) => e.id === editingEffectId)?.name ?? 'Effect name')}
-								/>
-							</FormField>
-						</div>
-					<FormField label="Effect Type">
-						<select bind:value={effectFormData.effect_type} class="effect-type-select">
-							{#each effectTypeOptions as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</FormField>
-					<FormField label="Icon (emoji)">
-						<Input type="text" bind:value={effectFormData.icon} placeholder="✨" />
-					</FormField>
-					<FormField label="Color">
-						<Input type="color" bind:value={effectFormData.color} />
-						</FormField>
-						<div class="full-width">
-							<FormField label={abyssLanguage === BASE_LANGUAGE ? 'Description' : `Description (${abyssLanguage})`}>
-								<Textarea
-									rows={3}
-									bind:value={effectFormData.description}
-									placeholder={abyssLanguage === BASE_LANGUAGE ? 'Effect description...' : (specialEffectsRaw.find((e) => e.id === editingEffectId)?.description ?? 'Effect description...')}
-								/>
-							</FormField>
-						</div>
-					</form>
-			</div>
-			<div class="drawer-footer">
-				<Button variant="primary" type="submit" form="effect-form">
-					{isEditingEffect ? 'Update' : 'Create'}
-				</Button>
-				<Button onclick={() => showEffectDrawer = false}>Cancel</Button>
-			</div>
-		</div>
+<Modal bind:open={effectModalOpen} title={isEditingEffect ? 'Edit Special Effect' : 'Create Special Effect'}>
+	<FormField label="Name" required>
+		<Input bind:value={effectFormData.name} disabled={effectModalSaving} />
+	</FormField>
+	<FormField label="Type">
+		<Select bind:value={effectFormData.effect_type} options={effectTypeOptions} disabled={effectModalSaving} />
+	</FormField>
+	<div class="grid-2">
+		<FormField label="Icon (emoji)">
+			<Input bind:value={effectFormData.icon} placeholder="✨" disabled={effectModalSaving} />
+		</FormField>
+		<FormField label="Color">
+			<Input type="color" bind:value={effectFormData.color} disabled={effectModalSaving} />
+		</FormField>
 	</div>
-{/if}
+	<FormField label="Description">
+		<Textarea rows={3} bind:value={effectFormData.description} disabled={effectModalSaving} />
+	</FormField>
 
-<MonsterCardGallery bind:isOpen={showGalleryModal} {monsters} events={[]} />
+	{#snippet footer()}
+		<Button variant="secondary" onclick={() => (effectModalOpen = false)} disabled={effectModalSaving}>Cancel</Button>
+		<Button variant="primary" onclick={saveEffect} disabled={effectModalSaving}>
+			{effectModalSaving ? 'Saving…' : 'Save'}
+		</Button>
+	{/snippet}
+</Modal>
 
 <style>
-	.count {
-		font-size: 0.7rem;
-		color: #64748b;
-	}
-
-	.abyss-actions-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem;
-		flex-wrap: wrap;
-	}
-
-	.abyss-language {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.abyss-language__label {
-		font-size: 0.7rem;
-		color: #94a3b8;
-	}
-
 	.loading-state,
 	.error-state {
 		padding: 1rem;
-		text-align: center;
-		color: #64748b;
-		font-size: 0.75rem;
+		color: #cbd5e1;
 	}
 
 	.error-state {
-		color: #f87171;
+		color: #fecaca;
 	}
 
-	/* Gallery Tab Styles */
+	/* Gallery Tab Styles (restored) */
 	.gallery-container {
 		display: flex;
 		flex-direction: column;
@@ -1180,290 +720,264 @@
 	}
 
 	.controls-bar {
-		background: rgba(30, 41, 59, 0.6);
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 6px;
-		padding: 0.5rem;
 		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 0.75rem;
+		padding: 0.75rem;
+		background: rgba(15, 23, 42, 0.4);
+		border: 1px solid rgba(148, 163, 184, 0.16);
+		border-radius: 12px;
+		flex-wrap: wrap;
 	}
 
 	.filters {
 		display: flex;
 		gap: 0.5rem;
 		flex-wrap: wrap;
+		align-items: center;
 	}
 
 	.search-input {
-		flex: 1;
-		min-width: 160px;
-		padding: 0.35rem 0.5rem;
-		background: rgba(15, 23, 42, 0.6);
+		padding: 0.5rem 0.75rem;
+		border-radius: 8px;
 		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 6px;
-		color: #f8fafc;
-		font-size: 0.75rem;
-	}
-
-	.search-input:focus {
-		outline: none;
-		border-color: #a855f7;
+		background: rgba(2, 6, 23, 0.35);
+		color: #e2e8f0;
+		min-width: 220px;
 	}
 
 	.filter-select {
-		padding: 0.35rem 0.5rem;
-		background: rgba(15, 23, 42, 0.6);
+		padding: 0.5rem 0.6rem;
+		border-radius: 8px;
 		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 6px;
-		color: #f8fafc;
-		font-size: 0.75rem;
-		cursor: pointer;
-	}
-
-	.filter-select:focus {
-		outline: none;
-		border-color: #a855f7;
+		background: rgba(2, 6, 23, 0.35);
+		color: #e2e8f0;
 	}
 
 	.actions {
 		display: flex;
 		gap: 0.5rem;
+		align-items: center;
 		flex-wrap: wrap;
 	}
 
 	.progress-message {
-		padding: 0.5rem;
-		background: rgba(59, 130, 246, 0.1);
-		border: 1px solid rgba(59, 130, 246, 0.3);
-		border-radius: 6px;
-		color: #60a5fa;
-		text-align: center;
-		font-size: 0.7rem;
+		padding: 0.5rem 0.75rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		background: rgba(2, 6, 23, 0.25);
+		color: #cbd5e1;
+		font-size: 0.85rem;
 	}
 
 	.cards-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-		gap: 0.5rem;
+		grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+		gap: 0.75rem;
 	}
 
 	.card-item {
-		background: rgba(30, 41, 59, 0.6);
-		border: 2px solid rgba(148, 163, 184, 0.2);
-		border-radius: 6px;
-		overflow: hidden;
-		transition: all 0.15s;
 		position: relative;
+		background: rgba(2, 6, 23, 0.35);
+		border: 1px solid rgba(148, 163, 184, 0.12);
+		border-radius: 12px;
+		overflow: hidden;
+		transition: border-color 0.15s ease, transform 0.15s ease;
 	}
 
 	.card-item:hover {
-		border-color: rgba(168, 85, 247, 0.5);
-		transform: translateY(-2px);
-		box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+		border-color: rgba(148, 163, 184, 0.25);
+		transform: translateY(-1px);
 	}
 
 	.card-item.selected {
-		border-color: #a855f7;
-		background: rgba(168, 85, 247, 0.05);
+		border-color: rgba(96, 165, 250, 0.6);
+		box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
 	}
 
 	.card-checkbox {
 		position: absolute;
 		top: 0.5rem;
 		left: 0.5rem;
-		z-index: 10;
+		z-index: 3;
 	}
 
-	.card-checkbox input[type="checkbox"] {
-		width: 1rem;
-		height: 1rem;
-		cursor: pointer;
-		accent-color: #a855f7;
+	.card-checkbox input {
+		width: 16px;
+		height: 16px;
+		accent-color: #60a5fa;
 	}
 
 	.card-preview {
-		width: 100%;
-		aspect-ratio: 3 / 2;
-		background: rgba(15, 23, 42, 0.6);
-		display: flex;
-		align-items: center;
-		justify-content: center;
 		position: relative;
-		overflow: hidden;
+		width: 100%;
+		aspect-ratio: 600 / 437;
+		background: rgba(15, 23, 42, 0.5);
+		display: grid;
+		place-items: center;
 	}
 
 	.card-preview img {
 		width: 100%;
 		height: 100%;
-		object-fit: contain;
+		object-fit: cover;
+		display: block;
 	}
 
 	.card-placeholder {
+		width: 100%;
+		height: 100%;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		gap: 0.5rem;
-		padding: 1rem;
+		padding: 0.75rem;
 		text-align: center;
+		color: #cbd5e1;
 	}
 
 	.placeholder-icon {
-		width: 48px;
-		height: 48px;
+		width: 72px;
+		height: 72px;
 		object-fit: contain;
+		filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.4));
 	}
 
 	.placeholder-emoji {
-		font-size: 2rem;
+		font-size: 2.25rem;
 	}
 
 	.placeholder-text {
-		color: #64748b;
-		font-size: 0.7rem;
+		font-weight: 700;
+		font-size: 0.9rem;
+		color: #e2e8f0;
 	}
 
 	.card-status {
 		position: absolute;
 		top: 0.5rem;
 		right: 0.5rem;
-		padding: 0.25rem 0.5rem;
-		border-radius: 4px;
-		font-size: 0.65rem;
-		font-weight: 600;
-		display: flex;
-		align-items: center;
-		gap: 0.15rem;
+		width: 22px;
+		height: 22px;
+		border-radius: 999px;
+		display: grid;
+		place-items: center;
+		font-size: 0.75rem;
+		font-weight: 900;
 	}
 
 	.card-status.generated {
-		background: rgba(34, 197, 94, 0.2);
-		color: #4ade80;
-		border: 1px solid rgba(34, 197, 94, 0.3);
-	}
-
-	.status-icon {
-		font-size: 0.8rem;
+		background: rgba(34, 197, 94, 0.18);
+		border: 1px solid rgba(34, 197, 94, 0.35);
+		color: #bbf7d0;
 	}
 
 	.card-generating {
 		position: absolute;
 		inset: 0;
-		background: rgba(15, 23, 42, 0.8);
-		display: flex;
-		align-items: center;
-		justify-content: center;
+		background: rgba(2, 6, 23, 0.65);
+		display: grid;
+		place-items: center;
+		z-index: 2;
 	}
 
 	.spinner {
-		width: 24px;
-		height: 24px;
-		border: 3px solid rgba(148, 163, 184, 0.2);
-		border-top-color: #a855f7;
-		border-radius: 50%;
-		animation: spin 1s linear infinite;
+		width: 28px;
+		height: 28px;
+		border-radius: 999px;
+		border: 3px solid rgba(148, 163, 184, 0.35);
+		border-top-color: rgba(96, 165, 250, 0.9);
+		animation: spin 0.9s linear infinite;
 	}
 
 	@keyframes spin {
-		to { transform: rotate(360deg); }
+		to {
+			transform: rotate(360deg);
+		}
 	}
 
 	.card-info {
-		padding: 0.5rem;
-		border-top: 1px solid rgba(148, 163, 184, 0.1);
+		padding: 0.65rem 0.75rem 0.75rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
 	}
 
 	.card-header {
 		display: flex;
 		justify-content: space-between;
-		align-items: start;
-		gap: 0.35rem;
-		margin-bottom: 0.5rem;
+		gap: 0.5rem;
+		align-items: center;
 	}
 
 	.card-name {
 		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
+		font-size: 0.95rem;
+		font-weight: 800;
 		color: #f8fafc;
-		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.card-badge {
-		padding: 0.15rem 0.35rem;
-		border-radius: 4px;
-		font-size: 0.65rem;
-		font-weight: 600;
+		font-size: 0.7rem;
+		font-weight: 800;
 		text-transform: uppercase;
-		flex-shrink: 0;
+		letter-spacing: 0.06em;
+		padding: 0.15rem 0.45rem;
+		border-radius: 999px;
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		color: #cbd5e1;
 	}
 
 	.state-badge {
-		background: color-mix(in srgb, var(--state-color) 20%, transparent);
+		border-color: color-mix(in srgb, var(--state-color) 55%, rgba(148, 163, 184, 0.3));
 		color: var(--state-color);
-		border: 1px solid color-mix(in srgb, var(--state-color) 30%, transparent);
 	}
 
 	.card-footer {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
+		gap: 0.5rem;
 	}
 
 	.card-order {
-		color: #64748b;
-		font-size: 0.7rem;
-		font-weight: 500;
-	}
-
-	.empty-state {
-		padding: 2rem;
-		text-align: center;
-		color: #64748b;
 		font-size: 0.75rem;
+		color: rgba(148, 163, 184, 0.85);
 	}
 
-	/* Special Effects Grid */
 	.effects-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 1rem;
+		grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+		gap: 0.75rem;
 	}
 
 	.effect-card {
-		background: rgba(30, 41, 59, 0.6);
-		border: 2px solid color-mix(in srgb, var(--effect-color) 30%, transparent);
-		border-radius: 8px;
-		padding: 1rem;
+		background: rgba(2, 6, 23, 0.35);
+		border: 1px solid rgba(148, 163, 184, 0.12);
+		border-radius: 12px;
+		padding: 0.75rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		transition: all 0.15s;
-	}
-
-	.effect-card:hover {
-		border-color: var(--effect-color);
-		background: color-mix(in srgb, var(--effect-color) 5%, rgba(30, 41, 59, 0.8));
-	}
-
-	.effect-card__type-badge {
-		align-self: flex-start;
-		padding: 0.2rem 0.5rem;
-		border-radius: 4px;
-		font-size: 0.65rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: var(--type-color);
-		background: color-mix(in srgb, var(--type-color) 15%, transparent);
-		border: 1px solid color-mix(in srgb, var(--type-color) 30%, transparent);
 	}
 
 	.effect-card__header {
 		display: flex;
+		justify-content: space-between;
+		gap: 0.75rem;
 		align-items: center;
+	}
+
+	.effect-card__title {
+		display: flex;
 		gap: 0.5rem;
+		align-items: center;
+		min-width: 0;
 	}
 
 	.effect-card__icon {
@@ -1471,167 +985,77 @@
 	}
 
 	.effect-card__name {
-		margin: 0;
-		font-size: 1rem;
-		font-weight: 600;
-		color: var(--effect-color);
-		flex: 1;
+		font-weight: 700;
+		color: #f8fafc;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.effect-card__menu {
+	.effect-card__actions {
+		display: flex;
+		gap: 0.35rem;
+		flex-shrink: 0;
+	}
+
+	.btn {
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		background: rgba(30, 41, 59, 0.6);
+		color: #e2e8f0;
+		border-radius: 8px;
 		padding: 0.25rem 0.5rem;
-		border-radius: 4px;
-		border: 1px solid rgba(148, 163, 184, 0.3);
-		background: rgba(15, 23, 42, 0.6);
-		color: #94a3b8;
-		font-size: 0.75rem;
 		cursor: pointer;
-		transition: all 0.15s;
+		transition: background 0.15s ease, border-color 0.15s ease;
 	}
 
-	.effect-card__menu:hover {
-		background: rgba(59, 130, 246, 0.2);
-		border-color: rgba(59, 130, 246, 0.4);
-		color: #60a5fa;
+	.btn:hover:enabled {
+		background: rgba(51, 65, 85, 0.75);
+		border-color: rgba(148, 163, 184, 0.35);
+	}
+
+	.btn.danger {
+		background: rgba(248, 113, 113, 0.12);
+		border-color: rgba(248, 113, 113, 0.25);
+		color: #fecaca;
+	}
+
+	.btn.danger:hover:enabled {
+		background: rgba(248, 113, 113, 0.2);
+		border-color: rgba(248, 113, 113, 0.4);
+	}
+
+	.effect-card__meta {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.pill {
+		font-size: 0.7rem;
+		padding: 0.1rem 0.45rem;
+		border-radius: 999px;
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		color: #cbd5e1;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 
 	.effect-card__desc {
 		margin: 0;
-		font-size: 0.8rem;
-		color: #94a3b8;
-		line-height: 1.4;
+		color: #cbd5e1;
+		font-size: 0.9rem;
+		line-height: 1.3;
 	}
 
-	.effect-card__footer {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-top: auto;
-		padding-top: 0.5rem;
-		border-top: 1px solid rgba(148, 163, 184, 0.1);
-	}
-
-	.effect-card__color-preview {
-		width: 20px;
-		height: 20px;
-		border-radius: 4px;
-		background: var(--effect-color);
-		border: 1px solid rgba(255, 255, 255, 0.2);
-	}
-
-	.effect-card__delete {
-		padding: 0.2rem 0.4rem;
-		border-radius: 4px;
-		border: 1px solid rgba(248, 113, 113, 0.3);
-		background: rgba(248, 113, 113, 0.1);
-		color: #f87171;
-		font-size: 0.7rem;
-		cursor: pointer;
-		transition: all 0.15s;
-	}
-
-	.effect-card__delete:hover {
-		background: rgba(248, 113, 113, 0.25);
-		border-color: rgba(248, 113, 113, 0.5);
-	}
-
-	/* Drawer Styles */
-	.drawer-backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
-		z-index: 100;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.drawer {
-		background: #0f172a;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 8px;
-		width: 90%;
-		max-width: 600px;
-		max-height: 90vh;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-
-	.drawer-header {
-		padding: 0.75rem 1rem;
-		border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		background: rgba(15, 23, 42, 0.8);
-	}
-
-	.drawer-header h2 {
-		margin: 0;
-		font-size: 1rem;
-		color: #f8fafc;
-	}
-
-	.close-btn {
-		background: none;
-		border: none;
-		color: #94a3b8;
-		font-size: 1.5rem;
-		cursor: pointer;
-		padding: 0;
-		width: 1.5rem;
-		height: 1.5rem;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 4px;
-		transition: all 0.15s;
-	}
-
-	.close-btn:hover {
-		background: rgba(148, 163, 184, 0.1);
-		color: #f8fafc;
-	}
-
-	.drawer-content {
-		flex: 1;
-		overflow-y: auto;
+	.empty-state {
 		padding: 1rem;
+		color: #94a3b8;
 	}
 
-	.drawer-footer {
-		padding: 0.75rem 1rem;
-		border-top: 1px solid rgba(148, 163, 184, 0.1);
-		display: flex;
-		gap: 0.5rem;
-		justify-content: flex-end;
-		background: rgba(15, 23, 42, 0.8);
-	}
-
-	.form-grid {
+	.grid-2 {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.form-grid .full-width {
-		grid-column: 1 / -1;
-	}
-
-	.effect-type-select {
-		width: 100%;
-		padding: 0.5rem 0.75rem;
-		border-radius: 6px;
-		border: 1px solid rgba(148, 163, 184, 0.3);
-		background: rgba(15, 23, 42, 0.65);
-		color: #f8fafc;
-		font-size: 0.875rem;
-		cursor: pointer;
-	}
-
-	.effect-type-select:focus {
-		outline: none;
-		border-color: rgba(168, 85, 247, 0.75);
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.75rem;
 	}
 </style>

@@ -2346,13 +2346,13 @@
 			</section>
 		{:else if activeTab === 'shop'}
 			<!-- SHOP ANALYSIS TAB (simplified, full version would be too long) -->
-			<section class="tab-section">
-				<p class="tab-description">Live breakdown of pool composition and legendary appearance odds.</p>
-				<div class="card">
-					<p>Shop analysis content placeholder - see /shop-analysis for full implementation</p>
-				</div>
-			</section>
-		{:else if activeTab === 'alt-dice'}
+				<section class="tab-section">
+					<p class="tab-description">Live breakdown of pool composition and legendary appearance odds.</p>
+					<div class="card">
+						<p>Shop analysis content placeholder.</p>
+					</div>
+				</section>
+			{:else if activeTab === 'alt-dice'}
 			<!-- ALT DICE TAB -->
 			<section class="tab-section">
 				<p class="tab-description">Unified 6-sided attack die optimized across all classes. <strong>Experimental - no database changes.</strong></p>

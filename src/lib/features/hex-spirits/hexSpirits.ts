@@ -8,6 +8,8 @@ export interface HexSpiritFormData {
 	name: string;
 	/** Optional localized names. Primary name remains `name`. */
 	name_translations: HexSpiritNameTranslation[];
+	/** When false, this spirit is excluded from editions and exports. */
+	is_enabled: boolean;
 	cost: number;
 	origin_id?: string | null; // UI convenience
 	class_id?: string | null; // UI convenience
@@ -32,6 +34,7 @@ export function emptyHexSpiritForm(): HexSpiritFormData {
 	return {
 		name: '',
 		name_translations: [],
+		is_enabled: true,
 		cost: DEFAULT_COST,
 		origin_id: null,
 		class_id: null,
@@ -55,6 +58,7 @@ export function hexSpiritRowToForm(row: HexSpiritRow): HexSpiritFormData {
 		id: row.id,
 		name: row.name,
 		name_translations: translations,
+		is_enabled: row.is_enabled ?? true,
 		cost: row.cost,
 		origin_id: origin_ids[0] ?? null, // UI convenience only
 		class_id: class_ids[0] ?? null, // UI convenience only
@@ -87,6 +91,7 @@ export async function saveHexSpiritRecord(
 	const payload = {
 		name: sanitized.name,
 		name_translations,
+		is_enabled: sanitized.is_enabled,
 		cost: sanitized.cost,
 		traits: sanitized.traits,
 		game_print_image_path: sanitized.game_print_image_path,
@@ -124,6 +129,7 @@ export async function deleteHexSpiritRecord(id: string, client: Rev2Client = sup
 function sanitizeHexSpiritForm(form: HexSpiritFormData): HexSpiritFormData {
 	const name = form.name.trim();
 	const name_translations = normalizeNameTranslations(form.name_translations);
+	const is_enabled = Boolean(form.is_enabled);
 	const cost = Number.isFinite(form.cost) ? Math.max(1, Math.round(form.cost)) : DEFAULT_COST;
 
 	// Use traits directly - the page manages origin_ids and class_ids arrays
@@ -142,6 +148,7 @@ function sanitizeHexSpiritForm(form: HexSpiritFormData): HexSpiritFormData {
 		...form,
 		name,
 		name_translations,
+		is_enabled,
 		cost,
 		traits: { origin_ids, class_ids },
 		game_print_image_path,
