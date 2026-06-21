@@ -6,6 +6,8 @@ export type Json =
 	| { [key: string]: Json | undefined }
 	| Json[];
 
+export type ClassType = 'normal' | 'special' | 'human';
+
 export type CustomDiceRow = {
 	id: string;
 	name: string;
@@ -44,53 +46,13 @@ export type DiceSideRow = {
 export type OriginRow = {
 	id: string;
 	name: string;
+	is_enabled: boolean;
 	position: number;
 	icon_emoji: string | null;
 	icon_png: string | null;
 	icon_token_png: string | null;
 	color: string | null;
 	description: string | null;
-	calling_card: Json | null;
-	created_at: string | null;
-	updated_at: string | null;
-};
-
-export type CallingCardBreakpoint = {
-	count: number; // e.g., 3 or 6 for "3 Unique", "6 Unique"
-	label?: string; // optional label like "Unique" or custom
-	icon_ids: string[]; // Array of icon pool IDs to display for this breakpoint
-};
-
-export type CallingCardEffect = {
-	type: 'benefit';
-	description: string;
-	value?: number;
-};
-
-export type CallingCard = {
-	enabled: boolean;
-	hex_spirit_id: string | null; // The Hex Spirit this calling card summons
-	breakpoints: CallingCardBreakpoint[];
-};
-
-export type CallingOrbTemplateData = {
-	backgroundImage: string | null;
-	textPositions: {
-		breakpointIndex: number;
-		x: number;
-		y: number;
-		fontSize: number;
-		color: string;
-		fontWeight: string;
-		gap?: number;
-	}[];
-};
-
-export type CallingOrbImageRow = {
-	id: string;
-	origin_id: string;
-	image_path: string;
-	template_data: Json | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
@@ -114,29 +76,47 @@ export type ClassRow = {
 	footer: string | null;
 	/** Optional localized class footers keyed by language tag (e.g. 'es', 'fr-CA'). */
 	footer_translations?: Record<string, string> | null;
+	class_type: ClassType;
+	is_special: boolean;
 	created_at: string | null;
 	updated_at: string | null;
 };
 
-export type RuneRow = {
+/**
+ * A row in the `mat_items` catalog. Holds the two material concepts distinguished
+ * by `kind`: origin-linked runes (`kind: 'rune'`) and relics (`kind: 'relic'`).
+ * Spirit augments are no longer catalog rows — they are derived from augment classes.
+ */
+export type MatItemRow = {
 	id: string;
 	name: string;
+	kind: 'rune' | 'relic';
 	origin_id: string | null;
-	class_id: string | null;
+	/** Emoji character for relics (no origin). Null for origin runes. */
+	emoji: string | null;
 	icon_path: string | null;
-	/** Optional per-rune background image used when generating rune icons. */
+	/** Optional per-item background image used when generating mat icons. */
 	icon_background_path: string | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
 
+export type AwakenRuneToken =
+	| string
+	| { kind: 'or'; rune_ids: string[] };
+
+export type AwakenCondition =
+	| { type: 'rune_cost'; rune_ids: AwakenRuneToken[] }
+	| { type: 'text'; text: string };
+
 export type HexSpiritRow = {
 	id: string;
 	name: string;
+	description: string | null;
 	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
 	name_translations?: Record<string, string> | null;
-	/** When false, this spirit is excluded from editions and exports. */
-	is_enabled: boolean;
+	/** Optional localized descriptions keyed by language tag (e.g. 'es', 'fr-CA'). */
+	description_translations?: Record<string, string> | null;
 	cost: number;
 	traits: {
 		origin_ids: string[];
@@ -144,56 +124,53 @@ export type HexSpiritRow = {
 	};
 	created_at: string | null;
 	game_print_image_path: string | null;
-	game_print_no_icons: string | null;
+	game_print_no_icons_path: string | null;
 	art_raw_image_path: string | null;
 	updated_at: string | null;
 	/** Optional override for the PSD folder used during Photoshop export. If null, folder is derived from cost. */
 	psd_folder_override: string | null;
-	/** Array of rune IDs required to play this spirit. Duplicates mean multiple of that rune needed. */
-	rune_cost: string[];
+	/** Awaken condition: rune cost or text. Null means no condition. */
+	awaken_condition: AwakenCondition | null;
 	/** If true, game_print_image_path is manually set and should not be overwritten by icon placer. */
 	manual_game_print: boolean;
+	/** Uploaded base image for the back side (no icons). */
+	back_side_base: string | null;
+	/** Final back side image (exported with icons or manually set). */
+	back_side_export: string | null;
+	/** Combined front+back texture for TTS Custom_Model hex tokens. */
+	tts_combined_image_path: string | null;
 };
-
-export type SpiritIconSlot = never; // legacy placeholder removed
 
 export type UnitRow = HexSpiritRow;
 
-export type ArtifactTagRow = {
+export type HexSpiritArtRawVariantSource = 'original' | 'uploaded' | 'generated';
+
+export type HexSpiritArtRawVariantRow = {
+	id: string;
+	hex_spirit_id: string;
+	label: string;
+	description: string | null;
+	storage_path: string;
+	source: HexSpiritArtRawVariantSource;
+	prompt: string | null;
+	game_print_no_icons_path: string | null;
+	game_print_image_path: string | null;
+	back_side_base_path: string | null;
+	back_side_export_path: string | null;
+	tts_combined_image_path: string | null;
+	is_variation_selected: boolean;
+	pipeline_status: string | null;
+	pipeline_error: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type RewardRowTagRow = {
 	id: string;
 	name: string;
 	color: string;
 	created_at: string | null;
 	updated_at: string | null;
-};
-
-export type ArtifactRecipeEntry = {
-	rune_id: string;
-	quantity: number;
-};
-
-export type ArtifactRow = {
-	id: string;
-	name: string;
-	/** Optional localized names keyed by language tag (e.g. 'es', 'fr-CA'). */
-	name_translations?: Record<string, string> | null;
-	benefit: string;
-	/** Optional localized benefit text keyed by language tag (e.g. 'es', 'fr-CA'). */
-	benefit_translations?: Record<string, string> | null;
-	recipe_box: ArtifactRecipeEntry[];
-	guardian_id: string | null;
-	/** legacy fields kept optional for UI compatibility (removed in DB) */
-	origin_id?: string | null;
-	class_id?: string | null;
-	tags?: string[] | null;
-	tag_ids: string[] | null;
-	quantity: number;
-	card_image_path: string | null;
-	/** Optional per-language card image path keyed by language tag (e.g. 'es', 'fr-CA'). */
-	card_image_path_translations?: Record<string, string> | null;
-	created_at: string | null;
-	updated_at: string | null;
-	template_id: string | null;
 };
 
 export type GuardianRow = {
@@ -272,18 +249,6 @@ export type RewardRow = {
 	label?: string; // Optional custom label override
 };
 
-export type TradeRow = {
-	left_icon_ids: string[];
-	right_icon_ids: string[];
-	left_icon_groups?: string[][];
-	right_icon_groups?: string[][];
-};
-
-export type GainRow = {
-	icon_ids: string[];
-	icon_groups?: string[][];
-};
-
 // Display configuration for each reward row type
 export const REWARD_ROW_CONFIG: Record<RewardRowType, { label: string; color: string; bgColor: string; borderColor: string }> = {
 	all_players: { label: 'ALL PLAYERS GAIN', color: '#f472b6', bgColor: 'rgba(244, 114, 182, 0.12)', borderColor: 'rgba(244, 114, 182, 0.4)' },
@@ -302,23 +267,15 @@ export type MonsterRow = {
 	name_translations?: Record<string, string> | null;
 	damage: number;
 	barrier: number;
-	/**
-	 * Unified reward-track structure. JSONB array of slots, each slot is a list of icon_pool UUIDs.
-	 * Semantics:
-	 * - slot 0: participation (reserved)
-	 * - slot i (1..killed_index-1): Damage i
-	 * - slot killed_index: KILLED
-	 * where killed_index = max(1, barrier).
-	 */
-	reward_track?: string[][];
+	/** Flat array of up to 6 icon IDs awarded on kill. */
+	reward_track: string[];
 	stage: 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
 	monster_classification: 'monster' | 'abyss_guardian' | 'boss' | 'final_boss';
-	/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
-	show_tutorial?: boolean | null;
 	icon: string | null;
 	image_path: string | null;
-	reward_rows: RewardRow[];
 	order_num: number;
+	/** Monster game print (NO INFO). Uploaded/script-processed base image used as input for the layout placer. */
+	card_base_image_path: string | null;
 	card_image_path: string | null;
 	/** Optional per-language card image path keyed by language tag (e.g. 'es', 'fr-CA'). */
 	card_image_path_translations?: Record<string, string> | null;
@@ -326,69 +283,8 @@ export type MonsterRow = {
 	/** Optional localized special_conditions keyed by language tag (e.g. 'es', 'fr-CA'). */
 	special_conditions_translations?: Record<string, string> | null;
 	invade_location_id: string | null;
-	created_at: string | null;
-	updated_at: string | null;
-	// Legacy fields kept for migration compatibility
-	reward_icons?: string[];
-	reward_header_type?: 'default' | 'tournament';
-};
-
-export type TravelerRow = {
-	id: string;
-	name: string;
-	damage: number;
-	barrier: number;
-	state: 'tainted' | 'corrupt' | 'fallen' | 'boss';
-	icon: string | null;
-	image_path: string | null;
-	reward_rows: RewardRow[];
-	trade_left_icon_ids: string[];
-	trade_right_icon_ids: string[];
-	trade_rows: TradeRow[];
-	gain_rows: GainRow[];
-	order_num: number;
-	card_image_path: string | null;
-	special_conditions: string | null;
-	traveler_subtext: string | null;
-	traveler_description: string | null;
-	invade_location_id: string | null;
-	/** Number of copies of this traveler in the deck. Defaults to 1. */
-	quantity: number;
-	created_at: string | null;
-	updated_at: string | null;
-	// Legacy fields kept for migration compatibility
-	reward_icons?: string[];
-	reward_header_type?: 'default' | 'tournament';
-};
-
-export type TravelerQuestRow = {
-	id: string;
-	title: string;
-	description: string | null;
-	reward_text: string | null;
-	/** JSON array of icon_pool UUIDs */
-	reward_icon_ids: string[];
-	tags: string[];
-	order_num: number;
-	/** Number of copies of this quest to export. Defaults to 1. */
-	quantity: number;
-	card_image_path: string | null;
-	created_at: string | null;
-	updated_at: string | null;
-};
-
-export type VengeanceCardRow = {
-	id: string;
-	title: string;
-	description: string | null;
-	reward_text: string | null;
-	/** JSON array of icon_pool UUIDs */
-	reward_icon_ids: string[];
-	tags: string[];
-	order_num: number;
-	/** Number of copies of this vengeance card to export. Defaults to 1. */
-	quantity: number;
-	card_image_path: string | null;
+	/** Array of icon_pool IDs representing the monster's dice pool. */
+	dice_pool: string[];
 	created_at: string | null;
 	updated_at: string | null;
 };
@@ -398,15 +294,6 @@ export type RarityTraitRow = {
 	cost: number;
 	origin_traits: number;
 	class_traits: number;
-	created_at: string | null;
-	updated_at: string | null;
-};
-
-export type ArtifactTemplateRow = {
-	id: string;
-	name: string;
-	config: Json;
-	is_active: boolean;
 	created_at: string | null;
 	updated_at: string | null;
 };
@@ -461,37 +348,22 @@ export type StageCardRowBase = {
 	data: Json;
 	/** Optional location backing this stage card (stage_location cards). */
 	game_location_id: string | null;
-	/** Optional traveler backing this stage card (traveler cards). */
-	traveler_id: string | null;
 };
 
 export type StageEventCardRow = StageCardRowBase & {
 	card_kind: 'event';
-	/** When this stage should end (shown on the event card). */
-	stage_completion: string | null;
 	reward_rows: RewardRow[];
 	game_location_id: null;
-	traveler_id: null;
 };
 
 export type StageLocationCardRow = StageCardRowBase & {
 	card_kind: 'stage_location';
-	stage_completion: null;
 	/** Not used for stage_location cards (reward rows come from game_locations). */
 	reward_rows: RewardRow[];
 	game_location_id: string;
-	traveler_id: null;
 };
 
-export type TravelerStageCardRow = StageCardRowBase & {
-	card_kind: 'traveler';
-	stage_completion: null;
-	reward_rows: RewardRow[];
-	game_location_id: null;
-	traveler_id: string;
-};
-
-export type StageCardRow = StageEventCardRow | StageLocationCardRow | TravelerStageCardRow;
+export type StageCardRow = StageEventCardRow | StageLocationCardRow;
 
 export type RewardIconToken =
 	| string
@@ -516,7 +388,6 @@ export type GameLocationRow = {
 	id: string;
 	name: string;
 	origin_id: string | null;
-	reward_rows: GameLocationRewardRow[];
 	background_image_path: string | null;
 	image_with_icons_path: string | null;
 	created_at: string | null;
@@ -563,17 +434,47 @@ export type GameLocationRowDesign =
 
 export type GameLocationRowCompositionRow = {
 	id: string;
-	location_id: string;
-	row_index: number;
+	name: string | null;
 	type: 'gain' | 'trade' | 'text';
-	config: Json;
+	config: Record<string, unknown>;
 	row_image_path: string | null;
-	pos_x: number;
-	pos_y: number;
-	scale: number;
+	tag_ids: string[];
+	quantity: number;
 	created_at: string | null;
 	updated_at: string | null;
 };
+
+export type RewardRowAssignment = {
+	id: string;
+	location_id: string;
+	row_id: string;
+	row_index: number;
+	pos_x: number;
+	pos_y: number;
+	scale: number;
+	created_at: string;
+};
+
+/** Convert a standalone reward row's config + type into a GameLocationRewardRow. */
+export function configToRewardRow(
+	type: 'gain' | 'trade' | 'text',
+	config: Record<string, unknown>
+): GameLocationRewardRow {
+	if (type === 'text') {
+		return { type: 'text', text: typeof config.text === 'string' ? config.text : '' };
+	}
+	if (type === 'trade') {
+		return {
+			type: 'trade',
+			cost_icon_ids: Array.isArray(config.cost_icon_ids) ? config.cost_icon_ids : [],
+			gain_icon_ids: Array.isArray(config.gain_icon_ids) ? config.gain_icon_ids : []
+		};
+	}
+	return {
+		type: 'gain',
+		gain_icon_ids: Array.isArray(config.gain_icon_ids) ? config.gain_icon_ids : []
+	};
+}
 
 export type SpecialEffectType = 'before_combat' | 'during_combat' | 'after_combat' | 'combat_type';
 
@@ -599,11 +500,22 @@ export type MonsterSpecialEffectRow = {
 	created_at: string | null;
 };
 
-export type TravelerSpecialEffectRow = {
+export type MonsterV2Row = {
 	id: string;
-	traveler_id: string;
-	special_effect_id: string;
+	name: string;
+	name_translations?: Record<string, string> | null;
+	attack_type: 'damage' | 'dice_pool';
+	damage: number;
+	barrier: number;
+	stage: number;
+	reward_track: string[];
+	order_num: number;
+	card_image_path: string | null;
+	card_image_path_translations?: Record<string, string> | null;
+	dice_pool: string[];
+	choose_amount: number;
 	created_at: string | null;
+	updated_at: string | null;
 };
 
 export type CostDuplicates = Record<string, number>;
@@ -615,23 +527,11 @@ export type EditionRow = {
 	origin_ids: string[];
 	cost_duplicates: CostDuplicates;
 	is_default: boolean;
+	is_enabled: boolean;
 	created_at: string | null;
 	updated_at: string | null;
 };
 
-export type SpecialCategoryRow = {
-	id: string;
-	name: string;
-	description: string | null;
-	color: string | null;
-	icon_emoji: string | null;
-	position: number;
-	slot_1_class_ids: string[];
-	slot_2_class_ids: string[];
-	slot_3_class_ids: string[];
-	created_at: string | null;
-	updated_at: string | null;
-};
 
 export type AbyssScenarioRow = {
 	id: string;
@@ -640,6 +540,7 @@ export type AbyssScenarioRow = {
 	/** Optional user-facing scenario name (fallback to `name`). */
 	display_name: string | null;
 	description: string | null;
+	is_enabled: boolean;
 	/** Optional curated list of game locations referenced by this scenario (separate from deck entries). */
 	game_location_ids: string[];
 	/** Optional display image path in storage (bucket-relative). */
@@ -651,6 +552,14 @@ export type AbyssScenarioRow = {
 
 /** Current canonical table name for scenarios (abyss_scenarios is a compatibility view). */
 export type ScenarioRow = AbyssScenarioRow;
+
+export type EditionScenarioRow = {
+	edition_id: string;
+	scenario_id: string;
+	order_num: number;
+	created_at: string | null;
+	updated_at: string | null;
+};
 
 export type ScenarioCardRow = {
 	id: string;
@@ -668,7 +577,6 @@ export type EventCardRow = {
 	stage: import('./eventTypes').EventType;
 	title: string;
 	description: string | null;
-	stage_completion: string | null;
 	reward_rows: RewardRow[];
 	image_path: string | null;
 	card_image_path: string | null;
@@ -678,7 +586,22 @@ export type EventCardRow = {
 	updated_at: string | null;
 };
 
-export type ScenarioDeckEntryKind = 'monster' | 'location' | 'traveler' | 'event';
+export type StageCompletionCardRow = {
+	id: string;
+	title: string;
+	complete_condition: string;
+	reward_rows: RewardRow[];
+	stage: import('./eventTypes').EventType;
+	scenario_id: string | null;
+	image_path: string | null;
+	card_image_path: string | null;
+	data: Json;
+	order_num: number;
+	created_at: string | null;
+	updated_at: string | null;
+};
+
+export type ScenarioDeckEntryKind = 'monster' | 'location' | 'event' | 'stage_completion';
 
 export type ScenarioDeckEntryRow = {
 	id: string;
@@ -690,20 +613,26 @@ export type ScenarioDeckEntryRow = {
 	data: Json;
 	monster_id: string | null;
 	game_location_id: string | null;
-	traveler_id: string | null;
 	event_id: string | null;
+	stage_completion_card_id: string | null;
 	legacy_scenario_card_id: string | null;
 	created_at: string | null;
 	updated_at: string | null;
 };
 
-/** Current canonical table name for mission cards (quests/traveler_quests remain compatibility views). */
-export type MissionCardRow = TravelerQuestRow;
-
-/**
- * Back-compat alias: older UI components still model mission cards as "quest cards".
- * Prefer `MissionCardRow` in new code.
- */
-export type QuestCardRow = MissionCardRow;
-
 // IconAsset type removed - consolidated into IconPoolRow with source_type='uploaded'
+
+export type ThreeDModelRow = {
+	id: string;
+	name: string;
+	obj_path: string | null;
+	mtl_path: string | null;
+	png_path: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type LookupService = {
+	getLabel: (id: string | null, defaultValue?: string) => string;
+	get: (id: string | null) => any;
+};

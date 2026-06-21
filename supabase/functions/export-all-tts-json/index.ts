@@ -8,6 +8,8 @@ type SpiritRow = {
   cost: number;
   traits: { origin_ids?: string[]; class_ids?: string[] } | null;
   game_print_image_path: string | null;
+  back_side_export: string | null;
+  tts_combined_image_path: string | null;
 };
 
 type NamedId = { id: string; name: string };
@@ -18,23 +20,10 @@ type NamedIdWithTranslations = {
   name_translations?: Record<string, string> | null;
 };
 
-type ArtifactRow = {
-  id: string;
-  name: string;
-  benefit: string;
-  name_translations?: Record<string, string> | null;
-  benefit_translations?: Record<string, string> | null;
-  recipe_box: unknown;
-  guardian_id: string | null;
-  tag_ids: string[] | null;
-  card_image_path: string | null;
-  card_image_path_translations?: Record<string, string> | null;
-  quantity: number | null;
-};
-
 type GuardianRow = {
   id: string;
   name: string;
+  name_translations?: Record<string, string> | null;
   origin_id: string | null;
   image_mat_path: string | null;
   chibi_image_path: string | null;
@@ -47,6 +36,9 @@ type RewardRowData = {
   label?: string;
 };
 
+type ResolvedIcon = { id: string; name: string; image_url: string | null };
+type ResolvedRewardRow = { type: string; label: string | null; icons: ResolvedIcon[] };
+
 type MonsterRow = {
   id: string;
   name: string;
@@ -54,40 +46,50 @@ type MonsterRow = {
   stage: string | null;
   barrier: number | null;
   damage: number | null;
+  invade_location_id: string | null;
   order_num: number | null;
   card_image_path: string | null;
   card_image_path_translations?: Record<string, string> | null;
-  reward_rows: RewardRowData[] | null;
+  card_base_image_path: string | null;
+  /** Flat array of up to 4 icon IDs awarded on kill. */
+  reward_track: string[] | null;
+  /** Array of icon_pool IDs representing the monster's dice pool. */
+  dice_pool: string[] | null;
   special_conditions: string | null;
   special_conditions_translations?: Record<string, string> | null;
-  quantity: number | null;
 };
 
-type TravelerRow = {
+type MonsterV2Row = {
   id: string;
   name: string;
-  state: string | null;
-  order_num: number | null;
+  name_translations?: Record<string, string> | null;
+  attack_type: string;
+  damage: number;
+  barrier: number;
+  stage: number;
+  order_num: number;
   card_image_path: string | null;
-  traveler_subtext: string | null;
-  traveler_description: string | null;
-  trade_rows: unknown | null;
-  gain_rows: unknown | null;
-  trade_left_icon_ids: string[] | null;
-  trade_right_icon_ids: string[] | null;
-  quantity: number | null;
+  card_image_path_translations?: Record<string, string> | null;
+  reward_track: string[] | null;
+  dice_pool: string[] | null;
 };
 
-type MissionDbRow = {
+type StageCompletionCardDbRow = {
   id: string;
   title: string;
-  description: string | null;
-  reward_text: string | null;
-  reward_icon_ids: unknown | null;
-  tags: string[] | null;
-  order_num: number | null;
+  complete_condition: string;
+  stage: string;
+  reward_rows: RewardRowData[] | null;
+  image_path: string | null;
   card_image_path: string | null;
-  quantity: number | null;
+  data: unknown | null;
+  order_num: number | null;
+};
+
+type StageDividerDbRow = {
+  id: string;
+  stage_completion: string | null;
+  data: unknown | null;
 };
 
 type ScenarioDeckEntryDbRow = {
@@ -98,46 +100,23 @@ type ScenarioDeckEntryDbRow = {
   entry_stage: string | null;
   monster_id: string | null;
   game_location_id: string | null;
-  traveler_id: string | null;
   event_id: string | null;
+  stage_divider_id: string | null;
+  stage_completion_card_id: string | null;
   data: unknown | null;
 };
 
-type ScenarioDeckEventCardRow = {
+type EventCardDbRow = {
   id: string;
-  order_num: number | null;
   internal_name: string;
   stage: string | null;
   title: string;
   description: string | null;
-  stage_completion: string | null;
   reward_rows: RewardRowData[] | null;
   image_path: string | null;
   card_image_path: string | null;
   data: unknown | null;
-};
-
-type ScenarioDeckLocationEntryRow = {
-  id: string; // scenario_deck_entries.id
   order_num: number | null;
-  entry_stage: string | null;
-  game_location_id: string;
-  location_name: string | null;
-  location_background_image_path: string | null;
-  location_image_with_icons_path: string | null;
-  data: unknown | null;
-};
-
-type ScenarioDeckTravelerEntryRow = {
-  id: string; // scenario_deck_entries.id
-  order_num: number | null;
-  entry_stage: string | null;
-  traveler_id: string;
-  traveler_name: string;
-  traveler_description: string | null;
-  traveler_subtext: string | null;
-  traveler_card_image_path: string | null;
-  traveler_image_path: string | null;
 };
 
 type SpecialEffectRow = {
@@ -153,6 +132,7 @@ type SpecialEffectRow = {
 type MonsterSpecialEffectRow = {
   monster_id: string;
   special_effect_id: string;
+  position: number | null;
 };
 
 // MiscAssetRow removed - now using icon_pool with source_type='uploaded' instead
@@ -169,6 +149,7 @@ type RuneRow = {
   name: string;
   origin_id: string | null;
   class_id: string | null;
+  emoji: string | null;
   icon_path: string | null;
 };
 
@@ -182,6 +163,7 @@ type CustomDiceRow = {
   color: string | null;
   dice_type: "attack" | "special";
   exported_template_path: string | null;
+  background_image_path: string | null;
 };
 
 type DiceSideRow = {
@@ -208,6 +190,8 @@ type ClassRow = {
   effect_schema: unknown | null;
   footer: string | null;
   footer_translations?: Record<string, string> | null;
+  class_type: "normal" | "special" | "human";
+  is_special: boolean;
 };
 
 type OriginRow = {
@@ -236,6 +220,8 @@ type HexSpiritBasic = {
   name_translations?: Record<string, string> | null;
   cost: number;
   game_print_image_path: string | null;
+  back_side_export: string | null;
+  tts_combined_image_path: string | null;
   traits: { origin_ids?: string[]; class_ids?: string[] } | null;
 };
 
@@ -260,27 +246,37 @@ type IconPoolRow = {
   } | null;
 };
 
-type SpecialCategoryRow = {
-  id: string;
-  name: string;
-  position: number;
-  slot_1_class_ids: string[] | null;
-  slot_2_class_ids: string[] | null;
-  slot_3_class_ids: string[] | null;
-};
-
 type GameLocationRow = {
   id: string;
   name: string;
   origin_id: string | null;
-  reward_rows: unknown | null;
   background_image_path: string | null;
   image_with_icons_path: string | null;
+};
+
+type GameLocationRowJoinedRow = {
+  row_id: string;
+  location_id: string;
+  row_index: number;
+  type: string;
+  config: unknown;
+  row_image_path: string | null;
+};
+
+type AllRewardRowDbRow = {
+  id: string;
+  name: string | null;
+  type: string;
+  config: unknown;
+  row_image_path: string | null;
+  tag_ids: string[] | null;
+  quantity: number;
 };
 
 type SpiritWorldMapConfigPathsRow = {
   background_image_path: string | null;
   generated_image_path: string | null;
+  layout_v2_location_ids: unknown | null;
 };
 
 type StorageObjectMetaRow = {
@@ -296,7 +292,7 @@ type StorageObjectMetaWithNameRow = {
   updated_at: unknown;
 };
 
-const SCHEMA = "arc-spirits-rev2";
+const SCHEMA = "arc_spirits_assets";
 const BUCKET = "game_assets";
 
 const stringify = (obj: unknown) =>
@@ -434,6 +430,14 @@ serve(async (req) => {
   const scenarioNameParam = url.searchParams.get("scenario");
   const exportLang = normalizeLanguageTag(url.searchParams.get("lang"));
   const exportLangPath = exportLang ? sanitizeLanguageForPath(exportLang) : null;
+  // Asset compression toggle: when ?compressed=1, every game_assets URL in the
+  // response is rewritten to its compressed counterpart from public.asset_compressed.
+  // Default is off so existing clients are unaffected. Falls back per-URL if the
+  // compressed row is missing.
+  const compressedFlag = ((): boolean => {
+    const v = url.searchParams.get("compressed");
+    return v === "1" || v === "true" || v === "yes";
+  })();
 
   const dbUrl =
     Deno.env.get("SUPABASE_DB_URL") ??
@@ -472,7 +476,10 @@ serve(async (req) => {
 
     if (scenarioIdParam) {
       const scenarioRes = await client.queryObject<ScenarioRow>(
-        `select id, name, display_name, description, game_location_ids, display_image_path, order_num from "${SCHEMA}".scenarios where id = $1 and edition_id = $2`,
+        `select s.id, s.name, s.display_name, s.description, s.game_location_ids, s.display_image_path, es.order_num
+         from "${SCHEMA}".edition_scenarios es
+         join "${SCHEMA}".scenarios s on s.id = es.scenario_id
+         where s.id = $1 and es.edition_id = $2`,
         [scenarioIdParam, edition.id]
       );
       if (scenarioRes.rows.length === 0) {
@@ -481,7 +488,10 @@ serve(async (req) => {
       scenario = scenarioRes.rows[0];
     } else if (scenarioNameParam) {
       const scenarioRes = await client.queryObject<ScenarioRow>(
-        `select id, name, display_name, description, game_location_ids, display_image_path, order_num from "${SCHEMA}".scenarios where edition_id = $1 and name = $2`,
+        `select s.id, s.name, s.display_name, s.description, s.game_location_ids, s.display_image_path, es.order_num
+         from "${SCHEMA}".edition_scenarios es
+         join "${SCHEMA}".scenarios s on s.id = es.scenario_id
+         where es.edition_id = $1 and s.name = $2`,
         [edition.id, scenarioNameParam]
       );
       if (scenarioRes.rows.length === 0) {
@@ -493,7 +503,12 @@ serve(async (req) => {
       scenario = scenarioRes.rows[0];
     } else {
       const scenarioRes = await client.queryObject<ScenarioRow>(
-        `select id, name, display_name, description, game_location_ids, display_image_path, order_num from "${SCHEMA}".scenarios where edition_id = $1 order by order_num, name limit 1`,
+        `select s.id, s.name, s.display_name, s.description, s.game_location_ids, s.display_image_path, es.order_num
+         from "${SCHEMA}".edition_scenarios es
+         join "${SCHEMA}".scenarios s on s.id = es.scenario_id
+         where es.edition_id = $1
+         order by es.order_num, s.name
+         limit 1`,
         [edition.id]
       );
       scenario = scenarioRes.rows[0] ?? null;
@@ -504,182 +519,134 @@ serve(async (req) => {
 	    const [
 	      originsRes,
 	      classesRes,
-	      tagsRes,
 	      guardiansRes,
-	      scenariosRes,
-	      scenarioDeckEntriesRes,
-	      monstersRes,
-	      scenarioEventCardsRes,
-	      scenarioLocationEntriesRes,
-      scenarioTravelerEntriesRes,
-      travelersRes,
-      missionsRes,
-      gameLocationsRes,
-      spiritsRes,
-      artifactsRes,
-      runesRes,
-      originsFullRes,
-      callingOrbsRes,
-      hexSpiritsBasicRes,
-      customDiceRes,
-      classesFullRes,
-      diceSidesRes,
-      tokensRes,
-      specialCategoriesRes,
-      allIconsRes,
-      specialEffectsRes,
-      monsterSpecialEffectsRes,
-      screenshotsRes,
+		      scenarioDeckEntriesRes,
+		      monstersRes,
+			      eventCardsRes,
+			      gameLocationsRes,
+		      gameLocationRowsRes,
+		      allRewardRowsRes,
+		      spiritsRes,
+		      runesRes,
+		      originsFullRes,
+	      callingOrbsRes,
+	      hexSpiritsBasicRes,
+	      customDiceRes,
+	      classesFullRes,
+	      diceSidesRes,
+	      tokensRes,
+		      allIconsRes,
+		      specialEffectsRes,
+		      monsterSpecialEffectsRes,
+		      stageCompletionCardsRes,
+	      stageDividersRes,
+	      screenshotsRes,
+	      threeDModelsRes,
+	      monstersV2Res,
 	    ] = await Promise.all([
 	      client.queryObject<NamedId>(`select id, name from "${SCHEMA}".origins`),
 	      client.queryObject<NamedIdWithTranslations>(`select id, name, name_translations from "${SCHEMA}".classes`),
-	      client.queryObject<NamedId>(`select id, name from "${SCHEMA}".artifact_tags`),
 	      client.queryObject<GuardianRow>(
 	        `select id, name, name_translations, origin_id, image_mat_path, chibi_image_path, icon_image_path from "${SCHEMA}".guardians`
 	      ),
-	      client.queryObject<ScenarioRow>(
-	        `select id, name, display_name, description, game_location_ids, display_image_path, order_num from "${SCHEMA}".scenarios where edition_id = $1 order by order_num, name`,
-	        [edition.id],
+		      client.queryObject<ScenarioDeckEntryDbRow>(
+		        `select
+		          id, kind, order_num, quantity, entry_stage,
+		          monster_id, game_location_id, event_id,
+		          stage_divider_id, stage_completion_card_id, data
+	        from "${SCHEMA}".scenario_deck_entries
+	        where scenario_id = $1
+	        order by order_num`,
+	        [scenarioId]
 	      ),
-	      client.queryObject<ScenarioDeckEntryDbRow>(
-	        `select
-	          id,
-	          kind,
-          order_num,
-          quantity,
-          entry_stage,
-          monster_id,
-          game_location_id,
-          traveler_id,
-          event_id,
-          data
-        from "${SCHEMA}".scenario_deck_entries
-        where scenario_id = $1
-        order by order_num`,
-        [scenarioId]
-      ),
-      client.queryObject<MonsterRow>(
-        `select
-          m.id,
-          m.name,
-          m.name_translations,
-          m.stage,
-          m.barrier,
-          m.damage,
-          sde.order_num,
-          m.card_image_path,
-          m.card_image_path_translations,
-          m.reward_rows,
-          m.special_conditions,
-          m.special_conditions_translations,
-          sde.quantity
-        from "${SCHEMA}".scenario_deck_entries sde
-        join "${SCHEMA}".monsters m on m.id = sde.monster_id
-        where sde.scenario_id = $1 and sde.kind = 'monster'
-        order by sde.order_num, m.name`,
-        [scenarioId]
-      ),
-      client.queryObject<ScenarioDeckEventCardRow>(
-        `select
-          c.id,
-          sde.order_num,
-          c.internal_name,
-          c.stage,
-          c.title,
-          c.description,
-          c.stage_completion,
-          c.reward_rows,
-          c.image_path,
-          c.card_image_path,
-          c.data
-        from "${SCHEMA}".scenario_deck_entries sde
-        join "${SCHEMA}".event_cards c on c.id = sde.event_id
-        where sde.scenario_id = $1 and sde.kind = 'event'
-        order by sde.order_num, c.title`,
-        [scenarioId]
-      ),
-      client.queryObject<ScenarioDeckLocationEntryRow>(
-        `select
-          sde.id,
-          sde.order_num,
-          sde.entry_stage,
-          sde.game_location_id,
-          sde.data,
-          gl.name as location_name,
-          gl.background_image_path as location_background_image_path,
-          gl.image_with_icons_path as location_image_with_icons_path
-        from "${SCHEMA}".scenario_deck_entries sde
-        join "${SCHEMA}".game_locations gl on gl.id = sde.game_location_id
-        where sde.scenario_id = $1 and sde.kind = 'location'
-        order by sde.order_num, gl.name`,
-        [scenarioId]
-      ),
-      client.queryObject<ScenarioDeckTravelerEntryRow>(
-        `select
-          sde.id,
-          sde.order_num,
-          sde.entry_stage,
-          sde.traveler_id,
-          t.name as traveler_name,
-          t.traveler_description,
-          t.traveler_subtext,
-          t.card_image_path as traveler_card_image_path,
-          t.image_path as traveler_image_path
-        from "${SCHEMA}".scenario_deck_entries sde
-        join "${SCHEMA}".travelers t on t.id = sde.traveler_id
-        where sde.scenario_id = $1 and sde.kind = 'traveler'
-        order by sde.order_num, t.name`,
-        [scenarioId]
-      ),
-      client.queryObject<TravelerRow>(
-        `select id, name, state, order_num, card_image_path, traveler_subtext, traveler_description, trade_rows, gain_rows, trade_left_icon_ids, trade_right_icon_ids, quantity from "${SCHEMA}".travelers order by order_num`
-      ),
-      client.queryObject<MissionDbRow>(
-        `select id, title, description, reward_text, reward_icon_ids, tags, order_num, card_image_path, quantity from "${SCHEMA}".missions order by order_num, title`
-      ),
-      client.queryObject<GameLocationRow>(
-        `select id, name, origin_id, reward_rows, background_image_path, image_with_icons_path from "${SCHEMA}".game_locations order by name`
-      ),
-      client.queryObject<SpiritRow>(
-        `select id, name, name_translations, cost, traits, game_print_image_path from "${SCHEMA}".hex_spirits where is_enabled = true`
-      ),
-      client.queryObject<ArtifactRow>(`select id, name, benefit, name_translations, benefit_translations, recipe_box, guardian_id, tag_ids, card_image_path, card_image_path_translations, quantity from "${SCHEMA}".artifacts`),
-      client.queryObject<RuneRow>(`select id, name, origin_id, class_id, icon_path from "${SCHEMA}".runes`),
-      // Full origins with calling card data
-      client.queryObject<OriginRow>(`select id, name, position, color, description, icon_png, calling_card from "${SCHEMA}".origins order by position`),
-      // Calling orb images
-      client.queryObject<CallingOrbImageRow>(`select id, origin_id, image_path from "${SCHEMA}".calling_orb_images`),
-      // Basic hex spirit info for calling card associations
-      client.queryObject<HexSpiritBasic>(
-        `select id, name, name_translations, cost, game_print_image_path, traits from "${SCHEMA}".hex_spirits where is_enabled = true`
-      ),
-      // Custom dice with their prefab templates
-      client.queryObject<CustomDiceRow>(`select id, name, name_translations, description, description_translations, icon, color, dice_type, exported_template_path from "${SCHEMA}".custom_dice`),
-      // Full classes with effect schema (contains dice_id references in breakpoints)
-      client.queryObject<ClassRow>(`select id, name, name_translations, position, icon_emoji, icon_png, color, description, description_translations, tags, effect_schema, footer, footer_translations from "${SCHEMA}".classes order by position`),
-      // Dice sides for face value counts
-      client.queryObject<DiceSideRow>(`select id, dice_id, side_number, reward_type, reward_value, reward_description, reward_description_translations from "${SCHEMA}".dice_sides order by dice_id, side_number`),
-      // Tokens from icon_pool marked for export
-      client.queryObject<IconPoolRow>(`select id, name, source_type, file_path, tags, export_as_token from "${SCHEMA}".icon_pool where export_as_token = true order by name`),
-      // Special categories for grouping classes
-      client.queryObject<SpecialCategoryRow>(`select id, name, position, slot_1_class_ids, slot_2_class_ids, slot_3_class_ids from "${SCHEMA}".special_categories`),
-      // All icons from icon_pool for reward resolution and full export
-      client.queryObject<IconPoolRow>(`select id, name, description, description_translations, icon_guide_name, icon_guide_name_translations, icon_guide_group, icon_guide_group_translations, icon_guide_position, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
-      // Special effects definitions
-      client.queryObject<SpecialEffectRow>(`select id, name, name_translations, description, description_translations, icon, color from "${SCHEMA}".special_effects`),
-      // Monster-to-special-effects junction
-      client.queryObject<MonsterSpecialEffectRow>(`select monster_id, special_effect_id from "${SCHEMA}".monster_special_effects`),
-      // Screenshot uploads (storage bucket)
-      client.queryObject<StorageObjectMetaWithNameRow>(
-        `select path, mimetype, size, updated_at from "${SCHEMA}".screenshots_export order by path`,
-      ),
-    ]);
+	      // Simple table queries (no JOINs needed)
+	      client.queryObject<MonsterRow>(
+	        `select id, name, name_translations, stage, barrier, damage, invade_location_id, order_num,
+	          card_image_path, card_image_path_translations, card_base_image_path, reward_track,
+	          dice_pool, special_conditions, special_conditions_translations
+	        from "${SCHEMA}".monsters`
+	      ),
+		      client.queryObject<EventCardDbRow>(
+		        `select id, internal_name, stage, title, description, reward_rows, image_path, card_image_path, data, order_num
+		        from "${SCHEMA}".event_cards`
+		      ),
+			      client.queryObject<GameLocationRow>(
+		        `select id, name, origin_id, background_image_path, image_with_icons_path from "${SCHEMA}".game_locations order by name`
+		      ),
+		      client.queryObject<GameLocationRowJoinedRow>(
+		        `select r.id as row_id, a.location_id, a.row_index, r.type, r.config, r.row_image_path
+		         from "${SCHEMA}".reward_row_assignments a
+		         join "${SCHEMA}".game_location_rows r on r.id = a.row_id
+		         order by a.location_id, a.row_index`
+		      ),
+		      client.queryObject<AllRewardRowDbRow>(
+		        `select id, name, type, config, row_image_path, tag_ids, quantity
+		         from "${SCHEMA}".game_location_rows
+		         order by name`
+		      ),
+		      client.queryObject<SpiritRow>(
+		        `select id, name, name_translations, cost, traits, game_print_image_path, back_side_export, tts_combined_image_path from "${SCHEMA}".hex_spirits`
+		      ),
+	      client.queryObject<RuneRow>(`select id, name, origin_id, class_id, emoji, icon_path from "${SCHEMA}".runes`),
+	      // Full origins with calling card data
+	      client.queryObject<OriginRow>(`select id, name, position, color, description, icon_png, calling_card from "${SCHEMA}".origins order by position`),
+	      // Calling orb images
+	      client.queryObject<CallingOrbImageRow>(`select id, origin_id, image_path from "${SCHEMA}".calling_orb_images`),
+	      // Basic hex spirit info for calling card associations
+	      client.queryObject<HexSpiritBasic>(
+	        `select id, name, name_translations, cost, game_print_image_path, back_side_export, tts_combined_image_path, traits from "${SCHEMA}".hex_spirits`
+	      ),
+	      // Custom dice with their prefab templates
+	      client.queryObject<CustomDiceRow>(`select id, name, name_translations, description, description_translations, icon, color, dice_type, exported_template_path, background_image_path from "${SCHEMA}".custom_dice`),
+	      // Full classes with effect schema (contains dice_id references in breakpoints)
+	      client.queryObject<ClassRow>(`select id, name, name_translations, position, icon_emoji, icon_png, color, description, description_translations, tags, effect_schema, footer, footer_translations, class_type, is_special from "${SCHEMA}".classes order by position`),
+	      // Dice sides for face value counts
+	      client.queryObject<DiceSideRow>(`select id, dice_id, side_number, reward_type, reward_value, reward_description, reward_description_translations from "${SCHEMA}".dice_sides order by dice_id, side_number`),
+	      // Tokens from icon_pool marked for export
+	      client.queryObject<IconPoolRow>(`select id, name, source_type, file_path, tags, export_as_token from "${SCHEMA}".icon_pool where export_as_token = true order by name`),
+	      // All icons from icon_pool for reward resolution and full export
+	      client.queryObject<IconPoolRow>(`select id, name, description, description_translations, icon_guide_name, icon_guide_name_translations, icon_guide_group, icon_guide_group_translations, icon_guide_position, source_type, file_path, tags, export_as_token, metadata from "${SCHEMA}".icon_pool order by source_type, name`),
+	      // Special effects definitions
+	      client.queryObject<SpecialEffectRow>(`select id, name, name_translations, description, description_translations, icon, color from "${SCHEMA}".special_effects`),
+		      // Monster-to-special-effects junction (with position for ordering)
+		      client.queryObject<MonsterSpecialEffectRow>(`select monster_id, special_effect_id, position from "${SCHEMA}".monster_special_effects order by monster_id, position`),
+		      // Stage completion cards
+	      client.queryObject<StageCompletionCardDbRow>(
+	        `select id, title, complete_condition, stage, reward_rows, image_path, card_image_path, data, order_num from "${SCHEMA}".stage_completion_cards`
+	      ),
+	      // Stage dividers
+	      client.queryObject<StageDividerDbRow>(`select id, stage_completion, data from "${SCHEMA}".stage_dividers`),
+	      // Screenshot uploads (storage bucket)
+	      client.queryObject<StorageObjectMetaWithNameRow>(
+	        `select path, mimetype, size, updated_at from "${SCHEMA}".screenshots_export order by path`,
+	      ),
+	      // 3D models
+	      client.queryObject<{ id: string; name: string; obj_path: string | null; mtl_path: string | null; png_path: string | null }>(
+	        `select id, name, obj_path, mtl_path, png_path from "${SCHEMA}".three_d_models order by name`,
+	      ),
+	      // Monsters V2 (abyss deck)
+	      client.queryObject<MonsterV2Row>(
+	        `select id, name, name_translations, attack_type, damage, barrier, stage, order_num,
+	          card_image_path, card_image_path_translations, reward_track, dice_pool
+	        from "${SCHEMA}".monsters_v2 order by order_num`,
+	      ),
+	    ]);
 
-    const originMap = new Map(originsRes.rows.map((r) => [r.id, r.name]));
-    const classMap = new Map(classesRes.rows.map((r) => [r.id, pickLocalizedText(r.name, r.name_translations, exportLang) ?? r.name]));
-    const tagMap = new Map(tagsRes.rows.map((r) => [r.id, r.name]));
-    const base = storageRenderBaseUrl(req);
-    const objectBase = storageObjectBaseUrl(req);
+	    const originMap = new Map(originsRes.rows.map((r) => [r.id, r.name]));
+	    const classMap = new Map(classesRes.rows.map((r) => [r.id, pickLocalizedText(r.name, r.name_translations, exportLang) ?? r.name]));
+	    const gameLocationNameById = new Map(gameLocationsRes.rows.map((r) => [r.id, r.name]));
+	    const gameLocationRowImageMap = new Map(
+	      gameLocationRowsRes.rows.map((r) => [`${r.location_id}:${r.row_index}`, r.row_image_path])
+	    );
+	    // Build a map of location_id → sorted joined reward rows from the junction table
+	    const locationRewardRowsMap = new Map<string, GameLocationRowJoinedRow[]>();
+	    for (const r of gameLocationRowsRes.rows) {
+	      const arr = locationRewardRowsMap.get(r.location_id) ?? [];
+	      arr.push(r);
+	      locationRewardRowsMap.set(r.location_id, arr);
+	    }
+	    const base = storageRenderBaseUrl(req);
+	    const objectBase = storageObjectBaseUrl(req);
     const resolveStorageImageUrl = (path: string | null): string | null =>
       path ? `${base}${encodeURI(path)}?quality=80` : null;
     const resolveStorageObjectUrl = (path: string | null, params?: Record<string, string>): string | null => {
@@ -748,17 +715,41 @@ serve(async (req) => {
     // Spirit World board export
     let spiritWorldBackgroundPath: string | null = null;
     let spiritWorldGeneratedPath: string | null = null;
+    let spiritWorldLayoutV2LocationIds: string[] = [];
+
+    const normalizeStringIdList = (value: unknown): string[] => {
+      if (!value) return [];
+      if (Array.isArray(value)) {
+        return value
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0);
+      }
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value) as unknown;
+          return normalizeStringIdList(parsed);
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    };
 
     try {
       const spiritWorldConfigRes = await client.queryObject<SpiritWorldMapConfigPathsRow>(
         `select
           config->>'background_image_path' as background_image_path,
-          config->>'generated_image_path' as generated_image_path
+          config->>'generated_image_path' as generated_image_path,
+          config->'layout_v2'->'location_ids' as layout_v2_location_ids
         from "${SCHEMA}".spirit_world_map_configs
         where name = 'default'`
       );
       spiritWorldBackgroundPath = spiritWorldConfigRes.rows[0]?.background_image_path ?? null;
       spiritWorldGeneratedPath = spiritWorldConfigRes.rows[0]?.generated_image_path ?? null;
+      spiritWorldLayoutV2LocationIds = normalizeStringIdList(
+        spiritWorldConfigRes.rows[0]?.layout_v2_location_ids ?? null,
+      );
     } catch (err) {
       console.warn(
         "Failed to load Spirit World map config; falling back to icon_pool SpiritWorld asset if present.",
@@ -803,6 +794,24 @@ serve(async (req) => {
       spiritWorldBoardCacheBust ? { cb: spiritWorldBoardCacheBust } : undefined,
     );
 
+    const individualLocationBoards = (() => {
+      const includeSet = new Set(spiritWorldLayoutV2LocationIds);
+      const shouldFilter = includeSet.size > 0;
+
+      return gameLocationsRes.rows
+        .filter((l) => l.image_with_icons_path !== null)
+        .filter((l) => (shouldFilter ? includeSet.has(l.id) : true))
+        .map((l) => ({
+          id: l.id,
+          name: l.name,
+          file_type: null,
+          file_size: null,
+          image_url: resolveStorageObjectUrl(l.image_with_icons_path),
+        }))
+        .filter((b) => b.image_url !== null)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    })();
+
     const boards = [
       ...allIconsRes.rows
         .filter((i) => Array.isArray(i.tags) && i.tags.includes("board"))
@@ -830,6 +839,8 @@ serve(async (req) => {
                   ? String(spiritWorldIcon.metadata.file_size)
                   : null),
               image_url: spiritWorldBoardUrl,
+              individual_location_board:
+                individualLocationBoards.length > 0 ? { locations: individualLocationBoards } : null,
             },
           ]
         : []),
@@ -852,6 +863,14 @@ serve(async (req) => {
       };
     });
 
+    const three_d_models = threeDModelsRes.rows.map((m) => ({
+      id: m.id,
+      name: m.name,
+      obj_url: resolveStorageObjectUrl(m.obj_path),
+      mtl_url: resolveStorageObjectUrl(m.mtl_path),
+      png_url: resolveStorageObjectUrl(m.png_path),
+    }));
+
     // Build monster -> effect IDs mapping (monster_id -> array of effect IDs)
     const monsterEffectsMap = new Map<string, string[]>();
     for (const mse of monsterSpecialEffectsRes.rows) {
@@ -873,132 +892,56 @@ serve(async (req) => {
       };
     });
 
-    // Build resolved reward rows map for each monster (monster_id -> resolved reward rows)
-    type ResolvedRewardRow = {
-      type: string;
-      label: string | null;
-      icons: { id: string; name: string; image_url: string | null }[];
-    };
-    const monsterRewardRowsMap = new Map<string, ResolvedRewardRow[]>();
+    // Build lookup maps for stage_deck resolution
+    const monsterMap = new Map(monstersRes.rows.map((m) => [m.id, m]));
+    const eventCardMap = new Map(eventCardsRes.rows.map((c) => [c.id, c]));
+    const stageCompletionCardMap = new Map(stageCompletionCardsRes.rows.map((sc) => [sc.id, sc]));
+    const stageDividerMap = new Map(stageDividersRes.rows.map((sd) => [sd.id, sd]));
 
-    for (const m of monstersRes.rows) {
-      const rows = m.reward_rows ?? [];
-      const resolvedRows: ResolvedRewardRow[] = rows.map((row) => {
-        const icons = (row.icon_ids ?? []).map(resolveIcon);
+	    type LocationRewardRow =
+	      | { type: "gain"; gain_icon_ids: string[] }
+	      | { type: "trade"; cost_icon_ids: string[]; gain_icon_ids: string[] }
+	      | { type: "text"; text: string };
 
+	    const normalizeIconIds = (value: unknown): string[] =>
+	      Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+
+	    const normalizeRewardTrack = (value: unknown): string[] => {
+	      if (!value) return [];
+	      if (typeof value === "string") {
+	        try {
+	          return normalizeRewardTrack(JSON.parse(value) as unknown);
+	        } catch {
+	          return [];
+	        }
+	      }
+	      if (!Array.isArray(value)) return [];
+	      return value
+	        .filter((id): id is string => typeof id === "string")
+	        .map((id) => id.trim())
+	        .filter((id) => id.length > 0)
+	        .slice(0, 4);
+	    };
+
+    const configToLocationRewardRow = (type: string, config: unknown): LocationRewardRow => {
+      const cfg = (config && typeof config === "object") ? config as Record<string, unknown> : {};
+      if (type === "text") {
+        return { type: "text", text: typeof cfg.text === "string" ? cfg.text : "" };
+      }
+      if (type === "trade") {
         return {
-          type: row.type,
-          label: row.label ?? null,
-          icons,
+          type: "trade",
+          cost_icon_ids: normalizeIconIds(cfg.cost_icon_ids),
+          gain_icon_ids: normalizeIconIds(cfg.gain_icon_ids),
         };
-      });
-      monsterRewardRowsMap.set(m.id, resolvedRows);
-    }
-
-    type LocationRewardRow =
-      | { type: "gain"; gain_icon_ids: string[] }
-      | { type: "trade"; cost_icon_ids: string[]; gain_icon_ids: string[] }
-      | { type: "text"; text: string };
-
-    const normalizeIconIds = (value: unknown): string[] =>
-      Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
-
-    const normalizeIconGroups = (value: unknown, fallback?: string[]): string[][] => {
-      if (Array.isArray(value)) {
-        return value
-          .map((group) => normalizeIconIds(group))
-          .filter((group) => group.length > 0);
       }
-      if (Array.isArray(fallback) && fallback.length > 0) {
-        return [normalizeIconIds(fallback)];
-      }
-      return [];
+      return { type: "gain", gain_icon_ids: normalizeIconIds(cfg.gain_icon_ids) };
     };
 
-    type TravelerTradeRowNormalized = { left_groups: string[][]; right_groups: string[][] };
-
-    const normalizeTravelerTradeRows = (
-      rows: unknown,
-      fallbackLeft: string[],
-      fallbackRight: string[]
-    ): TravelerTradeRowNormalized[] => {
-      if (!Array.isArray(rows)) {
-        const leftFallback = normalizeIconGroups(null, fallbackLeft);
-        const rightFallback = normalizeIconGroups(null, fallbackRight);
-        if (leftFallback.length === 0 && rightFallback.length === 0) return [];
-        return [{ left_groups: leftFallback, right_groups: rightFallback }];
-      }
-
-      return rows
-        .map((row): TravelerTradeRowNormalized | null => {
-          if (!row || typeof row !== "object") return null;
-          const left_groups = normalizeIconGroups((row as any).left_icon_groups, normalizeIconIds((row as any).left_icon_ids));
-          const right_groups = normalizeIconGroups((row as any).right_icon_groups, normalizeIconIds((row as any).right_icon_ids));
-          if (left_groups.length === 0 && right_groups.length === 0) return null;
-          return { left_groups, right_groups };
-        })
-        .filter((row): row is TravelerTradeRowNormalized => row !== null);
+    const getJoinedRewardRows = (locationId: string): LocationRewardRow[] => {
+      const joined = locationRewardRowsMap.get(locationId) ?? [];
+      return joined.map((r) => configToLocationRewardRow(r.type, r.config));
     };
-
-    const normalizeTravelerGainRows = (rows: unknown): string[][][] => {
-      if (!Array.isArray(rows)) return [];
-      return rows
-        .map((row): string[][] | null => {
-          if (!row || typeof row !== "object") return null;
-          const groups = normalizeIconGroups((row as any).icon_groups, normalizeIconIds((row as any).icon_ids));
-          return groups.length > 0 ? groups : null;
-        })
-        .filter((row): row is string[][] => row !== null);
-    };
-
-    const normalizeLocationRewardRows = (rows: unknown): LocationRewardRow[] => {
-      if (!Array.isArray(rows)) return [];
-
-      return rows.map((row): LocationRewardRow => {
-        if (!row || typeof row !== "object") {
-          return { type: "gain", gain_icon_ids: [] };
-        }
-
-        // Legacy: { icon_ids: [...] }
-        if (Array.isArray((row as any).icon_ids)) {
-          return {
-            type: "gain",
-            gain_icon_ids: normalizeIconIds((row as any).icon_ids),
-          };
-        }
-
-        const rawType = (row as any).type;
-        if (rawType === "text") {
-          return { type: "text", text: typeof (row as any).text === "string" ? (row as any).text : "" };
-        }
-
-        const type = rawType === "trade" ? "trade" : "gain";
-        const gain_icon_ids = normalizeIconIds((row as any).gain_icon_ids);
-
-        if (type === "trade") {
-          return {
-            type: "trade",
-            cost_icon_ids: normalizeIconIds((row as any).cost_icon_ids),
-            gain_icon_ids,
-          };
-        }
-
-        return { type: "gain", gain_icon_ids };
-      });
-    };
-
-    // Build map of class_id -> special category name
-    const classToSpecialCategoryMap = new Map<string, string>();
-    for (const cat of specialCategoriesRes.rows) {
-      const allClassIds = [
-        ...(cat.slot_1_class_ids ?? []),
-        ...(cat.slot_2_class_ids ?? []),
-        ...(cat.slot_3_class_ids ?? []),
-      ];
-      for (const classId of allClassIds) {
-        classToSpecialCategoryMap.set(classId, cat.name);
-      }
-    }
 
     // Build calling orb images map (origin_id -> image_path)
     const callingOrbMap = new Map(callingOrbsRes.rows.map((r) => [r.origin_id, r.image_path]));
@@ -1039,6 +982,12 @@ serve(async (req) => {
             },
             image_url: spirit.game_print_image_path
               ? `${base}${encodeURI(spirit.game_print_image_path)}?quality=80`
+              : null,
+            back_image_url: spirit.back_side_export
+              ? `${base}${encodeURI(spirit.back_side_export)}?quality=80`
+              : null,
+            combined_tts_image_url: spirit.tts_combined_image_path
+              ? `${base}${encodeURI(spirit.tts_combined_image_path)}?quality=80`
               : null,
           };
         }
@@ -1110,6 +1059,8 @@ serve(async (req) => {
       cost: number;
       traits: { origins: { id: string; name: string | null }[]; classes: { id: string; name: string | null }[] };
       image_url: string | null;
+      back_image_url: string | null;
+      combined_tts_image_url: string | null;
       copy_index: number;
     }[] = [];
 
@@ -1125,6 +1076,10 @@ serve(async (req) => {
       const image_url = s.game_print_image_path
         ? `${base}${encodeURI(s.game_print_image_path)}?quality=80`
         : null;
+      const back_image_url = s.back_side_export
+        ? `${base}${encodeURI(s.back_side_export)}?quality=80`
+        : null;
+      const combined_tts_image_url = resolveStorageImageUrl(s.tts_combined_image_path);
 
       // Get duplicate count for this spirit's cost (default to 1)
       const duplicateCount = costDuplicates[String(s.cost)] ?? 1;
@@ -1138,81 +1093,80 @@ serve(async (req) => {
 	          cost: s.cost,
 	          traits: { origins, classes },
 	          image_url,
+	          back_image_url,
+	          combined_tts_image_url,
 	          copy_index: i + 1,
         });
       }
     }
 
-	    const artifacts = artifactsRes.rows.map((a) => {
-	      const tag_ids = a.tag_ids ?? [];
-	      const tag_names = tag_ids.map((id) => tagMap.get(id) ?? null);
-	      const imageStoragePath = pickLocalizedText(a.card_image_path, a.card_image_path_translations, exportLang);
-	      const image_path = imageStoragePath ? `${base}${encodeURI(imageStoragePath)}?quality=80` : null;
+    // --- Resolver functions for stage_deck card data ---
 
-	      const image_path_translations: Record<string, string> = {};
-	      if (a.card_image_path_translations && typeof a.card_image_path_translations === "object") {
-	        for (const [lang, path] of Object.entries(a.card_image_path_translations)) {
-          if (typeof path !== "string" || path.trim().length === 0) continue;
-          image_path_translations[String(lang)] = `${base}${encodeURI(path)}?quality=80`;
-        }
-	      }
-	      const name = pickLocalizedText(a.name, a.name_translations, exportLang) ?? a.name;
-	      const benefit = pickLocalizedText(a.benefit, a.benefit_translations, exportLang) ?? a.benefit;
-	      return {
-	        id: a.id,
-	        name,
-	        benefit,
-	        name_translations: a.name_translations ?? {},
-	        benefit_translations: a.benefit_translations ?? {},
-	        recipe_box: a.recipe_box,
-	        guardian_id: a.guardian_id,
-        image_path,
-        image_path_translations,
-        tag_ids,
-        tag_names,
-        quantity: a.quantity ?? 1,
-      };
-    });
+    const resolveMonsterCard = (m: MonsterRow) => {
+      const finalCardPath = pickLocalizedText(m.card_image_path, m.card_image_path_translations, exportLang);
+      const baseCardPath = m.card_base_image_path ?? null;
+      const image_url = (finalCardPath ?? baseCardPath)
+        ? `${base}${encodeURI(finalCardPath ?? baseCardPath!)}?quality=80`
+        : null;
+      const image_url_final = finalCardPath ? `${base}${encodeURI(finalCardPath)}?quality=80` : null;
+      const image_url_base = baseCardPath ? `${base}${encodeURI(baseCardPath)}?quality=80` : null;
+      const reward_track = normalizeRewardTrack(m.reward_track);
+      const reward_icons = reward_track.map(resolveIcon);
+      const name = pickLocalizedText(m.name, m.name_translations, exportLang) ?? m.name;
+      const invade_location_id = m.invade_location_id ?? null;
+      const invade_location_name = invade_location_id ? gameLocationNameById.get(invade_location_id) ?? null : null;
+      const effect_ids = monsterEffectsMap.get(m.id) ?? [];
+      const dice_pool: string[] = Array.isArray(m.dice_pool) ? m.dice_pool : [];
+      const special_conditions = pickLocalizedText(m.special_conditions, m.special_conditions_translations, exportLang);
 
-	    // Map monsters
-	    // Expand monsters by quantity (duplicates appear in sequence)
-	    const monsterCards = monstersRes.rows.flatMap((m) => {
-	      const cardPath = pickLocalizedText(m.card_image_path, m.card_image_path_translations, exportLang);
-	      const image_url = cardPath ? `${base}${encodeURI(cardPath)}?quality=80` : null;
-	      const reward_rows = monsterRewardRowsMap.get(m.id) ?? [];
-	      const name = pickLocalizedText(m.name, m.name_translations, exportLang) ?? m.name;
-
-	      // Get effect IDs for this monster (normalized - just IDs, lookup via special_effects)
-	      const effect_ids = monsterEffectsMap.get(m.id) ?? [];
-
-      const quantity = m.quantity ?? 1;
-      const baseOrderNum = m.order_num ?? 999;
-
-	      // Create quantity copies of the card
-		      return Array.from({ length: quantity }, (_, copyIndex) => ({
-		        id: m.id,
-		        name,
-		        type: "monster" as const,
-		        stage: m.stage,
-		        barrier: m.barrier,
-		        damage: m.damage,
-	        // Use fractional order_num to keep copies together in sequence
-	        order_num: baseOrderNum + (copyIndex * 0.001),
-	        image_url,
+      return {
+        id: m.id,
+        name,
+        stage: m.stage,
+        barrier: m.barrier,
+        damage: m.damage,
+        invade_location_id,
+        invade_location_name,
+        image_url,
+        image_url_final,
+        image_url_base,
         effect_ids,
-        reward_rows,
-        copy_index: copyIndex + 1,
-        total_copies: quantity,
-      }));
-    });
+        dice_pool,
+        reward_track,
+        reward_icons,
+        special_conditions,
+      };
+    };
 
-    // Sort monsters by order_num
-    const monsters = [...monsterCards].sort((a, b) => (a.order_num ?? 999) - (b.order_num ?? 999));
+    const resolveMonsterV2Card = (m: MonsterV2Row) => {
+      const finalCardPath = pickLocalizedText(m.card_image_path, m.card_image_path_translations, exportLang);
+      const image_url = finalCardPath ? `${base}${encodeURI(finalCardPath)}?quality=80` : null;
+      const reward_track = normalizeRewardTrack(m.reward_track);
+      const reward_icons = reward_track.map(resolveIcon);
+      const name = pickLocalizedText(m.name, m.name_translations, exportLang) ?? m.name;
+      const dice_pool: string[] = Array.isArray(m.dice_pool) ? m.dice_pool : [];
+      const dice_pool_icons = dice_pool.map(resolveIcon);
 
-    // Map scenario stage deck (event_cards + scenario-specific location/traveler entries)
-    const baseEvents = scenarioEventCardsRes.rows.map((c) => {
+      return {
+        id: m.id,
+        name,
+        attack_type: m.attack_type,
+        stage: m.stage,
+        barrier: m.barrier,
+        damage: m.attack_type === "damage" ? m.damage : null,
+        order_num: m.order_num,
+        image_url,
+        dice_pool,
+        dice_pool_icons,
+        reward_track,
+        reward_icons,
+      };
+    };
+
+    const monsters_v2 = monstersV2Res.rows.map(resolveMonsterV2Card);
+
+    const resolveEventCard = (c: EventCardDbRow) => {
       const image_url = c.card_image_path ? `${base}${encodeURI(c.card_image_path)}?quality=80` : null;
-
       const reward_rows: ResolvedRewardRow[] = (c.reward_rows ?? []).map((row) => ({
         type: row.type,
         label: row.label ?? null,
@@ -1221,164 +1175,110 @@ serve(async (req) => {
 
       return {
         id: c.id,
-        name: c.title, // Display name
-        type: "event" as const,
-        state: "event",
-        order_num: c.order_num ?? 999,
+        name: c.title,
+        description: c.description ?? null,
+        stage: c.stage ?? null,
         image_url,
         reward_rows,
-        // Event-specific fields
-        event_name: c.id,
-        description: c.description ?? "",
-        event_type: c.stage ?? null,
-        stage_completion: c.stage_completion ?? null,
-        event_kind: "event" as const,
       };
-    });
+    };
 
-    const stageLocationCards = scenarioLocationEntriesRes.rows.map((c) => {
-      const cardPath = c.location_image_with_icons_path ?? c.location_background_image_path ?? null;
-      const image_url = cardPath ? `${base}${encodeURI(cardPath)}?quality=80` : null;
-
-      return {
-        id: c.id, // entry id (allows duplicates)
-        name: c.location_name ?? c.game_location_id,
-        type: "event" as const,
-        state: "event",
-        order_num: c.order_num ?? 999,
-        image_url,
-        reward_rows: [] as ResolvedRewardRow[],
-        event_name: c.id,
-        description: "",
-        event_type: c.entry_stage ?? null,
-        stage_completion: null,
-        event_kind: "event_location" as const,
-        location_id: c.game_location_id,
-      };
-    });
-
-    const stageTravelerCards = scenarioTravelerEntriesRes.rows.map((c) => {
-      const cardPath = c.traveler_card_image_path ?? c.traveler_image_path ?? null;
-      const image_url = cardPath ? `${base}${encodeURI(cardPath)}?quality=80` : null;
-
-      return {
-        id: c.id, // entry id (allows duplicates)
-        name: c.traveler_name,
-        type: "event" as const,
-        state: "event",
-        order_num: c.order_num ?? 999,
-        image_url,
-        reward_rows: [] as ResolvedRewardRow[],
-        event_name: c.id,
-        description: c.traveler_description ?? "",
-        event_type: c.entry_stage ?? null,
-        stage_completion: null,
-        event_kind: "traveler" as const,
-        traveler_id: c.traveler_id,
-      };
-    });
-
-    const events = [...baseEvents, ...stageLocationCards, ...stageTravelerCards].sort(
-      (a, b) => (a.order_num ?? 999) - (b.order_num ?? 999)
-    );
-
-    const scenario_deck_entries = scenarioDeckEntriesRes.rows.map((e) => ({
-      id: e.id,
-      kind: e.kind,
-      order_num: e.order_num ?? 999,
-      quantity: Math.max(1, Math.trunc(e.quantity ?? 1)),
-      entry_stage: e.entry_stage ?? null,
-      monster_id: e.monster_id ?? null,
-      game_location_id: e.game_location_id ?? null,
-      traveler_id: e.traveler_id ?? null,
-      event_id: e.event_id ?? null,
-      data: e.data ?? null,
-    }));
-
-    // Map travelers with trade/gain rows resolved via icon_pool
-    const travelers = travelersRes.rows.flatMap((t) => {
-      const image_url = t.card_image_path
-        ? `${base}${encodeURI(t.card_image_path)}?quality=80`
+    const resolveLocationCard = (l: GameLocationRow) => {
+      const origin_name = l.origin_id ? originMap.get(l.origin_id) ?? null : null;
+      const image_url = l.image_with_icons_path
+        ? `${base}${encodeURI(l.image_with_icons_path)}?quality=80`
         : null;
-      const tradeRows = normalizeTravelerTradeRows(
-        t.trade_rows,
-        t.trade_left_icon_ids ?? [],
-        t.trade_right_icon_ids ?? []
-      );
-      const gainRows = normalizeTravelerGainRows(t.gain_rows);
+      const background_image_url = l.background_image_path
+        ? `${base}${encodeURI(l.background_image_path)}?quality=80`
+        : null;
 
-      const resolved_trade_rows = tradeRows.map((row) => ({
-        left_groups: row.left_groups.map((group) => group.map(resolveIcon)),
-        right_groups: row.right_groups.map((group) => group.map(resolveIcon)),
-      }));
-
-      const resolved_gain_rows = gainRows.map((groups) =>
-        groups.map((group) => group.map(resolveIcon))
-      );
-
-      const quantity = t.quantity ?? 1;
-      const baseOrderNum = t.order_num ?? 999;
-
-      return Array.from({ length: quantity }, (_, copyIndex) => ({
-        id: t.id,
-        name: t.name,
-        state: t.state,
-        order_num: baseOrderNum + copyIndex * 0.001,
+      return {
+        id: l.id,
+        name: l.name,
+        origin_id: l.origin_id,
+        origin_name,
         image_url,
-        traveler_subtext: t.traveler_subtext,
-        traveler_description: t.traveler_description,
-        trade_rows: resolved_trade_rows,
-        gain_rows: resolved_gain_rows,
-        copy_index: copyIndex + 1,
-        total_copies: quantity,
+        background_image_url,
+      };
+    };
+
+    const resolveStageCompletionCard = (sc: StageCompletionCardDbRow) => {
+      const image_url = sc.card_image_path
+        ? `${base}${encodeURI(sc.card_image_path)}?quality=80`
+        : null;
+      const reward_rows: ResolvedRewardRow[] = (sc.reward_rows ?? []).map((row) => ({
+        type: row.type,
+        label: row.label ?? null,
+        icons: (row.icon_ids ?? []).map(resolveIcon),
       }));
+
+      return {
+        id: sc.id,
+        title: sc.title,
+        complete_condition: sc.complete_condition,
+        stage: sc.stage,
+        reward_rows,
+        image_url,
+      };
+    };
+
+    const resolveStageDividerCard = (sd: StageDividerDbRow) => ({
+      id: sd.id,
+      stage_completion: sd.stage_completion ?? null,
     });
 
-	    // Map missions (scroll-style cards)
-	    const missions = missionsRes.rows.flatMap((m) => {
-	      const image_url = m.card_image_path
-	        ? `${base}${encodeURI(m.card_image_path)}?quality=80`
-	        : null;
+    // --- Build unified stage_deck ---
 
-	      const reward_icon_ids = Array.isArray(m.reward_icon_ids)
-	        ? m.reward_icon_ids.filter((id): id is string => typeof id === "string")
-	        : [];
+    const stage_deck = scenarioDeckEntriesRes.rows.map((entry) => {
+      const baseEntry = {
+        kind: entry.kind,
+        order_num: entry.order_num ?? 999,
+        quantity: Math.max(1, Math.trunc(entry.quantity ?? 1)),
+        entry_stage: entry.entry_stage ?? null,
+        data: entry.data ?? null,
+      };
 
-	      const reward_icons = reward_icon_ids.map(resolveIcon);
-	      const tags = Array.isArray(m.tags)
-	        ? m.tags.filter((t): t is string => typeof t === "string")
-	        : [];
-
-	      const quantity = Math.max(1, Math.trunc(m.quantity ?? 1));
-	      const baseOrderNum = m.order_num ?? 999;
-
-	      return Array.from({ length: quantity }, (_, copyIndex) => ({
-	        id: m.id,
-	        title: m.title,
-	        description: m.description ?? null,
-	        order_num: baseOrderNum + copyIndex * 0.001,
-	        image_url,
-	        reward_text: m.reward_text ?? null,
-	        reward_icons,
-	        tags,
-	        copy_index: copyIndex + 1,
-	        total_copies: quantity,
-	      }));
-	    });
+      switch (entry.kind) {
+        case "monster": {
+          const m = entry.monster_id ? monsterMap.get(entry.monster_id) : undefined;
+          return { ...baseEntry, card: m ? resolveMonsterCard(m) : null };
+        }
+        case "event": {
+          const c = entry.event_id ? eventCardMap.get(entry.event_id) : undefined;
+          return { ...baseEntry, card: c ? resolveEventCard(c) : null };
+        }
+        case "location": {
+          const l = entry.game_location_id ? gameLocationsRes.rows.find((gl) => gl.id === entry.game_location_id) : undefined;
+          return { ...baseEntry, card: l ? resolveLocationCard(l) : null };
+        }
+        case "stage_completion": {
+          const sc = entry.stage_completion_card_id ? stageCompletionCardMap.get(entry.stage_completion_card_id) : undefined;
+          return { ...baseEntry, card: sc ? resolveStageCompletionCard(sc) : null };
+        }
+        case "stage_divider": {
+          const sd = entry.stage_divider_id ? stageDividerMap.get(entry.stage_divider_id) : undefined;
+          return { ...baseEntry, card: sd ? resolveStageDividerCard(sd) : null };
+        }
+        default:
+          return { ...baseEntry, card: null };
+      }
+    });
 
     // Map runes with origin/class names resolved
     const runes = runesRes.rows.map((r) => {
       const origin_name = r.origin_id ? originMap.get(r.origin_id) ?? null : null;
       const class_name = r.class_id ? classMap.get(r.class_id) ?? null : null;
       const icon_url = r.icon_path ? `${base}${encodeURI(r.icon_path)}?quality=80` : null;
+      const type = r.origin_id ? "origin" : r.class_id ? "class" : "special";
       return {
         id: r.id,
         name: r.name,
-        type: r.origin_id ? "origin" : "class",
+        type,
         origin_id: r.origin_id,
         origin_name,
         class_id: r.class_id,
         class_name,
+        emoji: r.emoji,
         icon_url,
       };
     });
@@ -1387,6 +1287,9 @@ serve(async (req) => {
     const custom_dice = customDiceRes.rows.map((d) => {
       const prefab_image_url = d.exported_template_path
         ? `${base}${encodeURI(d.exported_template_path)}?quality=80`
+        : null;
+      const background_image_url = d.background_image_path
+        ? `${base}${encodeURI(d.background_image_path)}?quality=80`
         : null;
 
       // Get sides for this dice and build faces array
@@ -1406,6 +1309,7 @@ serve(async (req) => {
         color: d.color,
         dice_type: d.dice_type,
         prefab_image_url,
+        background_image_url,
         faces,
       };
     });
@@ -1413,7 +1317,6 @@ serve(async (req) => {
     // Map classes with effect schema (contains dice_id references in breakpoints)
     const classes = classesFullRes.rows.map((c) => {
       const icon_url = c.icon_png ? `${base}${encodeURI(c.icon_png)}?quality=80` : null;
-      const special = classToSpecialCategoryMap.get(c.id) ?? null;
       return {
         id: c.id,
         name: pickLocalizedText(c.name, c.name_translations, exportLang) ?? c.name,
@@ -1425,7 +1328,8 @@ serve(async (req) => {
         tags: c.tags,
         effect_schema: localizeClassEffectSchema(c.effect_schema, exportLang),
         footer: pickLocalizedText(c.footer, c.footer_translations, exportLang),
-        special,
+        class_type: c.class_type ?? (c.is_special ? "special" : "normal"),
+        is_special: c.is_special,
       };
     });
 
@@ -1461,76 +1365,88 @@ serve(async (req) => {
       background_url: `${base}${encodeURI("tts_menu/background.png")}?quality=80`,
     };
 
-    const attachedGameLocationIds = (() => {
-      const ids = new Set<string>();
-
-      const curated = scenario?.game_location_ids;
-      if (Array.isArray(curated)) {
-        for (const id of curated) {
-          if (typeof id !== "string") continue;
-          const trimmed = id.trim();
-          if (!trimmed) continue;
-          ids.add(trimmed);
-        }
-      }
-
-      for (const entry of scenarioDeckEntriesRes.rows) {
-        if (entry.kind === "location" && entry.game_location_id) {
-          ids.add(entry.game_location_id);
-        }
-      }
-
-      for (const row of scenarioLocationEntriesRes.rows) {
-        if (row.game_location_id) ids.add(row.game_location_id);
-      }
-
-      return ids;
-    })();
-
-    // Map game locations with reward rows resolved via icon_pool.
-    // Only include locations attached to the selected scenario.
-    const game_locations = gameLocationsRes.rows
-      .filter((l) => attachedGameLocationIds.has(l.id))
-      .map((l) => {
-      const origin_name = l.origin_id ? originMap.get(l.origin_id) ?? null : null;
-      const image_url = l.image_with_icons_path
-        ? `${base}${encodeURI(l.image_with_icons_path)}?quality=80`
+	    // Map game locations with reward rows resolved via icon_pool.
+	    // Include every table-backed location, then append the fixed Arcane Abyss location.
+	    const tableGameLocations = gameLocationsRes.rows.map((l) => {
+	      const origin_name = l.origin_id ? originMap.get(l.origin_id) ?? null : null;
+	      const image_url = l.image_with_icons_path
+	        ? `${base}${encodeURI(l.image_with_icons_path)}?quality=80`
         : null;
       const background_image_url = l.background_image_path
         ? `${base}${encodeURI(l.background_image_path)}?quality=80`
         : null;
 
-      const rewardRows = normalizeLocationRewardRows(l.reward_rows);
-      const reward_rows = rewardRows.map((row) => {
-        if (row.type === "trade") {
-          return {
-            type: "trade" as const,
-            cost_icons: (row.cost_icon_ids ?? []).map(resolveIcon),
-            gain_icons: (row.gain_icon_ids ?? []).map(resolveIcon),
-          };
-        }
-        if (row.type === "text") {
-          return {
-            type: "text" as const,
-            text: row.text ?? "",
-          };
-        }
-        return {
-          type: "gain" as const,
-          icons: (row.gain_icon_ids ?? []).map(resolveIcon),
-        };
-      });
+	      const rewardRows = getJoinedRewardRows(l.id);
+		      const reward_rows = rewardRows.map((row) => {
+		        if (row.type === "trade") {
+		          return {
+		            type: "trade" as const,
+		            cost_icons: (row.cost_icon_ids ?? []).map(resolveIcon),
+		            gain_icons: (row.gain_icon_ids ?? []).map(resolveIcon),
+		          };
+		        }
+		        if (row.type === "text") {
+		          return {
+		            type: "text" as const,
+		            text: row.text ?? "",
+		          };
+		        }
+		        return {
+		          type: "gain" as const,
+		          icons: (row.gain_icon_ids ?? []).map(resolveIcon),
+		        };
+		      });
 
-      return {
-        id: l.id,
-        name: l.name,
+	      return {
+	        id: l.id,
+	        name: l.name,
         origin_id: l.origin_id,
         origin_name,
         image_url,
         background_image_url,
-        reward_rows,
-      };
-    });
+	        reward_rows,
+	      };
+	    });
+
+	    const arcaneAbyssLocation = {
+	      id: "arcane_abyss",
+	      name: "Arcane Abyss",
+	      origin_id: null,
+	      origin_name: null,
+	      image_url: null,
+	      background_image_url: null,
+	      reward_rows: [],
+	    };
+
+	    const hasArcaneAbyss = tableGameLocations.some(
+	      (l) => l.id === arcaneAbyssLocation.id || l.name.trim().toLowerCase() === "arcane abyss",
+	    );
+	    const game_locations = hasArcaneAbyss
+	      ? tableGameLocations
+	      : [...tableGameLocations, arcaneAbyssLocation];
+
+	    // Build assignment lookup: row_id → assignment details[]
+	    const assignmentsByRowId = new Map<string, { location_id: string; location_name: string; row_index: number }[]>();
+	    for (const a of gameLocationRowsRes.rows) {
+	      const arr = assignmentsByRowId.get(a.row_id) ?? [];
+	      arr.push({
+	        location_id: a.location_id,
+	        location_name: gameLocationNameById.get(a.location_id) ?? "Unknown",
+	        row_index: a.row_index,
+	      });
+	      assignmentsByRowId.set(a.row_id, arr);
+	    }
+
+	    // Export ALL reward rows (not just assigned ones)
+	    const reward_rows = allRewardRowsRes.rows.map((r) => ({
+	      id: r.id,
+	      name: r.name,
+	      tag_ids: r.tag_ids ?? [],
+	      quantity: r.quantity ?? 1,
+	      row_object: configToLocationRewardRow(r.type, r.config),
+	      row_image_url: resolveStorageImageUrl(r.row_image_path),
+	      assignments: assignmentsByRowId.get(r.id) ?? [],
+	    }));
 
     // Icon Guide: icons manually pinned via icon_pool.tags ("icon_guide").
     const iconGuideIconIds = new Set<string>();
@@ -1642,29 +1558,23 @@ serve(async (req) => {
 This document describes the JSON schema for the Arc Spirits Tabletop Simulator (TTS) export format.
 Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large board images (e.g. SpiritWorld) use direct \`/storage/v1/object/public\` URLs.
 
----
+			---
 
 	## Root Object
 
 		| Field | Type | Description |
 		|-------|------|-------------|
-		| \`exported_at\` | string | ISO 8601 timestamp of when the export was generated |
-		| \`export_language\` | string | Language tag used to localize translatable fields (or \`base\`) |
-		| \`edition\` | Edition | The edition configuration used for this export |
-		| \`scenarios\` | ScenarioRef[] | All scenarios for the selected edition (used by scenario picker UIs) |
-		| \`schema_docs\` | string | This documentation in markdown format |
-		| \`origins\` | Origin[] | Array of origin factions |
-		| \`classes\` | Class[] | Array of character classes |
-		| \`hex_spirits\` | HexSpirit[] | Array of hex spirit cards (filtered by edition) |
-		| \`artifacts\` | Artifact[] | Array of artifact cards |
-	| \`monsters\` | Monster[] | Array of monster cards (sorted by order_num) |
-	| \`events\` | Event[] | Array of event cards (sorted by order_num; includes event-location cards) |
-	| \`scenario_deck_entries\` | ScenarioDeckEntry[] | Canonical per-scenario ordered list of deck entries (monster/location/traveler/event) |
-	| \`game_locations\` | GameLocation[] | Game locations attached to the selected scenario |
-	| \`icon_guide_icons\` | IconGuideIcon[] | Icons manually pinned to the Icon Guide |
+			| \`exported_at\` | string | ISO 8601 timestamp of when the export was generated |
+			| \`export_language\` | string | Language tag used to localize translatable fields (or \`base\`) |
+			| \`edition\` | Edition | The edition configuration used for this export |
+			| \`schema_docs\` | string | This documentation in markdown format |
+			| \`origins\` | Origin[] | Array of origin factions |
+			| \`classes\` | Class[] | Array of character classes |
+			| \`hex_spirits\` | HexSpirit[] | Array of hex spirit cards (filtered by edition) |
+		| \`stage_deck\` | StageDeckEntry[] | Unified ordered deck for the selected scenario (monster/event/location/stage_completion/stage_divider) |
+		| \`game_locations\` | GameLocation[] | All table-backed game locations plus the hardcoded Arcane Abyss |
+		| \`icon_guide_icons\` | IconGuideIcon[] | Icons manually pinned to the Icon Guide |
 	| \`icon_guide_png_url\` | string \\| null | Public URL to the Icon Guide PNG (may 404 if not exported yet) |
-	| \`travelers\` | Traveler[] | Array of traveler cards |
-	| \`missions\` | Mission[] | Array of mission scroll cards |
 	| \`special_effects\` | SpecialEffect[] | Array of special effect definitions |
 	| \`guardians\` | Guardian[] | Array of playable guardian characters |
 	| \`runes\` | Rune[] | Array of rune tokens |
@@ -1674,6 +1584,8 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 	| \`tts_menu\` | TTSMenu | TTS menu configuration and assets |
 	| \`screenshots\` | Screenshot[] | Array of screenshot/media uploads included in the export |
 	| \`boards\` | Board[] | Array of board images (includes SpiritWorld) |
+	| \`three_d_models\` | ThreeDModel[] | Array of 3D model assets (OBJ/MTL/PNG) |
+	| \`monsters_v2\` | MonsterV2[] | Array of V2 (abyss deck) monster cards ordered by order_num |
 
 ---
 
@@ -1681,27 +1593,12 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 
 	| Field | Type | Description |
 	|-------|------|-------------|
-	| \`name\` | string | Edition name (e.g., "Base", "Expansion") |
-	| \`origin_count\` | number | Number of origins included in this edition |
-	| \`cost_duplicates\` | Record<string, number> | Map of spirit cost to duplicate count |
-	| \`scenario\` | ScenarioRef \\| null | The scenario selected for this export (based on query params) |
+		| \`name\` | string | Edition name (e.g., "Base", "Expansion") |
+		| \`origin_count\` | number | Number of origins included in this edition |
+		| \`cost_duplicates\` | Record<string, number> | Map of spirit cost to duplicate count |
 
-	---
+		---
 
-	## ScenarioRef
-	
-	| Field | Type | Description |
-	|-------|------|-------------|
-	| \`id\` | string | UUID |
-	| \`name\` | string | Internal scenario name |
-	| \`display_name\` | string | User-facing scenario name (falls back to \`name\`) |
-	| \`description\` | string \\| null | Scenario description |
-	| \`game_location_ids\` | string[] | Curated list of game location IDs |
-	| \`display_image_path\` | string \\| null | Storage path for the display image |
-	| \`display_image_url\` | string \\| null | Public URL for the display image |
-	
-	---
-	
 	## Origin
 
 | Field | Type | Description |
@@ -1779,63 +1676,75 @@ Most image URLs use Supabase Storage render URLs with \`?quality=80\`. Large boa
 
 ---
 
-## Artifact
+## StageDeckEntry
+
+The unified stage deck. Each entry represents one card in the scenario deck, with fully-resolved inline card data. Consumer handles quantity duplication.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| \`id\` | string | UUID |
-| \`name\` | string | Artifact name |
-| \`recipe_box\` | RecipeEntry[] | Crafting recipe |
-| \`guardian_id\` | string \\| null | Associated guardian UUID |
-| \`image_path\` | string \\| null | Card image URL |
-| \`tag_ids\` | string[] | Array of tag UUIDs |
-| \`tag_names\` | (string \\| null)[] | Resolved tag names |
+| \`kind\` | string | Entry kind: "monster", "event", "location", "stage_completion", "stage_divider" |
+| \`order_num\` | number | Sort order (default: 999) |
+| \`quantity\` | number | Copies of this entry to include (default: 1). Consumer handles duplication. |
+| \`entry_stage\` | string \\| null | Optional stage/row identifier for UI grouping |
+| \`data\` | object \\| null | Optional per-entry custom JSON data |
+| \`card\` | object \\| null | Fully-resolved card data (shape depends on \`kind\`). Null if referenced entity is missing. |
 
-### RecipeEntry
+### Card shapes by kind
 
+#### kind="monster"
 | Field | Type | Description |
 |-------|------|-------------|
-| \`rune_id\` | string | Rune UUID required |
-| \`quantity\` | number | Amount needed |
-
----
-
-## Monster
-
-The monsters array contains only monster cards. Events are exported separately in the \`events\` array.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| \`id\` | string | UUID |
+| \`id\` | string | Monster UUID |
 | \`name\` | string | Monster name |
-| \`type\` | "monster" | Card type discriminator |
-| \`stage\` | string | Monster stage: "stage_1", "stage_2", "stage_3", "final_stage", or "inactive" |
+| \`stage\` | string \\| null | Monster stage |
 | \`barrier\` | number \\| null | Barrier value |
 | \`damage\` | number \\| null | Damage value |
-| \`order_num\` | number | Sort order (default: 999) |
-| \`image_url\` | string \\| null | Card image URL |
-| \`effect_ids\` | string[] | Array of special effect UUIDs (lookup via special_effects) |
-| \`reward_rows\` | RewardRow[] | Array of reward row configurations |
-| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
-| \`total_copies\` | number | Total copies when quantity > 1 |
+| \`invade_location_id\` | string \\| null | Invade location UUID |
+| \`invade_location_name\` | string \\| null | Resolved invade location name |
+| \`image_url\` | string \\| null | Card image URL (prefers final, falls back to base) |
+| \`image_url_final\` | string \\| null | Final card image URL |
+| \`image_url_base\` | string \\| null | Base card image URL |
+| \`effect_ids\` | string[] | Special effect UUIDs (lookup via special_effects) |
+| \`dice_pool\` | string[] | Icon pool IDs for the monster's dice pool |
+| \`reward_track\` | string[] | Flat array of up to 4 on-kill reward icon IDs |
+| \`reward_icons\` | RewardIcon[] | Resolved on-kill reward icons |
+| \`special_conditions\` | string \\| null | Special conditions text |
 
-### RewardRow
-
+#### kind="event"
 | Field | Type | Description |
 |-------|------|-------------|
-| \`type\` | RewardRowType | Type of reward distribution |
-| \`label\` | string \\| null | Custom label override |
-| \`icons\` | RewardIcon[] | Array of reward icons |
+| \`id\` | string | Event card UUID |
+| \`name\` | string | Display title |
+| \`description\` | string \\| null | Event description |
+| \`stage\` | string \\| null | Event stage |
+| \`image_url\` | string \\| null | Card image URL |
+| \`reward_rows\` | RewardRow[] | Reward row configurations |
 
-### RewardRowType
+#### kind="location"
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | Game location UUID |
+| \`name\` | string | Location name |
+| \`origin_id\` | string \\| null | Associated origin UUID |
+| \`origin_name\` | string \\| null | Resolved origin name |
+| \`image_url\` | string \\| null | Location image URL (with icons) |
+| \`background_image_url\` | string \\| null | Background image URL |
 
-- \`"all_in_combat"\` - All players in combat gain these rewards
-- \`"all_in_combat_pick_one"\` - All players in combat pick 1 of these rewards
-- \`"all_players"\` - All players gain these rewards
-- \`"all_losers"\` - All losing players gain these rewards
-- \`"all_winners"\` - All winning players gain these rewards
-- \`"one_winner"\` - One winner gains these rewards
-- \`"tournament"\` - Tournament-style rewards (1st/2nd/3rd+)
+#### kind="stage_completion"
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | Stage completion card UUID |
+| \`title\` | string | Card title |
+| \`complete_condition\` | string | Condition text for stage completion |
+| \`stage\` | string | Stage identifier |
+| \`reward_rows\` | RewardRow[] | Reward row configurations |
+| \`image_url\` | string \\| null | Card image URL |
+
+#### kind="stage_divider"
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | Stage divider UUID |
+| \`stage_completion\` | string \\| null | Stage completion text |
 
 ### RewardIcon
 
@@ -1845,52 +1754,15 @@ The monsters array contains only monster cards. Events are exported separately i
 | \`name\` | string | Icon name |
 | \`image_url\` | string \\| null | Icon image URL |
 
----
-
-	## Event
+### RewardRow
 
 | Field | Type | Description |
 |-------|------|-------------|
-| \`id\` | string | UUID |
-| \`name\` | string | Display title |
-| \`type\` | "event" | Card type discriminator |
-| \`state\` | "event" | Event state discriminator |
-| \`order_num\` | number | Sort order (default: 999) |
-| \`image_url\` | string \\| null | Card image URL |
-| \`reward_rows\` | RewardRow[] | Array of reward row configurations |
-| \`event_name\` | string | Event UUID (internal identifier) |
-| \`description\` | string | Event description text |
-| \`event_type\` | string \\| null | Event type ("stage_1", "stage_2", "stage_3", "final_stage", "endgame") |
-| \`stage_completion\` | string \\| null | When this stage should end (shown on the event card) |
-| \`event_kind\` | "event" \\| "event_location" | Source discriminator (stage event cards vs stage-location cards) |
-	| \`location_id\` | string \\| undefined | Only present when \`event_kind="event_location"\` |
+| \`type\` | string | Reward distribution type (all_in_combat, all_players, etc.) |
+| \`label\` | string \\| null | Custom label override |
+| \`icons\` | RewardIcon[] | Array of reward icons |
 
-	---
-	
-	## ScenarioDeckEntry
-	
-	The canonical list of deck entries for the selected scenario. Each entry references exactly one of:
-	- \`monster_id\` when \`kind="monster"\`
-	- \`game_location_id\` when \`kind="location"\`
-	- \`traveler_id\` when \`kind="traveler"\`
-	- \`event_id\` when \`kind="event"\`
-	
-	| Field | Type | Description |
-	|-------|------|-------------|
-	| \`id\` | string | UUID |
-	| \`kind\` | "monster" \\| "location" \\| "traveler" \\| "event" | Entry kind discriminator |
-	| \`order_num\` | number | Sort order (default: 999) |
-	| \`quantity\` | number | Copies of this entry to include (default: 1) |
-	| \`entry_stage\` | string \\| null | Optional stage/row identifier for UI grouping |
-	| \`monster_id\` | string \\| null | Monster UUID (when kind="monster") |
-	| \`game_location_id\` | string \\| null | GameLocation UUID (when kind="location") |
-	| \`traveler_id\` | string \\| null | Traveler UUID (when kind="traveler") |
-	| \`event_id\` | string \\| null | EventCard UUID (when kind="event") |
-	| \`data\` | object \\| null | Optional per-entry custom JSON data |
-	
-	---
-
-	## GameLocation
+		## GameLocation
 
 Game locations include their resolved reward rows and the generated location image (with icons).
 
@@ -1909,6 +1781,19 @@ Game locations include their resolved reward rows and the generated location ima
 - Gain row: \`{ type: "gain", icons: RewardIcon[] }\`
 - Trade row: \`{ type: "trade", cost_icons: RewardIcon[], gain_icons: RewardIcon[] }\`
 - Text row: \`{ type: "text", text: string }\`
+
+## reward_rows (top-level)
+
+Independent reward row list exported separately from \`game_locations\`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | Composite key: \`{location_id}:{row_index}\` |
+| \`location_id\` | string | Source game location UUID |
+| \`location_name\` | string | Source game location name |
+| \`row_index\` | number | 0-based index in that location's \`reward_rows\` |
+| \`row_object\` | object | Normalized reward-row object |
+| \`row_image_url\` | string \\| null | URL from \`game_location_rows.row_image_path\` |
 
 ---
 
@@ -1935,56 +1820,6 @@ The latest exported Icon Guide PNG. This is generated via the web UI and stored 
 | Field | Type | Description |
 |-------|------|-------------|
 | \`icon_guide_png_url\` | string \\| null | Public URL to the Icon Guide PNG (may 404 if not exported yet) |
-
----
-
-## Traveler
-
-Traveler cards include resolved gain/trade icon groups, with \`/\` separators represented as grouped arrays.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| \`id\` | string | UUID |
-| \`name\` | string | Traveler name |
-| \`state\` | string \\| null | Traveler state (tainted, corrupt, fallen, boss) |
-| \`order_num\` | number | Sort order (default: 999) |
-| \`image_url\` | string \\| null | Traveler card image URL |
-| \`traveler_subtext\` | string \\| null | Traveler subtext |
-| \`traveler_description\` | string \\| null | Traveler description |
-| \`trade_rows\` | TravelerTradeRow[] | Trade rows with left/right icon groups |
-| \`gain_rows\` | TravelerGainRow[] | Gain rows with icon groups |
-| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
-| \`total_copies\` | number | Total copies when quantity > 1 |
-
-### TravelerTradeRow
-
-| Field | Type | Description |
-|-------|------|-------------|
-| \`left_groups\` | RewardIcon[][] | Left icon groups (each group is an OR option) |
-| \`right_groups\` | RewardIcon[][] | Right icon groups (each group is an OR option) |
-
-### TravelerGainRow
-
-Each entry is an array of icon groups (\`RewardIcon[][]\`), where each group is an OR option.
-
----
-
-	## Mission
-
-	Mission cards (artifact-style scroll cards).
-
-	| Field | Type | Description |
-	|-------|------|-------------|
-	| \`id\` | string | UUID |
-	| \`title\` | string | Mission title |
-	| \`description\` | string \\| null | Mission description text |
-	| \`order_num\` | number | Sort order (default: 999) |
-	| \`image_url\` | string \\| null | Mission card image URL |
-	| \`reward_text\` | string \\| null | Optional text reward row |
-	| \`reward_icons\` | RewardIcon[] | Resolved reward icons |
-	| \`tags\` | string[] | Optional tags |
-	| \`copy_index\` | number | Copy number (1-based) when quantity > 1 |
-	| \`total_copies\` | number | Total copies when quantity > 1 |
 
 ---
 
@@ -2105,6 +1940,27 @@ Complete icon pool entry with all metadata.
 | \`file_type\` | string \\| null | MIME type (when known) |
 | \`file_size\` | string \\| null | File size in bytes (when known) |
 | \`image_url\` | string | Board image URL |
+| \`individual_location_board\` | IndividualLocationBoard \\| null | When \`name\` is \`SpiritWorld\`, may include per-location board images (with icons) |
+
+---
+
+## IndividualLocationBoard
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`locations\` | IndividualLocationBoardEntry[] | Game locations exported as individual boards (uses \`game_locations.image_with_icons_path\`) |
+
+---
+
+## IndividualLocationBoardEntry
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | game_locations UUID |
+| \`name\` | string | Game location name |
+| \`file_type\` | string \\| null | MIME type (when known) |
+| \`file_size\` | string \\| null | File size in bytes (when known) |
+| \`image_url\` | string | Direct object URL to the game location image (with icons) |
 
 ---
 
@@ -2121,6 +1977,39 @@ Complete icon pool entry with all metadata.
 
 ---
 
+## ThreeDModel
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`name\` | string | Model name |
+| \`obj_url\` | string \\| null | Direct object URL to the OBJ mesh file |
+| \`mtl_url\` | string \\| null | Direct object URL to the MTL material file |
+| \`png_url\` | string \\| null | Direct object URL to the PNG texture file |
+
+---
+
+## MonsterV2
+
+V2 monsters from the abyss deck. Each monster has an exclusive attack type — either direct damage or a dice pool, never both.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`id\` | string | UUID |
+| \`name\` | string | Monster name (localized) |
+| \`attack_type\` | string | \`"damage"\` or \`"dice_pool"\` — determines which attack field is active |
+| \`stage\` | number | Stage number (integer, 1-based) |
+| \`barrier\` | number | Barrier value |
+| \`damage\` | number \\| null | Damage value (only set when attack_type is \`"damage"\`, null otherwise) |
+| \`order_num\` | number | Sort order within the deck |
+| \`image_url\` | string \\| null | Rendered card image URL |
+| \`dice_pool\` | string[] | Array of icon_pool IDs (populated when attack_type is \`"dice_pool"\`) |
+| \`dice_pool_icons\` | ResolvedIcon[] | Resolved icon objects for dice pool |
+| \`reward_track\` | string[] | Flat array of up to 4 reward icon IDs |
+| \`reward_icons\` | ResolvedIcon[] | Resolved icon objects for reward track |
+
+---
+
 ## Notes
 
 ### General
@@ -2131,24 +2020,22 @@ Complete icon pool entry with all metadata.
 ### Computed Fields
 These fields are calculated during export, not stored in the database:
 - \`copy_index\` on HexSpirit - Generated based on edition's \`cost_duplicates\` setting
-- \`effect_ids\` on Monster - Collected from \`monster_special_effects\` junction table
+- \`effect_ids\` on Monster card - Collected from \`monster_special_effects\` junction table
+- \`dice_pool\` on Monster card - Read directly from monsters.dice_pool column
 - \`type\` on Rune - Derived from whether \`origin_id\` or \`class_id\` is set
-- \`special\` on Class - Looked up from special_categories table
 - \`origin_name\`, \`class_name\`, \`tag_names\` - Resolved from ID references
+- \`card\` on StageDeckEntry - Resolved inline from the referenced entity table
 
 ### Filtering & Sorting
-- \`hex_spirits\` are filtered by edition's \`origin_ids\`, require \`hex_spirits.is_enabled = true\`, and are duplicated based on \`cost_duplicates\`
-- \`scenario_deck_entries\` is the canonical per-scenario ordered list of cards (monster/location/traveler/event). Missions are independent and not scenario-scoped.
-- \`monsters\` and \`events\` are derived from \`scenario_deck_entries\` for the chosen scenario (\`scenario_id\` or \`scenario\` query param; default = first by \`order_num\`).
-- \`monsters\` array is sorted by \`order_num\` ascending (default: 999)
-- \`events\` array is sorted by \`order_num\` ascending (default: 999); sourced from \`scenario_deck_entries.kind = 'event' | 'location' | 'traveler'\` joined to \`event_cards\`, \`game_locations\`, and \`travelers\`.
+- \`hex_spirits\` are filtered by edition's \`origin_ids\` and are duplicated based on \`cost_duplicates\`
+- \`stage_deck\` is the unified per-scenario ordered list of cards. Each entry has a \`kind\` discriminator and fully-resolved inline \`card\` data. \`quantity\` stays as a number; consumer handles duplication.
+- \`stage_deck\` is sorted by \`order_num\` ascending (default: 999) for the chosen scenario (\`scenario_id\` or \`scenario\` query param; default = first by \`order_num\`).
 - \`guardians\` only includes entries with a \`mat_image_path\` (playable guardians)
 - \`tokens\` only includes \`icon_pool\` entries where \`export_as_token = true\`
 
 ### Intentionally Excluded
 Some database fields are not exported as they are internal/admin-only:
 - \`created_at\`, \`updated_at\` timestamps on all tables
-- \`benefit\`, \`quantity\`, \`template_id\` on Artifacts (rendered into card image)
 - \`prismatic\` on Classes (internal game logic)
 - \`rune_cost\`, \`icon_slots\`, \`art_raw_image_path\` on HexSpirits (internal)
 - \`icon\`, \`image_path\` on Monsters (rendered into card image)
@@ -2159,61 +2046,23 @@ Some database fields are not exported as they are internal/admin-only:
 - Use the dice_id from class effect_schema to look up the corresponding CustomDice and its faces
 `;
 
-	    const normalizeScenarioLocationIds = (value: unknown): string[] => {
-	      if (!Array.isArray(value)) return [];
-	      const ids: string[] = [];
-	      for (const raw of value) {
-	        if (typeof raw !== "string") continue;
-	        const trimmed = raw.trim();
-	        if (!trimmed) continue;
-	        ids.push(trimmed);
-	      }
-	      return ids;
-	    };
-
-	    const scenarios = scenariosRes.rows.map((s) => ({
-	      id: s.id,
-	      name: s.name,
-	      display_name: s.display_name ?? s.name,
-	      description: s.description ?? null,
-	      game_location_ids: normalizeScenarioLocationIds(s.game_location_ids),
-	      display_image_path: s.display_image_path ?? null,
-	      display_image_url: resolveStorageImageUrl(s.display_image_path ?? null),
-	    }));
-
-	    const body = stringify({
-	      exported_at: new Date().toISOString(),
-	      export_language: exportLang ?? "base",
-	      schema_docs,
-      edition: {
-        name: edition.name,
-        origin_count: editionOriginIds.length,
-        cost_duplicates: costDuplicates,
-        scenario: scenario
-          ? {
-              id: scenario.id,
-              name: scenario.name,
-              display_name: scenario.display_name ?? scenario.name,
-              description: scenario.description ?? null,
-              game_location_ids: normalizeScenarioLocationIds(scenario.game_location_ids),
-              display_image_path: scenario.display_image_path ?? null,
-              display_image_url: resolveStorageImageUrl(scenario.display_image_path ?? null),
-            }
-          : null,
-      },
-      scenarios,
-      origins,
-      classes,
-      hex_spirits,
-      artifacts,
-      monsters,
-      events,
-      scenario_deck_entries,
-      game_locations,
-	      icon_guide_icons,
-	      icon_guide_png_url,
-	      travelers,
-	      missions,
+		    let payload: Record<string, unknown> = {
+		      exported_at: new Date().toISOString(),
+		      export_language: exportLang ?? "base",
+		      schema_docs,
+	      edition: {
+	        name: edition.name,
+	        origin_count: editionOriginIds.length,
+	        cost_duplicates: costDuplicates,
+	      },
+	      origins,
+	      classes,
+	      hex_spirits,
+	      stage_deck,
+	      game_locations,
+	      reward_rows,
+		      icon_guide_icons,
+		      icon_guide_png_url,
 	      special_effects,
 	      guardians,
 	      runes,
@@ -2223,26 +2072,82 @@ Some database fields are not exported as they are internal/admin-only:
       tts_menu,
       screenshots,
       boards,
-    });
+      three_d_models,
+      monsters_v2,
+    };
+
+    // ---- Optional URL substitution to compressed mirror ----
+    // When ?compressed=1 is set, swap every game_assets URL for its compressed
+    // counterpart in public.asset_compressed. Missing rows fall back to the
+    // original URL, so the response is always self-consistent.
+    if (compressedFlag) {
+      try {
+        const rows = await client.queryObject<{ source_path: string; comp_url: string }>(
+          `select source_path, comp_url from "arc_spirits_assets".asset_compressed`,
+        );
+        // Index by source path. The export emits two URL flavors for the same
+        // source — render-transform (`/storage/v1/render/image/public/...`) and
+        // direct-object (`/storage/v1/object/public/...`) — and both share the
+        // same path after the bucket. Keying by path covers both.
+        const byPath = new Map<string, string>();
+        for (const r of rows.rows) byPath.set(r.source_path, r.comp_url);
+
+        // Match either URL flavor pointing at the source bucket and capture
+        // the path after `game_assets/`. Trailing `?...` query is stripped.
+        const SOURCE_URL_RE =
+          /https?:\/\/[a-z0-9-]+\.supabase\.co\/storage\/v1\/(?:object|render\/image)\/public\/game_assets\/([^?\s"'<>]+)/i;
+
+        let substituted = 0;
+        const visit = (node: unknown): unknown => {
+          if (node == null) return node;
+          if (typeof node === "string") {
+            const m = node.match(SOURCE_URL_RE);
+            if (!m) return node;
+            const path = decodeURIComponent(m[1]);
+            const hit = byPath.get(path);
+            if (hit) {
+              substituted++;
+              return hit;
+            }
+            return node;
+          }
+          if (Array.isArray(node)) return node.map(visit);
+          if (typeof node === "object") {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+              out[k] = visit(v);
+            }
+            return out;
+          }
+          return node;
+        };
+        payload = visit(payload) as Record<string, unknown>;
+        payload.compressed = true;
+        payload.compressed_substitutions = substituted;
+        payload.compressed_available = byPath.size;
+      } catch (err) {
+        console.error("Compression substitution failed; returning originals", err);
+        payload.compressed = false;
+        payload.compressed_error = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const body = stringify(payload);
 
     const lastModified = new Date().toUTCString();
 
-    // Sanitize edition name for filename (replace spaces with dashes, remove special chars)
-    const safeEditionName = edition.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    const safeScenarioName = scenario?.name
-      ? scenario.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
-      : null;
-    const scenarioSuffix = safeScenarioName ? `-${safeScenarioName}` : "";
+	    // Sanitize edition name for filename (replace spaces with dashes, remove special chars)
+	    const safeEditionName = edition.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 
-    return new Response(body, {
-      status: 200,
+	    return new Response(body, {
+	      status: 200,
       headers: {
-        ...corsHeaders,
-        "Content-Type": "application/json",
-        "Content-Disposition": `attachment; filename="tts-export-${safeEditionName}${scenarioSuffix}-${new Date().toISOString().slice(0, 10)}.json"`,
-        "Last-Modified": lastModified,
-      },
-    });
+	        ...corsHeaders,
+	        "Content-Type": "application/json",
+	        "Content-Disposition": `attachment; filename="tts-export-${safeEditionName}-${new Date().toISOString().slice(0, 10)}.json"`,
+	        "Last-Modified": lastModified,
+	      },
+	    });
   } catch (error) {
     console.error("Export failed", error);
     return new Response(`Export failed: ${error instanceof Error ? error.message : error}`, { status: 500, headers: corsHeaders });

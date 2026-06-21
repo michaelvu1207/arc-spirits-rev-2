@@ -7,15 +7,10 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	type EditionOption = { id: string; name: string; is_default?: boolean };
-	type ScenarioOption = { id: string; name: string; order_num?: number };
-
-	const ABYSS_SCENARIO_STORAGE_KEY = 'arc-spirits-rev2:selected_abyss_scenario_id_by_edition';
 
 	let editions = $state<EditionOption[]>([]);
 	let selectedEditionId = $state<string>('');
 
-	let scenarios = $state<ScenarioOption[]>([]);
-	let selectedScenarioId = $state<string>('');
 	type ExportLanguage = 'base' | string;
 	const BASE_LANGUAGE: ExportLanguage = 'base';
 	const DEFAULT_LANGS: ExportLanguage[] = [
@@ -38,11 +33,9 @@
 	const EDGE_FUNCTION_URL = 'https://gvxfokbptelmvvlxbigh.supabase.co/functions/v1/export-all-tts-json';
 
 	const selectedEditionName = $derived(editions.find((e) => e.id === selectedEditionId)?.name ?? 'Base');
-	const selectedScenarioName = $derived(scenarios.find((s) => s.id === selectedScenarioId)?.name ?? '');
 
 	onMount(async () => {
 		await loadEditions();
-		await loadScenarios();
 		await fetchJson();
 	});
 
@@ -64,77 +57,7 @@
 		}
 	}
 
-	function getStoredScenarioId(editionId: string): string | null {
-		if (!editionId) return null;
-		try {
-			const raw = localStorage.getItem(ABYSS_SCENARIO_STORAGE_KEY);
-			if (!raw) return null;
-			const parsed = JSON.parse(raw);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-			const v = (parsed as Record<string, unknown>)[editionId];
-			return typeof v === 'string' ? v : null;
-		} catch {
-			return null;
-		}
-	}
-
-	function setStoredScenarioId(editionId: string, scenarioId: string | null) {
-		if (!editionId) return;
-		try {
-			const raw = localStorage.getItem(ABYSS_SCENARIO_STORAGE_KEY);
-			let parsed: Record<string, unknown> = {};
-			if (raw) {
-				const next = JSON.parse(raw);
-				if (next && typeof next === 'object' && !Array.isArray(next)) parsed = next as Record<string, unknown>;
-			}
-
-			if (scenarioId) parsed[editionId] = scenarioId;
-			else delete parsed[editionId];
-
-			localStorage.setItem(ABYSS_SCENARIO_STORAGE_KEY, JSON.stringify(parsed));
-		} catch {
-			// ignore
-		}
-	}
-
-	async function loadScenarios() {
-		if (!selectedEditionId) {
-			scenarios = [];
-			selectedScenarioId = '';
-			return;
-		}
-		try {
-			const { supabase } = await import('$lib/api/supabaseClient');
-			const { data } = await supabase
-				.from('abyss_scenarios')
-				.select('id, name, order_num')
-				.eq('edition_id', selectedEditionId)
-				.order('order_num')
-				.order('name');
-			scenarios = (data ?? []) as ScenarioOption[];
-
-			const stillValid = selectedScenarioId && scenarios.some((s) => s.id === selectedScenarioId);
-			if (stillValid) return;
-
-			const stored = getStoredScenarioId(selectedEditionId);
-			const storedValid = stored && scenarios.some((s) => s.id === stored);
-			const defaultId = scenarios.find((s) => (s.order_num ?? 0) === 0)?.id ?? scenarios[0]?.id ?? '';
-			const next = storedValid ? (stored as string) : defaultId;
-			selectedScenarioId = next;
-			if (next) setStoredScenarioId(selectedEditionId, next);
-		} catch (e) {
-			console.warn('Failed to load scenarios', e);
-			scenarios = [];
-			selectedScenarioId = '';
-		}
-	}
-
 	async function handleEditionChange() {
-		await loadScenarios();
-		await fetchJson();
-	}
-
-	async function handleScenarioChange() {
 		await fetchJson();
 	}
 
@@ -146,8 +69,7 @@
 				if (!anonKey) throw new Error('Missing PUBLIC_SUPABASE_ANON_KEY.');
 
 				const langParam = selectedLanguage === BASE_LANGUAGE ? '' : `&lang=${encodeURIComponent(String(selectedLanguage))}`;
-				const scenarioParam = selectedScenarioId ? `&scenario_id=${encodeURIComponent(selectedScenarioId)}` : '';
-				const url = `${EDGE_FUNCTION_URL}?edition=${encodeURIComponent(selectedEditionName)}${scenarioParam}${langParam}`;
+				const url = `${EDGE_FUNCTION_URL}?edition=${encodeURIComponent(selectedEditionName)}${langParam}`;
 				const response = await fetch(url, {
 					headers: {
 						Authorization: `Bearer ${anonKey}`,
@@ -213,10 +135,7 @@
 		a.href = url;
 		const langSuffix = selectedLanguage === BASE_LANGUAGE ? 'base' : String(selectedLanguage);
 		const editionSlug = selectedEditionName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-		const scenarioSlug = selectedScenarioName
-			? `-${selectedScenarioName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`
-			: '';
-		a.download = `tts-export-${editionSlug}${scenarioSlug}-${langSuffix}-${new Date().toISOString().slice(0, 10)}.json`;
+		a.download = `tts-export-${editionSlug}-${langSuffix}-${new Date().toISOString().slice(0, 10)}.json`;
 		a.click();
 		URL.revokeObjectURL(url);
 	}
@@ -274,21 +193,6 @@
 					{#each editions as edition (edition.id)}
 						<option value={edition.id}>{edition.name}</option>
 					{/each}
-					</select>
-				</div>
-
-				<div class="flex items-center gap-2">
-					<label for="scenario" class="text-sm text-gray-400">Scenario:</label>
-					<select
-						id="scenario"
-						bind:value={selectedScenarioId}
-						onchange={handleScenarioChange}
-						disabled={!selectedEditionId || scenarios.length === 0}
-						class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
-					>
-						{#each scenarios as scenario (scenario.id)}
-							<option value={scenario.id}>{scenario.name}</option>
-						{/each}
 					</select>
 				</div>
 
@@ -462,12 +366,6 @@
 						<div class="text-sm text-gray-400">Hex Spirits</div>
 					</div>
 				{/if}
-				{#if 'artifacts' in data && Array.isArray(data.artifacts)}
-					<div class="bg-gray-800 rounded-lg p-4 text-center">
-						<div class="text-2xl font-bold text-purple-400">{data.artifacts.length}</div>
-						<div class="text-sm text-gray-400">Artifacts</div>
-					</div>
-				{/if}
 				{#if 'monsters' in data && Array.isArray(data.monsters)}
 					<div class="bg-gray-800 rounded-lg p-4 text-center">
 						<div class="text-2xl font-bold text-red-400">{data.monsters.length}</div>
@@ -500,5 +398,6 @@
 				{/if}
 			</div>
 		{/if}
+
 	</div>
 </div>

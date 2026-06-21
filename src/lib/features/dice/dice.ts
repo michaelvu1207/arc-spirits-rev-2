@@ -230,7 +230,11 @@ async function syncDiceSides(
 	sides: DiceFormSide[]
 ) {
 	const payload = sides.map((side, index) => ({
-		id: side.id,
+		// Omit `id` when the side is new — PostgREST serialises `undefined` to
+		// `null`, which overrides the column's `gen_random_uuid()` default and
+		// trips the NOT NULL constraint. Only send `id` when the row already
+		// exists (edit case); for inserts let the DB generate the UUID.
+		...(side.id ? { id: side.id } : {}),
 		dice_id: diceId,
 		side_number: index + 1,
 		reward_type: type,

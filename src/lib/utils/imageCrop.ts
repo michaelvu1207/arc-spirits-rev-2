@@ -57,8 +57,3 @@ export async function cropTransparentArea(input: File | Blob, mimeType?: string)
 	});
 }
 
-/**
- * @deprecated Use cropTransparentArea instead
- */
-export const cropEmptySpace = cropTransparentArea;
-

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { OriginRow, ClassRow, RuneRow, SpecialCategoryRow, CallingOrbImageRow, HexSpiritRow, IconPoolRow } from '$lib/types/gameData';
+	import type { OriginRow, ClassRow, MatItemRow, HexSpiritRow, IconPoolRow } from '$lib/types/gameData';
 	import type {
 		BackupTrimEffect,
 		BenefitEffect,
@@ -15,9 +15,9 @@
 	import { FilterBar, ImageUploader } from '$lib/components/shared';
 	import { Modal, PageLayout, type Tab } from '$lib/components/layout';
 	import { EditorModal } from '$lib';
-	import { OriginsListView, OriginsTableView, CallingCardEditor, CallingOrbTemplate, CallingOrbGenerated } from '$lib/components/origins';
+	import { OriginsListView, OriginsTableView } from '$lib/components/origins';
 	import { ClassesListView, ClassesTableView, ClassesPdfView } from '$lib/components/classes';
-	import { RunesListView, RunesTableView, RunesGalleryView, RunesJsonView } from '$lib/components/runes';
+	import { MatsListView, MatsTableView, MatsGalleryView, MatsJsonView } from '$lib/components/mats';
 
 	// Import composables and utilities
 	import { useFormModal, useFilteredData, useFileUpload, useLookup } from '$lib/composables';
@@ -33,6 +33,7 @@
 		deleteOriginRecord,
 		emptyOriginForm,
 		fetchOriginRecords,
+		setOriginEnabled as setOriginEnabledByOriginId,
 		originRowToForm,
 		saveOriginRecord,
 		type OriginFormData
@@ -52,51 +53,39 @@
 		type PrismaticForm
 	} from '$lib/features/classes/classes';
 
-	import {
-		fetchSpecialCategoryRecords,
-		saveSpecialCategoryRecord,
-		deleteSpecialCategoryRecord,
-		emptySpecialCategoryForm,
-		specialCategoryRowToForm,
-		type SpecialCategoryFormData
-	} from '$lib/features/special-categories/specialCategories';
-
 	import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
+	import { fetchHexSpiritRecords } from '$lib/features/hex-spirits/hexSpirits';
 
 	// State
 	let origins = $state<OriginRow[]>([]);
 	let classes = $state<ClassRow[]>([]);
-	let runes = $state<RuneRow[]>([]);
-	let specialCategories = $state<SpecialCategoryRow[]>([]);
-	let callingOrbImages = $state<CallingOrbImageRow[]>([]);
+	let mats = $state<MatItemRow[]>([]);
 	let hexSpirits = $state<HexSpiritRow[]>([]);
 	let iconPool = $state<IconPoolRow[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let backfillingIcons = $state(false);
 
-	// Main tabs: Origins, Classes, Runes
+	// Main tabs: Origins, Classes, Mats
 	const mainTabs: Tab[] = [
 		{ id: 'origins', label: 'Origins', icon: '🌊' },
 		{ id: 'classes', label: 'Classes', icon: '⚔️' },
-		{ id: 'runes', label: 'Runes', icon: '✨' }
+		{ id: 'mats', label: 'Mats', icon: '✨' }
 	];
 	let activeMainTab = $state('origins');
 
 	// Sub-tabs for each main tab
 	const originSubTabs: Tab[] = [
 		{ id: 'list', label: 'List', icon: '📋' },
-		{ id: 'table', label: 'Table', icon: '📊' },
-		{ id: 'calling-orb-template', label: 'Calling Orb Template', icon: '🎨' },
-		{ id: 'calling-orb-generated', label: 'Calling Orb Generated', icon: '🖼️' }
+		{ id: 'table', label: 'Table', icon: '📊' }
 	];
 	const classSubTabs: Tab[] = [
 		{ id: 'list', label: 'List', icon: '📋' },
 		{ id: 'table', label: 'Table', icon: '📊' },
 		{ id: 'pdf', label: 'PDF Export', icon: '📄' }
 	];
-	const runeSubTabs: Tab[] = [
-		{ id: 'gallery', label: 'Rune Gallery', icon: '🖼️' },
+	const matSubTabs: Tab[] = [
+		{ id: 'gallery', label: 'Mat Gallery', icon: '🖼️' },
 		{ id: 'list', label: 'Data: List', icon: '📋' },
 		{ id: 'table', label: 'Data: Table', icon: '📊' },
 		{ id: 'json', label: 'TTS JSON', icon: '📦' }
@@ -104,13 +93,19 @@
 
 	let activeOriginSubTab = $state('list');
 	let activeClassSubTab = $state('list');
-	let activeRuneSubTab = $state('gallery');
+	let activeMatSubTab = $state('gallery');
 
 	// Origins state
 	const originModal = useFormModal<OriginFormData>(emptyOriginForm());
 	const originFiltered = useFilteredData(
 		() => origins,
 		{ searchFields: ['name', 'description'] }
+	);
+	const activeOrigins = $derived(
+		originFiltered.filtered.filter((origin) => origin.is_enabled !== false)
+	);
+	const disabledOrigins = $derived(
+		originFiltered.filtered.filter((origin) => origin.is_enabled === false)
 	);
 	const iconUpload = useFileUpload('game_assets', 'origin_icons');
 
@@ -135,53 +130,43 @@
 	let removingIconId = $state<string | null>(null);
 	const gameAssetsStorage = supabase.storage.from('game_assets');
 
-	// Public URL helper for runes
+	// Public URL helper for mats
 	const publicUrl = (path: string) => gameAssetsStorage.getPublicUrl(path).data.publicUrl;
 
-	// Special category state
-	let showSpecialCategoryForm = $state(false);
-	let editingSpecialCategory = $state<SpecialCategoryRow | null>(null);
-	let specialCategoryFormData = $state<SpecialCategoryFormData>(emptySpecialCategoryForm());
+	// Mats state
+	let matOriginFilter = $state('all');
 
-	// Runes state
-	let runeOriginFilter = $state('all');
-	let runeClassFilter = $state('all');
-
-	const runeModal = useFormModal<Partial<RuneRow> & { runeType: 'origin' | 'class' }>({
+	const matModal = useFormModal<Partial<MatItemRow> & { matType: 'rune' | 'relic' }>({
 		name: '',
 		origin_id: null,
-		class_id: null,
-		runeType: 'origin'
+		emoji: null,
+		matType: 'rune'
 	});
 
-	let savingRune = $state(false);
-	let runeIconNeedsRegeneration = $state(false);
-	let runeIconStatus = $state<string | null>(null);
-	let bulkRecreatingRunes = $state(false);
+	let savingMat = $state(false);
+	let matIconNeedsRegeneration = $state(false);
+	let matIconStatus = $state<string | null>(null);
+	let bulkRecreatingMats = $state(false);
 	let bulkRecreateProgress = $state<{ done: number; total: number; skipped: number } | null>(null);
 	let bulkRecreateStatus = $state<string | null>(null);
-	let runeBaseline = $state<{
-		runeType: 'origin' | 'class';
+	let matBaseline = $state<{
+		matType: 'rune' | 'relic';
 		origin_id: string | null;
-		class_id: string | null;
+		emoji: string | null;
 		icon_background_path: string | null;
 	} | null>(null);
 
 	const originLookup = useLookup(() => origins, 'name');
 	const classLookup = useLookup(() => classes, 'name');
 
-	const runeFiltered = useFilteredData(
-		() => runes,
+	const matFiltered = useFilteredData(
+		() => mats,
 		{
 			searchFields: ['name'],
 			filters: [
 				{
 					key: 'origin_id',
-					value: () => (runeOriginFilter === 'all' ? null : runeOriginFilter)
-				},
-				{
-					key: 'class_id',
-					value: () => (runeClassFilter === 'all' ? null : runeClassFilter)
+					value: () => (matOriginFilter === 'all' ? null : matOriginFilter)
 				}
 			]
 		}
@@ -291,18 +276,7 @@
 
 	const summarizeEffectBase = (effect: Effect) => formatEffectSummary(effect, resolveDiceLabel, classLanguage);
 
-	const specialCategoryClassIds = $derived(
-		new Set(
-			specialCategories.flatMap((cat) => [
-				...cat.slot_1_class_ids,
-				...cat.slot_2_class_ids,
-				...cat.slot_3_class_ids
-			])
-		)
-	);
-
-	// Search-filtered classes (includes special category classes for lookup)
-		const searchFilteredClasses = $derived(
+	const searchFilteredClasses = $derived(
 			classes.filter((entry) => {
 				if (!classSearch.trim()) return true;
 				const term = classSearch.trim().toLowerCase();
@@ -317,11 +291,6 @@
 			})
 		);
 
-	// Count of regular classes (excluding special category classes)
-	const filteredClassCount = $derived(
-		searchFilteredClasses.filter((c) => !specialCategoryClassIds.has(c.id)).length
-	);
-
 	onMount(async () => {
 		await loadDiceOptions();
 		await loadAllData();
@@ -333,20 +302,19 @@
 			error = null;
 			// Clear icon pool cache to get fresh data
 			clearIconPoolCache();
-			const [originsData, classesData, runesData, categoriesData, callingOrbImagesData, hexSpiritsData, iconPoolData] = await Promise.all([
+			const [originsData, classesData, matsData, hexSpiritsData, iconPoolData] = await Promise.all([
 				fetchOriginRecords(),
 				fetchClassRecords(),
-				loadRunesData(),
-				fetchSpecialCategoryRecords(),
-				fetchCallingOrbImages(),
+				loadMatsData(),
 				loadHexSpirits(),
 				loadAllIcons()
 			]);
-			origins = originsData;
+			origins = originsData.map((origin) => ({
+				...origin,
+				is_enabled: origin.is_enabled ?? true
+			}));
 			classes = classesData;
-			runes = runesData;
-			specialCategories = categoriesData;
-			callingOrbImages = callingOrbImagesData;
+			mats = matsData;
 			hexSpirits = hexSpiritsData;
 			iconPool = iconPoolData;
 			void backfillMissingIcons();
@@ -357,32 +325,17 @@
 		}
 	}
 
-	async function loadRunesData(): Promise<RuneRow[]> {
+	async function loadMatsData(): Promise<MatItemRow[]> {
 		const { data, error: fetchError } = await supabase
-			.from('runes')
+			.from('mat_items')
 			.select('*')
 			.order('created_at', { ascending: true });
 		if (fetchError) throw fetchError;
 		return data ?? [];
 	}
 
-	async function fetchCallingOrbImages(): Promise<CallingOrbImageRow[]> {
-		const { data, error: fetchError } = await supabase
-			.from('calling_orb_images')
-			.select('*')
-			.order('created_at', { ascending: false });
-		if (fetchError) throw fetchError;
-		return data ?? [];
-	}
-
 	async function loadHexSpirits(): Promise<HexSpiritRow[]> {
-		const { data, error: fetchError } = await supabase
-			.from('hex_spirits')
-			.select('*')
-			.order('cost', { ascending: true })
-			.order('name', { ascending: true });
-		if (fetchError) throw fetchError;
-		return data ?? [];
+		return await fetchHexSpiritRecords();
 	}
 
 		async function loadDiceOptions() {
@@ -559,6 +512,16 @@
 		}
 	}
 
+	async function setOriginEnabled(origin: OriginRow, enabled: boolean) {
+		try {
+			await setOriginEnabledByOriginId(origin.id, enabled);
+			await loadAllData();
+		} catch (err) {
+			const action = enabled ? 'enable' : 'disable';
+			alert(`Failed to ${action} origin: ${getErrorMessage(err)}`);
+		}
+	}
+
 	async function deleteOrigins(ids: string[]) {
 		if (ids.length === 0) return;
 		if (!confirm(`Delete ${ids.length} origin${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
@@ -586,77 +549,6 @@
 		if (file) {
 			handleOriginIconUpload(originId, file);
 		}
-	}
-
-	// Calling orb handlers
-	async function handleCallingOrbGenerate(originId: string, imageBlob: Blob) {
-		try {
-			// Find origin for filename
-			const origin = origins.find(o => o.id === originId);
-			const fileName = `calling_orb_${sanitizeFilename(origin?.name ?? originId)}`;
-
-			// Upload to storage with transparent area cropping
-			const { data, error: uploadError } = await processAndUploadImage(imageBlob, {
-				folder: `calling_orbs/${originId}`,
-				filename: fileName,
-				cropTransparent: true,
-				upsert: true
-			});
-
-			if (uploadError) throw uploadError;
-			if (!data?.path) throw new Error('Upload failed');
-
-			// Save to database (upsert to replace existing)
-			const { error: dbError } = await supabase
-				.from('calling_orb_images')
-				.upsert({
-					origin_id: originId,
-					image_path: data.path,
-					template_data: null,
-					updated_at: new Date().toISOString()
-				}, {
-					onConflict: 'origin_id'
-				});
-
-			if (dbError) throw dbError;
-
-			// Reload images
-			callingOrbImages = await fetchCallingOrbImages();
-		} catch (err) {
-			console.error('Failed to generate calling orb:', err);
-			throw err;
-		}
-	}
-
-	async function handleCallingOrbDelete(imageId: string) {
-		try {
-			const image = callingOrbImages.find(img => img.id === imageId);
-			if (!image) return;
-
-			// Delete from storage
-			if (image.image_path) {
-				await supabase.storage
-					.from('game_assets')
-					.remove([image.image_path]);
-			}
-
-			// Delete from database
-			const { error } = await supabase
-				.from('calling_orb_images')
-				.delete()
-				.eq('id', imageId);
-
-			if (error) throw error;
-
-			// Reload images
-			callingOrbImages = await fetchCallingOrbImages();
-		} catch (err) {
-			alert(`Failed to delete calling orb: ${getErrorMessage(err)}`);
-		}
-	}
-
-	async function handleCallingOrbRefresh() {
-		callingOrbImages = await fetchCallingOrbImages();
 	}
 
 	// Classes handlers
@@ -1142,33 +1034,8 @@
 	}
 
 	async function deleteClass(entry: ClassRow) {
-			const categoriesUsingClass = specialCategories.filter((cat) =>
-				cat.slot_1_class_ids.includes(entry.id) ||
-				cat.slot_2_class_ids.includes(entry.id) ||
-				cat.slot_3_class_ids.includes(entry.id)
-			);
-
-			const confirmMessage = categoriesUsingClass.length
-				? `Delete class "${entry.name}"?\n\nIt will also be removed from: ${categoriesUsingClass.map((c) => c.name).join(', ')}`
-				: `Delete class "${entry.name}"? Units referencing it will be orphaned.`;
-			if (!confirm(confirmMessage)) return;
+			if (!confirm(`Delete class "${entry.name}"? Units referencing it will be orphaned.`)) return;
 			try {
-				if (categoriesUsingClass.length) {
-					const now = new Date().toISOString();
-					for (const cat of categoriesUsingClass) {
-						const { error: updateError } = await supabase
-							.from('special_categories')
-							.update({
-								slot_1_class_ids: cat.slot_1_class_ids.filter((id) => id !== entry.id),
-								slot_2_class_ids: cat.slot_2_class_ids.filter((id) => id !== entry.id),
-								slot_3_class_ids: cat.slot_3_class_ids.filter((id) => id !== entry.id),
-								updated_at: now
-							})
-							.eq('id', cat.id);
-						if (updateError) throw updateError;
-					}
-				}
-
 				await deleteClassRecord(entry.id);
 				await loadAllData();
 			} catch (err) {
@@ -1178,34 +1045,8 @@
 
 		async function deleteClasses(ids: string[]) {
 			if (ids.length === 0) return;
-			const idSet = new Set(ids);
-			const categoriesToUpdate = specialCategories.filter((cat) =>
-				cat.slot_1_class_ids.some((id) => idSet.has(id)) ||
-				cat.slot_2_class_ids.some((id) => idSet.has(id)) ||
-				cat.slot_3_class_ids.some((id) => idSet.has(id))
-			);
-
-			const confirmMessage = categoriesToUpdate.length
-				? `Delete ${ids.length} class${ids.length === 1 ? '' : 'es'}?\n\nThey will also be removed from: ${categoriesToUpdate.map((c) => c.name).join(', ')}`
-				: `Delete ${ids.length} class${ids.length === 1 ? '' : 'es'}? Units referencing them will be orphaned.`;
-			if (!confirm(confirmMessage)) return;
+			if (!confirm(`Delete ${ids.length} class${ids.length === 1 ? '' : 'es'}? Units referencing them will be orphaned.`)) return;
 			try {
-				if (categoriesToUpdate.length) {
-					const now = new Date().toISOString();
-					for (const cat of categoriesToUpdate) {
-						const { error: updateError } = await supabase
-							.from('special_categories')
-							.update({
-								slot_1_class_ids: cat.slot_1_class_ids.filter((id) => !idSet.has(id)),
-								slot_2_class_ids: cat.slot_2_class_ids.filter((id) => !idSet.has(id)),
-								slot_3_class_ids: cat.slot_3_class_ids.filter((id) => !idSet.has(id)),
-								updated_at: now
-							})
-							.eq('id', cat.id);
-						if (updateError) throw updateError;
-					}
-				}
-
 				const { error: deleteError } = await supabase
 					.from('classes')
 					.delete()
@@ -1222,126 +1063,66 @@
 		void saveClass();
 	}
 
-	// Special category handlers
-	function openSpecialCategoryForm(category?: SpecialCategoryRow) {
-		if (category) {
-			editingSpecialCategory = category;
-			specialCategoryFormData = specialCategoryRowToForm(category);
-		} else {
-			editingSpecialCategory = null;
-			const nextPosition = (specialCategories.at(-1)?.position ?? specialCategories.length) + 1;
-			specialCategoryFormData = emptySpecialCategoryForm(nextPosition);
-		}
-		showSpecialCategoryForm = true;
-	}
-
-	function closeSpecialCategoryForm() {
-		showSpecialCategoryForm = false;
-	}
-
-	async function saveSpecialCategory() {
-		if (!specialCategoryFormData.name.trim()) {
-			alert('Special category name is required.');
-			return;
-		}
-		try {
-			await saveSpecialCategoryRecord(specialCategoryFormData);
-			await loadAllData();
-			closeSpecialCategoryForm();
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			alert(`Failed to save special category: ${message}`);
-		}
-	}
-
-	async function deleteSpecialCategory(category: SpecialCategoryRow) {
-		if (!confirm(`Delete special category "${category.name}"?`)) return;
-		try {
-			await deleteSpecialCategoryRecord(category.id);
-			await loadAllData();
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			alert(`Failed to delete special category: ${message}`);
-		}
-	}
-
-	function submitSpecialCategoryForm(event: Event) {
-		event.preventDefault();
-		void saveSpecialCategory();
-	}
-
-	function toggleClassInSlot(
-		slotKey: 'slot_1_class_ids' | 'slot_2_class_ids' | 'slot_3_class_ids',
-		classId: string
-	) {
-		const currentIds = specialCategoryFormData[slotKey];
-		if (currentIds.includes(classId)) {
-			specialCategoryFormData[slotKey] = currentIds.filter((id) => id !== classId);
-		} else {
-			specialCategoryFormData[slotKey] = [...currentIds, classId];
-		}
-	}
-
-	// Runes handlers
-	function openRuneForm(rune?: RuneRow) {
-		if (rune) {
-			const runeType: 'origin' | 'class' = rune.class_id ? 'class' : 'origin';
-			runeBaseline = {
-				runeType,
-				origin_id: rune.origin_id ?? null,
-				class_id: rune.class_id ?? null,
-				icon_background_path: rune.icon_background_path ?? null
+	// Mats handlers
+	function openMatForm(mat?: MatItemRow) {
+		if (mat) {
+			const matType: 'rune' | 'relic' = mat.origin_id ? 'rune' : 'relic';
+			matBaseline = {
+				matType,
+				origin_id: mat.origin_id ?? null,
+				emoji: mat.emoji ?? null,
+				icon_background_path: mat.icon_background_path ?? null
 			};
-			runeIconNeedsRegeneration = false;
-			runeIconStatus = null;
-			runeModal.open({
-				...rune,
-				runeType
+			matIconNeedsRegeneration = false;
+			matIconStatus = null;
+			matModal.open({
+				...mat,
+				matType
 			});
 		} else {
 			const originId = origins[0]?.id ?? null;
-			runeBaseline = { runeType: 'origin', origin_id: originId, class_id: null, icon_background_path: null };
-			runeIconNeedsRegeneration = true;
-			runeIconStatus = null;
-			runeModal.open({
+			matBaseline = { matType: 'rune', origin_id: originId, emoji: null, icon_background_path: null };
+			matIconNeedsRegeneration = true;
+			matIconStatus = null;
+			matModal.open({
 				name: '',
 				origin_id: originId,
-				class_id: null,
+				emoji: null,
 				icon_path: null,
 				icon_background_path: null,
-				runeType: 'origin'
+				matType: 'rune'
 			});
 			// Assign an ID for storage paths without switching into "edit" mode.
-			runeModal.formData = { ...runeModal.formData, id: crypto.randomUUID() };
+			matModal.formData = { ...matModal.formData, id: crypto.randomUUID() };
 		}
 	}
 
 	$effect(() => {
-		if (!runeModal.isOpen) return;
-		if (!runeBaseline) return;
+		if (!matModal.isOpen) return;
+		if (!matBaseline) return;
 
-		const runeType = runeModal.formData.runeType ?? 'origin';
-		const effectiveOriginId = runeType === 'origin' ? runeModal.formData.origin_id ?? null : null;
-		const effectiveClassId = runeType === 'class' ? runeModal.formData.class_id ?? null : null;
-		const effectiveBackgroundPath = runeModal.formData.icon_background_path ?? null;
+		const matType = matModal.formData.matType ?? 'rune';
+		const effectiveOriginId = matType === 'rune' ? matModal.formData.origin_id ?? null : null;
+		const effectiveEmoji = matType === 'relic' ? matModal.formData.emoji ?? null : null;
+		const effectiveBackgroundPath = matModal.formData.icon_background_path ?? null;
 
-		const baselineOriginId = runeBaseline.runeType === 'origin' ? runeBaseline.origin_id ?? null : null;
-		const baselineClassId = runeBaseline.runeType === 'class' ? runeBaseline.class_id ?? null : null;
-		const baselineBackgroundPath = runeBaseline.icon_background_path ?? null;
+		const baselineOriginId = matBaseline.matType === 'rune' ? matBaseline.origin_id ?? null : null;
+		const baselineEmoji = matBaseline.matType === 'relic' ? matBaseline.emoji ?? null : null;
+		const baselineBackgroundPath = matBaseline.icon_background_path ?? null;
 
 		if (
-			runeType !== runeBaseline.runeType ||
+			matType !== matBaseline.matType ||
 			effectiveOriginId !== baselineOriginId ||
-			effectiveClassId !== baselineClassId ||
+			effectiveEmoji !== baselineEmoji ||
 			effectiveBackgroundPath !== baselineBackgroundPath
 		) {
-			runeIconNeedsRegeneration = true;
+			matIconNeedsRegeneration = true;
 		}
 	});
 
-	async function handleRuneSubmit(event: Event) {
+	async function handleMatSubmit(event: Event) {
 		event.preventDefault();
-		await saveRune();
+		await saveMat();
 	}
 
 	function dataUrlToBlob(dataUrl: string): Blob {
@@ -1373,43 +1154,37 @@
 		return { iconUrl: null, iconEmoji: null };
 	}
 
-	async function recreateAllRuneIcons() {
-		if (bulkRecreatingRunes) return;
-		if (!runes.length) return;
+	async function recreateAllMatIcons() {
+		if (bulkRecreatingMats) return;
+		if (!mats.length) return;
 
 		const confirmed = confirm(
-			`Recreate icons for all ${runes.length} runes?\n\nThis overwrites the stored rune icon image files.`
+			`Recreate icons for all ${mats.length} mats?\n\nThis overwrites the stored mat icon image files.`
 		);
 		if (!confirmed) return;
 
-		bulkRecreatingRunes = true;
-		bulkRecreateProgress = { done: 0, total: runes.length, skipped: 0 };
+		bulkRecreatingMats = true;
+		bulkRecreateProgress = { done: 0, total: mats.length, skipped: 0 };
 		bulkRecreateStatus = 'Starting…';
 
 		try {
-			for (const rune of runes) {
+			for (const mat of mats) {
 				const now = new Date().toISOString();
-				bulkRecreateStatus = `Generating: ${rune.name}`;
+				bulkRecreateStatus = `Generating: ${mat.name}`;
 
-				const isClassRune = Boolean(rune.class_id);
-				const backgroundUrl = isClassRune
-					? null
-					: publicAssetUrl(rune.icon_background_path, { updatedAt: Date.now() }) ??
-						publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
-				const backgroundColor = isClassRune ? '#ffffff' : null;
+				const isRelic = !mat.origin_id;
+				const backgroundUrl = publicAssetUrl(mat.icon_background_path, { updatedAt: Date.now() })
+					?? publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
 				const outerRingColor = null;
 
-				const source =
-					rune.origin_id
-						? resolveIconSource(origins.find((o) => o.id === rune.origin_id))
-						: rune.class_id
-							? resolveIconSource(classes.find((c) => c.id === rune.class_id))
-							: { iconUrl: null, iconEmoji: null };
+				const source = isRelic
+					? { iconUrl: null, iconEmoji: mat.emoji ?? null }
+					: resolveIconSource(origins.find((o) => o.id === mat.origin_id));
 
 				if (!source.iconUrl && !source.iconEmoji) {
 					bulkRecreateProgress = {
 						done: (bulkRecreateProgress?.done ?? 0) + 1,
-						total: bulkRecreateProgress?.total ?? runes.length,
+						total: bulkRecreateProgress?.total ?? mats.length,
 						skipped: (bulkRecreateProgress?.skipped ?? 0) + 1
 					};
 					continue;
@@ -1419,35 +1194,35 @@
 					originIconUrl: source.iconUrl,
 					originIconEmoji: source.iconEmoji,
 					backgroundUrl,
-					backgroundColor,
+					backgroundColor: null,
 					outerRingColor,
-					disableIconOutline: isClassRune,
+					disableIconOutline: false,
 					size: 800
 				});
 
 				const iconBlob = dataUrlToBlob(iconDataUrl);
 				const { data, error: uploadError } = await processAndUploadImage(iconBlob, {
-					folder: `runes/${rune.id}`,
+					folder: `runes/${mat.id}`,
 					filename: 'icon',
 					cropTransparent: false,
 					upsert: true
 				});
 				if (uploadError || !data?.path) {
-					throw uploadError ?? new Error('Failed to upload rune icon.');
+					throw uploadError ?? new Error('Failed to upload mat icon.');
 				}
 
 				const { error: updateError } = await supabase
-					.from('runes')
+					.from('mat_items')
 					.update({
 						icon_path: data.path,
 						updated_at: now
 					})
-					.eq('id', rune.id);
+					.eq('id', mat.id);
 				if (updateError) throw updateError;
 
 				bulkRecreateProgress = {
 					done: (bulkRecreateProgress?.done ?? 0) + 1,
-					total: bulkRecreateProgress?.total ?? runes.length,
+					total: bulkRecreateProgress?.total ?? mats.length,
 					skipped: bulkRecreateProgress?.skipped ?? 0
 				};
 			}
@@ -1455,149 +1230,146 @@
 			await loadAllData();
 			const skipped = bulkRecreateProgress?.skipped ?? 0;
 			bulkRecreateStatus = skipped
-				? `✓ Recreated rune icons (${skipped} skipped: missing origin/class icon)`
-				: '✓ Recreated rune icons';
+				? `✓ Recreated mat icons (${skipped} skipped: missing icon source)`
+				: '✓ Recreated mat icons';
 		} catch (err) {
 			console.error(err);
 			bulkRecreateStatus = null;
-			alert(`Failed to recreate rune icons: ${getErrorMessage(err)}`);
+			alert(`Failed to recreate mat icons: ${getErrorMessage(err)}`);
 		} finally {
-			bulkRecreatingRunes = false;
+			bulkRecreatingMats = false;
 		}
 	}
 
-			async function saveRune() {
-			const name = runeModal.formData.name?.trim() ?? '';
+			async function saveMat() {
+			const name = matModal.formData.name?.trim() ?? '';
 			if (!name) {
-				alert('Rune name is required.');
+				alert('Mat name is required.');
 				return;
 			}
-		if (runeModal.formData.runeType === 'origin' && !runeModal.formData.origin_id) {
+		if (matModal.formData.matType === 'rune' && !matModal.formData.origin_id) {
 			alert('Select an origin for the rune.');
 			return;
 		}
-		if (runeModal.formData.runeType === 'class' && !runeModal.formData.class_id) {
-			alert('Select a class for the rune.');
+		if (matModal.formData.matType === 'relic' && !matModal.formData.emoji?.trim()) {
+			alert('Enter an emoji for the relic.');
 			return;
 		}
 
-		if (savingRune) return;
-		savingRune = true;
-		runeIconStatus = null;
+		if (savingMat) return;
+		savingMat = true;
+		matIconStatus = null;
 
 		const now = new Date().toISOString();
-		const runeId = runeModal.isEditing
-			? runeModal.editingId!
-			: (runeModal.formData.id ?? crypto.randomUUID());
-			if (!runeModal.formData.id) {
-				runeModal.formData = { ...runeModal.formData, id: runeId };
+		const matId = matModal.isEditing
+			? matModal.editingId!
+			: (matModal.formData.id ?? crypto.randomUUID());
+			if (!matModal.formData.id) {
+				matModal.formData = { ...matModal.formData, id: matId };
 			}
 
 			const payload = {
 				name,
-				origin_id: runeModal.formData.runeType === 'origin' ? runeModal.formData.origin_id : null,
-				class_id: runeModal.formData.runeType === 'class' ? runeModal.formData.class_id : null,
-				icon_background_path: runeModal.formData.icon_background_path ?? null
+				kind: matModal.formData.matType === 'rune' ? 'rune' : 'relic',
+				origin_id: matModal.formData.matType === 'rune' ? matModal.formData.origin_id : null,
+				emoji: matModal.formData.matType === 'relic' ? matModal.formData.emoji?.trim() ?? null : null,
+				icon_background_path: matModal.formData.icon_background_path ?? null
 			};
 
 		try {
 			let saveError: string | null = null;
-			if (runeModal.isEditing) {
+			if (matModal.isEditing) {
 				const { error: updateError } = await supabase
-					.from('runes')
+					.from('mat_items')
 					.update({ ...payload, updated_at: now })
-					.eq('id', runeId);
+					.eq('id', matId);
 				saveError = updateError ? getErrorMessage(updateError) : null;
 			} else {
-				const { error: insertError } = await supabase.from('runes').insert({ id: runeId, ...payload });
+				const { error: insertError } = await supabase.from('mat_items').insert({ id: matId, ...payload });
 				saveError = insertError ? getErrorMessage(insertError) : null;
 			}
 
 			if (saveError) {
-				alert(`Failed to save rune: ${saveError}`);
+				alert(`Failed to save mat: ${saveError}`);
 				return;
 			}
 
-				if (runeIconNeedsRegeneration) {
-					runeIconStatus = 'Generating rune icon...';
+				if (matIconNeedsRegeneration) {
+					matIconStatus = 'Generating mat icon...';
 
-					const isClassRune = runeModal.formData.runeType === 'class';
-					const backgroundUrl = isClassRune
-						? null
-						: publicAssetUrl(payload.icon_background_path, { updatedAt: Date.now() }) ??
-							publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
-					const backgroundColor = isClassRune ? '#ffffff' : null;
+					const isRelic = matModal.formData.matType === 'relic';
+					const backgroundUrl = publicAssetUrl(payload.icon_background_path, { updatedAt: Date.now() })
+						?? publicAssetUrl('rune_backgrounds/background.png', { updatedAt: Date.now() });
 					const outerRingColor = null;
 
-				const source =
-					runeModal.formData.runeType === 'origin'
-						? resolveIconSource(origins.find((o) => o.id === payload.origin_id))
-						: resolveIconSource(classes.find((c) => c.id === payload.class_id));
+				const source = isRelic
+					? { iconUrl: null, iconEmoji: payload.emoji }
+					: resolveIconSource(origins.find((o) => o.id === payload.origin_id));
 
 					const iconDataUrl = await generateRuneIcon({
 						originIconUrl: source.iconUrl,
 						originIconEmoji: source.iconEmoji,
 						backgroundUrl,
-						backgroundColor,
+						backgroundColor: null,
 						outerRingColor,
-						disableIconOutline: isClassRune,
+						disableIconOutline: false,
 						size: 800
 					});
 
 				const iconBlob = dataUrlToBlob(iconDataUrl);
 				const { data, error: uploadError } = await processAndUploadImage(iconBlob, {
-					folder: `runes/${runeId}`,
+					folder: `runes/${matId}`,
 					filename: 'icon',
 					cropTransparent: false,
 					upsert: true
 				});
 				if (uploadError || !data?.path) {
-					throw uploadError ?? new Error('Failed to upload rune icon.');
+					throw uploadError ?? new Error('Failed to upload mat icon.');
 				}
 
 				const { error: updateIconError } = await supabase
-					.from('runes')
+					.from('mat_items')
 					.update({
 						icon_path: data.path,
 						icon_background_path: payload.icon_background_path,
 						updated_at: now
 					})
-					.eq('id', runeId);
+					.eq('id', matId);
 				if (updateIconError) {
 					throw updateIconError;
 				}
 
-				runeIconNeedsRegeneration = false;
-				runeIconStatus = '✓ Rune icon exported';
+				matIconNeedsRegeneration = false;
+				matIconStatus = '✓ Mat icon exported';
 			}
 
-			runeModal.close();
+			matModal.close();
 			await loadAllData();
 		} catch (err) {
-			alert(`Failed to export rune icon: ${getErrorMessage(err)}`);
+			alert(`Failed to export mat icon: ${getErrorMessage(err)}`);
 		} finally {
-			savingRune = false;
-			runeIconStatus = null;
+			savingMat = false;
+			matIconStatus = null;
 		}
 	}
 
-	async function deleteRune(rune: RuneRow) {
-		if (!confirm(`Delete rune "${rune.name}"? Artifacts referencing it will break.`)) return;
-		const { error: deleteError } = await supabase.from('runes').delete().eq('id', rune.id);
+	async function deleteMat(mat: MatItemRow) {
+		if (!confirm(`Delete mat "${mat.name}"?`)) return;
+		const { error: deleteError } = await supabase.from('mat_items').delete().eq('id', mat.id);
 		if (deleteError) {
-			alert(`Failed to delete rune: ${getErrorMessage(deleteError)}`);
+			alert(`Failed to delete mat: ${getErrorMessage(deleteError)}`);
 			return;
 		}
 		await loadAllData();
 	}
 
-	async function deleteRunes(runesToDelete: RuneRow[]) {
-		if (runesToDelete.length === 0) return;
-		if (!confirm(`Delete ${runesToDelete.length} rune${runesToDelete.length === 1 ? '' : 's'}?`)) return;
-		const ids = runesToDelete.map((r) => r.id);
-		const { error: deleteError } = await supabase.from('runes').delete().in('id', ids);
+	async function deleteMats(matsToDelete: MatItemRow[]) {
+		if (matsToDelete.length === 0) return;
+		if (!confirm(`Delete ${matsToDelete.length} mat${matsToDelete.length === 1 ? '' : 's'}?`)) return;
+		const ids = matsToDelete.map((r) => r.id);
+		const { error: deleteError } = await supabase.from('mat_items').delete().in('id', ids);
 		if (deleteError) {
-			alert(`Failed to delete runes: ${getErrorMessage(deleteError)}`);
+			alert(`Failed to delete mats: ${getErrorMessage(deleteError)}`);
 			return;
 		}
 		await loadAllData();
@@ -1616,8 +1388,8 @@
 		activeClassSubTab = tabId;
 	}
 
-	function handleRuneSubTabChange(tabId: string) {
-		activeRuneSubTab = tabId;
+	function handleMatSubTabChange(tabId: string) {
+		activeMatSubTab = tabId;
 	}
 
 	// Get current sub-tabs based on active main tab
@@ -1626,7 +1398,7 @@
 			? originSubTabs
 			: activeMainTab === 'classes'
 				? classSubTabs
-				: runeSubTabs
+				: matSubTabs
 	);
 
 	const currentSubTab = $derived(
@@ -1634,7 +1406,7 @@
 			? activeOriginSubTab
 			: activeMainTab === 'classes'
 				? activeClassSubTab
-				: activeRuneSubTab
+				: activeMatSubTab
 	);
 
 	function handleSubTabChange(tabId: string) {
@@ -1643,14 +1415,14 @@
 		} else if (activeMainTab === 'classes') {
 			handleClassSubTabChange(tabId);
 		} else {
-			handleRuneSubTabChange(tabId);
+			handleMatSubTabChange(tabId);
 		}
 	}
 </script>
 
 <PageLayout
 	title="Traits"
-	subtitle="Origins, classes, and runes that define guardian attributes"
+	subtitle="Origins, classes, and mats that define guardian attributes"
 	tabs={mainTabs}
 	activeTab={activeMainTab}
 	onTabChange={handleMainTabChange}
@@ -1665,31 +1437,32 @@
 			<Button variant="secondary" onclick={() => backfillMissingIcons(true)} disabled={backfillingIcons}>
 				{backfillingIcons ? 'Resetting PNGs…' : 'Reset PNGs'}
 			</Button>
-			<Button variant="secondary" onclick={() => openSpecialCategoryForm()}>Create Special</Button>
 			<Button variant="primary" onclick={() => openClassForm()}>Create Class</Button>
-		{:else if activeMainTab === 'runes'}
+		{:else if activeMainTab === 'mats'}
 			<Button
 				variant="secondary"
-				onclick={recreateAllRuneIcons}
-				disabled={bulkRecreatingRunes || loading || runes.length === 0}
+				onclick={recreateAllMatIcons}
+				disabled={bulkRecreatingMats || loading || mats.length === 0}
 			>
-				{#if bulkRecreatingRunes && bulkRecreateProgress}
+				{#if bulkRecreatingMats && bulkRecreateProgress}
 					Recreating… {bulkRecreateProgress.done}/{bulkRecreateProgress.total}
 				{:else}
-					Recreate All Rune Icons
+					Recreate All Mat Icons
 				{/if}
 			</Button>
-			<Button variant="primary" onclick={() => openRuneForm()}>Create Rune</Button>
+			<Button variant="primary" onclick={() => openMatForm()}>Create Mat</Button>
 		{/if}
 	{/snippet}
 
 	{#snippet tabActions()}
 		{#if activeMainTab === 'origins'}
-			<span class="item-count">{originFiltered.filtered.length} origins</span>
+			<span class="item-count">
+				{activeOrigins.length} active, {disabledOrigins.length} disabled
+			</span>
 		{:else if activeMainTab === 'classes'}
-			<span class="item-count">{filteredClassCount} classes, {specialCategories.length} special</span>
-		{:else if activeMainTab === 'runes'}
-			<span class="item-count">{runeFiltered.filtered.length} runes</span>
+			<span class="item-count">{searchFilteredClasses.length} classes</span>
+		{:else if activeMainTab === 'mats'}
+			<span class="item-count">{matFiltered.filtered.length} mats</span>
 		{/if}
 	{/snippet}
 
@@ -1712,42 +1485,63 @@
 		</div>
 	</div>
 
-	{#if activeMainTab === 'origins'}
-		<FilterBar
-			bind:searchValue={originFiltered.searchQuery}
-			searchPlaceholder="Search origins"
-			filters={[]}
-		/>
+		{#if activeMainTab === 'origins'}
+			<FilterBar
+				bind:searchValue={originFiltered.searchQuery}
+				searchPlaceholder="Search origins"
+				filters={[]}
+			/>
 
 		{#if loading}
 			<div class="loading-state">Loading origins...</div>
 		{:else if error}
 			<div class="error-state">Error: {error}</div>
 		{:else if activeOriginSubTab === 'list'}
-			<OriginsListView
-				origins={originFiltered.filtered}
-				onEdit={(origin) => openOriginForm(origin)}
-				onDelete={(origin) => deleteOrigin(origin)}
-				onDeleteMultiple={deleteOrigins}
-			/>
+			<div class="origin-groups">
+				<section class="origin-group">
+					<h3>Active Origins ({activeOrigins.length})</h3>
+					<OriginsListView
+						origins={activeOrigins}
+						onEdit={(origin) => openOriginForm(origin)}
+						onDelete={(origin) => deleteOrigin(origin)}
+						onToggleEnabled={setOriginEnabled}
+						onDeleteMultiple={deleteOrigins}
+					/>
+				</section>
+				{#if disabledOrigins.length > 0}
+					<section class="origin-group origin-group--disabled">
+						<h3>Disabled Origins ({disabledOrigins.length})</h3>
+						<OriginsListView
+							origins={disabledOrigins}
+							onEdit={(origin) => openOriginForm(origin)}
+							onDelete={(origin) => deleteOrigin(origin)}
+							onToggleEnabled={setOriginEnabled}
+							onDeleteMultiple={deleteOrigins}
+						/>
+					</section>
+				{/if}
+			</div>
 		{:else if activeOriginSubTab === 'table'}
-			<OriginsTableView
-				origins={originFiltered.filtered}
-				onEdit={(origin) => openOriginForm(origin)}
-			/>
-		{:else if activeOriginSubTab === 'calling-orb-template'}
-			<CallingOrbTemplate
-				{origins}
-				{iconPool}
-			onGenerate={handleCallingOrbGenerate}
-			/>
-		{:else if activeOriginSubTab === 'calling-orb-generated'}
-			<CallingOrbGenerated
-				{origins}
-				orbImages={callingOrbImages}
-				onDelete={handleCallingOrbDelete}
-				onRefresh={handleCallingOrbRefresh}
-			/>
+			<div class="origin-groups">
+				<section class="origin-group">
+					<h3>Active Origins ({activeOrigins.length})</h3>
+					<OriginsTableView
+						origins={activeOrigins}
+						onEdit={(origin) => openOriginForm(origin)}
+						onToggleEnabled={setOriginEnabled}
+					/>
+				</section>
+				{#if disabledOrigins.length > 0}
+					<section class="origin-group origin-group--disabled">
+						<h3>Disabled Origins ({disabledOrigins.length})</h3>
+						<OriginsTableView
+							origins={disabledOrigins}
+							onEdit={(origin) => openOriginForm(origin)}
+							onToggleEnabled={setOriginEnabled}
+						/>
+					</section>
+				{/if}
+			</div>
 		{/if}
 	{:else if activeMainTab === 'classes'}
 		<div class="language-bar">
@@ -1782,14 +1576,11 @@
 		{:else if activeClassSubTab === 'list'}
 			<ClassesListView
 				classes={searchFilteredClasses}
-				{specialCategories}
 				{diceNameById}
 				language={classLanguage}
 				onEdit={(cls) => openClassForm(cls)}
 				onDelete={deleteClass}
 				onDeleteMultiple={deleteClasses}
-				onEditSpecial={(cat) => openSpecialCategoryForm(cat)}
-				onDeleteSpecial={deleteSpecialCategory}
 			/>
 		{:else if activeClassSubTab === 'table'}
 			<ClassesTableView
@@ -1801,39 +1592,31 @@
 		{:else if activeClassSubTab === 'pdf'}
 			<ClassesPdfView
 				classes={classes}
-				{specialCategories}
 				{diceNameById}
 				language={classLanguage}
 			/>
 		{/if}
-	{:else if activeMainTab === 'runes'}
+	{:else if activeMainTab === 'mats'}
 		<FilterBar
-			bind:searchValue={runeFiltered.searchQuery}
-			searchPlaceholder="Search runes"
+			bind:searchValue={matFiltered.searchQuery}
+			searchPlaceholder="Search mats"
 			filters={[
 				{
 					key: 'origin',
 					label: 'Origin',
 					options: origins.map((o) => ({ value: o.id, label: o.name })),
-					value: runeOriginFilter
-				},
-				{
-					key: 'class',
-					label: 'Class',
-					options: classes.map((c) => ({ value: c.id, label: c.name })),
-					value: runeClassFilter
+					value: matOriginFilter
 				}
 			]}
 			onfilterchange={(key, value) => {
-				if (key === 'origin') runeOriginFilter = value?.toString() ?? 'all';
-				if (key === 'class') runeClassFilter = value?.toString() ?? 'all';
+				if (key === 'origin') matOriginFilter = value?.toString() ?? 'all';
 			}}
 		/>
 
-		{#if bulkRecreateStatus || bulkRecreatingRunes}
+		{#if bulkRecreateStatus || bulkRecreatingMats}
 			<div class="bulk-status" aria-live="polite">
-				{#if bulkRecreatingRunes && bulkRecreateProgress}
-					Recreating rune icons… {bulkRecreateProgress.done}/{bulkRecreateProgress.total}
+				{#if bulkRecreatingMats && bulkRecreateProgress}
+					Recreating mat icons… {bulkRecreateProgress.done}/{bulkRecreateProgress.total}
 					{#if bulkRecreateProgress.skipped > 0}
 						(skipped {bulkRecreateProgress.skipped})
 					{/if}
@@ -1847,39 +1630,35 @@
 		{/if}
 
 		{#if loading}
-			<div class="loading-state">Loading runes...</div>
+			<div class="loading-state">Loading mats...</div>
 		{:else if error}
 			<div class="error-state">Error: {error}</div>
-		{:else if activeRuneSubTab === 'gallery'}
-			<RunesGalleryView
-				runes={runeFiltered.filtered}
+		{:else if activeMatSubTab === 'gallery'}
+			<MatsGalleryView
+				mats={matFiltered.filtered}
 				{originLookup}
-				{classLookup}
 				{publicUrl}
-				onEdit={(rune) => openRuneForm(rune)}
-				onDelete={(rune) => deleteRune(rune)}
+				onEdit={(mat) => openMatForm(mat)}
+				onDelete={(mat) => deleteMat(mat)}
 			/>
-		{:else if activeRuneSubTab === 'list'}
-			<RunesListView
-				runes={runeFiltered.filtered}
+		{:else if activeMatSubTab === 'list'}
+			<MatsListView
+				mats={matFiltered.filtered}
 				{originLookup}
-				{classLookup}
-				onEdit={(rune) => openRuneForm(rune)}
-				onDelete={(rune) => deleteRune(rune)}
-				onDeleteMultiple={deleteRunes}
+				onEdit={(mat) => openMatForm(mat)}
+				onDelete={(mat) => deleteMat(mat)}
+				onDeleteMultiple={deleteMats}
 			/>
-		{:else if activeRuneSubTab === 'table'}
-			<RunesTableView
-				runes={runeFiltered.filtered}
+		{:else if activeMatSubTab === 'table'}
+			<MatsTableView
+				mats={matFiltered.filtered}
 				{originLookup}
-				{classLookup}
-				onEdit={(rune) => openRuneForm(rune)}
+				onEdit={(mat) => openMatForm(mat)}
 			/>
-		{:else if activeRuneSubTab === 'json'}
-			<RunesJsonView
-				runes={runeFiltered.filtered}
+		{:else if activeMatSubTab === 'json'}
+			<MatsJsonView
+				mats={matFiltered.filtered}
 				{originLookup}
-				{classLookup}
 				{publicUrl}
 			/>
 		{/if}
@@ -1950,13 +1729,6 @@
 			<Textarea rows={3} bind:value={originModal.formData.description} />
 		</FormField>
 
-		<FormField label="Calling Card">
-			<CallingCardEditor
-			bind:callingCard={originModal.formData.calling_card}
-			{hexSpirits}
-			{iconPool}
-		/>
-		</FormField>
 	</form>
 
 	{#snippet footer()}
@@ -1990,6 +1762,14 @@
 				<label>
 					Color
 					<input type="color" bind:value={classFormData.color} />
+				</label>
+				<label>
+					Class Type
+					<select bind:value={classFormData.class_type}>
+						<option value="normal">Normal</option>
+						<option value="human">Human</option>
+						<option value="special">Special</option>
+					</select>
 				</label>
 			</section>
 
@@ -2447,102 +2227,31 @@
 	</EditorModal>
 {/if}
 
-<!-- Special Category Modal -->
-{#if showSpecialCategoryForm}
-	<EditorModal
-		title={editingSpecialCategory ? 'Edit Special Category' : 'Create Special Category'}
-		description="A special category card displays 3 slots, each containing multiple classes."
-		size="lg"
-		on:close={closeSpecialCategoryForm}
-	>
-		<form
-			id="special-category-form"
-			class="special-category-form"
-			onsubmit={submitSpecialCategoryForm}
-		>
-			<div class="special-category-form__grid">
-				<label>
-					Name
-					<input type="text" bind:value={specialCategoryFormData.name} required />
-				</label>
-				<label>
-					Icon Emoji
-					<input type="text" bind:value={specialCategoryFormData.icon_emoji} placeholder="e.g. ⚡" />
-				</label>
-				<label>
-					Color
-					<input type="color" bind:value={specialCategoryFormData.color} />
-				</label>
-				<label>
-					Position
-					<input type="number" min="0" bind:value={specialCategoryFormData.position} />
-				</label>
-			</div>
-
-			<label class="span-full">
-				Description
-				<textarea rows="2" bind:value={specialCategoryFormData.description}></textarea>
-			</label>
-
-			<div class="slot-editors">
-				{#each [
-					{ key: 'slot_1_class_ids' as const, label: 'Slot 1' },
-					{ key: 'slot_2_class_ids' as const, label: 'Slot 2' },
-					{ key: 'slot_3_class_ids' as const, label: 'Slot 3' }
-				] as slot}
-					<fieldset class="slot-fieldset">
-						<legend>{slot.label}</legend>
-						<div class="slot-class-grid">
-							{#each classes as cls (cls.id)}
-								<label class="slot-class-checkbox">
-									<input
-										type="checkbox"
-										checked={specialCategoryFormData[slot.key].includes(cls.id)}
-										onchange={() => toggleClassInSlot(slot.key, cls.id)}
-									/>
-									<span class="slot-class-label" style="border-color: {cls.color ?? '#8b5cf6'}">
-										{cls.icon_emoji ?? '🛡️'} {cls.name}
-									</span>
-								</label>
-							{/each}
-						</div>
-					</fieldset>
-				{/each}
-			</div>
-		</form>
-
-		<div slot="footer" class="modal-footer-actions">
-			<button class="btn btn--primary" type="submit" form="special-category-form">Save</button>
-			<button class="btn" type="button" onclick={closeSpecialCategoryForm}>Cancel</button>
-		</div>
-	</EditorModal>
-{/if}
-
-<!-- Runes Modal -->
-	<Modal bind:open={runeModal.isOpen} title={runeModal.isEditing ? 'Edit Rune' : 'Create Rune'}>
-		<form onsubmit={handleRuneSubmit}>
+<!-- Mats Modal -->
+	<Modal bind:open={matModal.isOpen} title={matModal.isEditing ? 'Edit Mat' : 'Create Mat'}>
+		<form onsubmit={handleMatSubmit}>
 			<FormField label="Name" required>
-				<Input bind:value={runeModal.formData.name} placeholder="Enter rune name" required />
+				<Input bind:value={matModal.formData.name} placeholder="Enter mat name" required />
 			</FormField>
 
 		<fieldset class="rune-type-fieldset">
-			<legend>Rune Type</legend>
+			<legend>Mat Type</legend>
 			<div class="rune-type-options">
 				<label class="rune-type-option">
-					<input type="radio" bind:group={runeModal.formData.runeType} value="origin" />
-					Origin
+					<input type="radio" bind:group={matModal.formData.matType} value="rune" />
+					Rune
 				</label>
 				<label class="rune-type-option">
-					<input type="radio" bind:group={runeModal.formData.runeType} value="class" />
-					Class
+					<input type="radio" bind:group={matModal.formData.matType} value="relic" />
+					Relic
 				</label>
 			</div>
 		</fieldset>
 
-		{#if runeModal.formData.runeType === 'origin'}
+		{#if matModal.formData.matType === 'rune'}
 			<FormField label="Origin" required>
 				<Select
-					bind:value={runeModal.formData.origin_id}
+					bind:value={matModal.formData.origin_id}
 					options={[
 						{ value: '', label: 'Select an origin' },
 						...origins.map((o) => ({ value: o.id, label: o.name }))
@@ -2551,47 +2260,40 @@
 				/>
 			</FormField>
 			{:else}
-				<FormField label="Class" required>
-					<Select
-						bind:value={runeModal.formData.class_id}
-					options={[
-						{ value: '', label: 'Select a class' },
-						...classes.map((c) => ({ value: c.id, label: c.name }))
-					]}
-					required
-				/>
+				<FormField label="Emoji" required>
+					<Input bind:value={matModal.formData.emoji} placeholder="e.g. ⭐" required />
 				</FormField>
 			{/if}
 
 			<div class="rune-icon-settings">
 				<FormField label="Icon Background (optional)">
 					<ImageUploader
-						bind:value={runeModal.formData.icon_background_path}
-						folder={`rune_backgrounds/${runeModal.formData.id ?? 'unassigned'}`}
+						bind:value={matModal.formData.icon_background_path}
+						folder={`rune_backgrounds/${matModal.formData.id ?? 'unassigned'}`}
 						cropTransparent={false}
 						aspectRatio="1 / 1"
 						onupload={() => {
-							runeIconNeedsRegeneration = true;
+							matIconNeedsRegeneration = true;
 						}}
 						onerror={(message) => alert(message)}
 					/>
 					<div class="rune-icon-hint">
-						{#if runeIconNeedsRegeneration}
+						{#if matIconNeedsRegeneration}
 							<span class="rune-icon-hint__dirty">Icon will regenerate on save.</span>
 						{:else}
 							<span>Icon is up to date.</span>
 						{/if}
-						{#if runeIconStatus}
-							<span class="rune-icon-hint__status">{runeIconStatus}</span>
+						{#if matIconStatus}
+							<span class="rune-icon-hint__status">{matIconStatus}</span>
 						{/if}
 					</div>
 				</FormField>
 
 				<div class="rune-icon-preview">
-					{#if runeModal.formData.icon_path}
-						{@const iconPreviewUrl = publicAssetUrl(runeModal.formData.icon_path, { updatedAt: runeModal.formData.updated_at ?? Date.now() })}
+					{#if matModal.formData.icon_path}
+						{@const iconPreviewUrl = publicAssetUrl(matModal.formData.icon_path, { updatedAt: matModal.formData.updated_at ?? Date.now() })}
 						{#if iconPreviewUrl}
-							<img src={iconPreviewUrl} alt="Rune icon preview" />
+							<img src={iconPreviewUrl} alt="Mat icon preview" />
 						{:else}
 							<div class="rune-icon-preview__empty">No exported icon</div>
 						{/if}
@@ -2602,10 +2304,10 @@
 			</div>
 
 			<div class="modal__actions">
-				<Button variant="primary" type="submit" loading={savingRune}>
-					{runeIconNeedsRegeneration ? 'Save & Export' : 'Save'}
+				<Button variant="primary" type="submit" loading={savingMat}>
+					{matIconNeedsRegeneration ? 'Save & Export' : 'Save'}
 				</Button>
-				<Button variant="ghost" type="button" onclick={() => runeModal.close()} disabled={savingRune}>
+				<Button variant="ghost" type="button" onclick={() => matModal.close()} disabled={savingMat}>
 					Cancel
 				</Button>
 			</div>
@@ -2616,6 +2318,30 @@
 	.item-count {
 		font-size: 0.7rem;
 		color: #64748b;
+	}
+
+	.origin-groups {
+		display: grid;
+		gap: 1rem;
+	}
+
+	.origin-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.origin-group h3 {
+		margin: 0;
+		font-size: 0.85rem;
+		color: #cbd5e1;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+	}
+
+	.origin-group--disabled {
+		padding-top: 0.8rem;
+		border-top: 1px solid rgba(148, 163, 184, 0.2);
 	}
 
 	.loading-state,
@@ -2992,67 +2718,6 @@
 		color: #94a3b8;
 		font-style: italic;
 		font-size: 0.85rem;
-	}
-
-	/* Special category form */
-	.special-category-form {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.special-category-form__grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-		gap: 0.75rem;
-	}
-
-	.slot-editors {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.slot-fieldset {
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 8px;
-		padding: 0.75rem;
-	}
-
-	.slot-fieldset legend {
-		padding: 0 0.5rem;
-		font-weight: 600;
-		color: #e2e8f0;
-		font-size: 0.9rem;
-	}
-
-	.slot-class-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.slot-class-checkbox {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		cursor: pointer;
-	}
-
-	.slot-class-checkbox input {
-		margin: 0;
-	}
-
-	.slot-class-label {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		padding: 0.25rem 0.5rem;
-		background: rgba(51, 65, 85, 0.4);
-		border: 1px solid;
-		border-radius: 5px;
-		font-size: 0.8rem;
-		color: #cbd5e1;
 	}
 
 	/* Rune form styles */

@@ -10,6 +10,7 @@ export interface EditionFormData {
 	origin_ids: string[];
 	cost_duplicates: CostDuplicates;
 	is_default: boolean;
+	is_enabled: boolean;
 }
 
 export const DEFAULT_COST_DUPLICATES: CostDuplicates = {
@@ -31,7 +32,8 @@ export function emptyEditionForm(): EditionFormData {
 		description: '',
 		origin_ids: [],
 		cost_duplicates: { ...DEFAULT_COST_DUPLICATES },
-		is_default: false
+		is_default: false,
+		is_enabled: true
 	};
 }
 
@@ -42,7 +44,8 @@ export function editionRowToForm(row: EditionRow): EditionFormData {
 		description: row.description ?? '',
 		origin_ids: row.origin_ids ?? [],
 		cost_duplicates: { ...DEFAULT_COST_DUPLICATES, ...(row.cost_duplicates ?? {}) },
-		is_default: row.is_default
+		is_default: row.is_default,
+		is_enabled: row.is_enabled !== false
 	};
 }
 
@@ -87,6 +90,7 @@ export async function saveEditionRecord(
 		origin_ids: sanitized.origin_ids,
 		cost_duplicates: sanitized.cost_duplicates,
 		is_default: sanitized.is_default,
+		is_enabled: sanitized.is_enabled,
 		updated_at: new Date().toISOString()
 	};
 

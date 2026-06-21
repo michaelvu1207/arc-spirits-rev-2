@@ -97,11 +97,7 @@
 		return allPlayersRewardRow.label?.trim() || config.label;
 	});
 
-	const stageCompletionText = $derived.by(() => {
-		const value = (event as Event & { stage_completion?: string | null }).stage_completion;
-		const trimmed = value?.trim();
-		return trimmed && trimmed.length > 0 ? trimmed : null;
-	});
+	const stageCompletionText = $derived.by(() => null);
 
 	// Build CSS variables from style definition
 	const styleVars = $derived.by(() => {

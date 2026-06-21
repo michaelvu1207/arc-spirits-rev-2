@@ -66,9 +66,9 @@ const EN: MonsterCardUi = {
 		inactive: 'Inactive'
 	},
 	effectType: {
-		before_combat: 'BEFORE COMBAT',
-		during_combat: 'DURING COMBAT',
-		after_combat: 'AFTER COMBAT',
+		before_combat: 'ROUND: ENCOUNTER PHASE',
+		during_combat: 'COMBAT: BATTLE STEP',
+		after_combat: 'COMBAT: AFTERMATH STEP',
 		combat_type: 'COMBAT TYPE'
 	},
 	invadesPrefix: 'Invades:',

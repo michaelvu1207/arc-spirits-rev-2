@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
 	import { publicAssetUrl } from '$lib/utils/storage';
 	import StageCardPreview from '$lib/components/scenarios/StageCardPreview.svelte';
 	import type {
@@ -15,15 +14,9 @@
 			id: string;
 			name: string;
 			background_image_path: string | null;
+			image_with_icons_path: string | null;
 			updated_at: string | null;
 			reward_rows: GameLocationRewardRow[];
-		} | null;
-		traveler?: {
-			id: string;
-			name: string;
-			image_path: string | null;
-			card_image_path: string | null;
-			updated_at: string | null;
 		} | null;
 		event?: {
 			id: string;
@@ -31,7 +24,6 @@
 			stage: string;
 			title: string;
 			description: string | null;
-			stage_completion: string | null;
 			reward_rows: unknown;
 			image_path: string | null;
 			card_image_path: string | null;
@@ -39,9 +31,16 @@
 			created_at?: string | null;
 			updated_at: string | null;
 		} | null;
+		stageCompletion?: {
+			id: string;
+			title: string;
+			stage: string;
+			card_image_path: string | null;
+			updated_at: string | null;
+		} | null;
 	}
 
-	let { entry, monster = null, location = null, traveler = null, event = null }: Props = $props();
+	let { entry, monster = null, location = null, event = null, stageCompletion = null }: Props = $props();
 
 	function getStorageImageUrl(path: string | null | undefined, updatedAt?: string | null): string | null {
 		if (!path) return null;
@@ -65,18 +64,16 @@
 			stage: event.stage as any,
 			title: event.title,
 			description: event.description,
-			stage_completion: event.stage_completion,
 			image_path: event.image_path,
 			card_image_path: event.card_image_path,
 			reward_rows: event.reward_rows as any,
 			order_num: entry.order_num,
 			created_at: event.created_at ?? null,
-			updated_at: event.updated_at,
-			data: event.data as any,
-			game_location_id: null,
-			traveler_id: null,
-			art_url: getEventArtUrl(event.image_path, event.updated_at)
-		} as unknown as StageCard;
+				updated_at: event.updated_at,
+				data: event.data as any,
+				game_location_id: null,
+				art_url: getEventArtUrl(event.image_path, event.updated_at)
+			} as unknown as StageCard;
 	});
 
 	const locationStageCard = $derived.by<StageCard | null>(() => {
@@ -91,18 +88,16 @@
 			stage: entry.entry_stage,
 			title: location.name,
 			description: null,
-			stage_completion: null,
 			image_path: location.background_image_path ?? null,
-			card_image_path: null,
+			card_image_path: location.image_with_icons_path ?? null,
 			reward_rows: [],
 			order_num: entry.order_num,
 			created_at: entry.created_at,
-			updated_at: entry.updated_at,
-			data: entry.data,
-			game_location_id: location.id,
-			traveler_id: null,
-			art_url: null
-		} as unknown as StageCard;
+				updated_at: location.updated_at ?? entry.updated_at,
+				data: entry.data,
+				game_location_id: location.id,
+				art_url: null
+			} as unknown as StageCard;
 	});
 
 	const locationRenderStyle = $derived.by(() => {
@@ -114,26 +109,7 @@
 		return getStorageImageUrl(monster.card_image_path, monster.updated_at);
 	});
 
-	const travelerImageUrl = $derived.by(() => {
-		if (!traveler) return null;
-		return getStorageImageUrl(traveler.card_image_path, traveler.updated_at);
-	});
-
-	const travelerArtUrl = $derived.by(() => {
-		if (!traveler?.image_path) return null;
-		const path = traveler.image_path.startsWith('travelers/')
-			? traveler.image_path
-			: `travelers/${traveler.image_path}`;
-		return publicAssetUrl(path, { updatedAt: traveler.updated_at ?? undefined });
-	});
-
 	// EventCardPreview uses its own background store; no need to subscribe here.
-
-	let travelerCanvasAllowed = $state(false);
-	$effect(() => {
-		// Canvas previews can be expensive; only enable when needed (no PNG).
-		travelerCanvasAllowed = browser && entry.kind === 'traveler' && !!traveler && !travelerImageUrl;
-	});
 
 	// For event_cards with a stored PNG, prefer showing the PNG (fast).
 	const eventCardImageUrl = $derived.by(() => {
@@ -144,7 +120,13 @@
 
 	const locationFallbackImageUrl = $derived.by(() => {
 		if (entry.kind !== 'location') return null;
-		return getStorageImageUrl(location?.background_image_path, location?.updated_at);
+		return getStorageImageUrl(location?.image_with_icons_path ?? location?.background_image_path, location?.updated_at);
+	});
+
+	const stageCompletionImageUrl = $derived.by(() => {
+		if (entry.kind !== 'stage_completion') return null;
+		if (!stageCompletion?.card_image_path) return null;
+		return getStorageImageUrl(stageCompletion.card_image_path, stageCompletion.updated_at);
 	});
 </script>
 
@@ -172,13 +154,11 @@
 		{:else}
 			<div class="placeholder">No monster PNG</div>
 		{/if}
-	{:else if entry.kind === 'traveler'}
-		{#if travelerImageUrl}
-			<img src={travelerImageUrl} alt={traveler?.name ?? 'Traveler'} loading="lazy" />
-		{:else if travelerArtUrl}
-			<img src={travelerArtUrl} alt={traveler?.name ?? 'Traveler'} loading="lazy" />
+	{:else if entry.kind === 'stage_completion'}
+		{#if stageCompletionImageUrl}
+			<img src={stageCompletionImageUrl} alt={stageCompletion?.title ?? 'Stage Completion'} loading="lazy" />
 		{:else}
-			<div class="placeholder">No traveler PNG</div>
+			<div class="placeholder">{stageCompletion?.title ?? 'No PNG'}</div>
 		{/if}
 	{:else}
 		<div class="placeholder">Unknown kind: {entry.kind}</div>

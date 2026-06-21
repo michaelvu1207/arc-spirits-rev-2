@@ -2,18 +2,20 @@
 	import { onMount } from 'svelte';
 	import html2canvas from 'html2canvas';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { GameLocationRewardRow, GameLocationRow } from '$lib/types/gameData';
+	import type { GameLocationRewardRow, GameLocationRow, GameLocationRowCompositionRow, RewardRowAssignment } from '$lib/types/gameData';
+	import { configToRewardRow } from '$lib/types/gameData';
 	import { getErrorMessage } from '$lib/utils';
 	import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
-	import { isRewardOrIconToken, normalizeRewardIconTokens, rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
+	import { isRewardOrIconToken, rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
 	import { publicAssetUrl } from '$lib/utils/storage';
+	import { fetchAll } from '$lib/services/dataService';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { ImageUploader } from '$lib/components/shared';
 	import { Button, Input } from '$lib/components/ui';
 	import { fetchSpiritWorldMapConfig, upsertSpiritWorldMapConfig } from '$lib/api/spiritWorldMapConfig';
 	import type { SpiritWorldLocationPlacement, SpiritWorldMapConfig } from '$lib/generators/spirit-world/spiritWorldMapConfig';
 
-	type Location = Pick<GameLocationRow, 'id' | 'name' | 'reward_rows'>;
+	type Location = Pick<GameLocationRow, 'id' | 'name'>;
 	type LocationRowItem = {
 		placementId: string;
 		locationId: string;
@@ -32,8 +34,23 @@
 	const LEGACY_ROW_HEIGHT = EXPORT_ICON_SIZE + EXPORT_ROW_GAP;
 
 	let locations = $state<Location[]>([]);
+	let rewardRowRecords = $state<GameLocationRowCompositionRow[]>([]);
+	let rewardRowAssignments = $state<RewardRowAssignment[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	/** Get resolved reward rows for a location from the junction table. */
+	function getLocationRewardRows(locationId: string): GameLocationRewardRow[] {
+		const assigned = rewardRowAssignments
+			.filter((a) => a.location_id === locationId)
+			.sort((a, b) => a.row_index - b.row_index);
+
+		return assigned.map((a) => {
+			const row = rewardRowRecords.find((r) => r.id === a.row_id);
+			if (!row) return { type: 'gain', gain_icon_ids: [] } as GameLocationRewardRow;
+			return configToRewardRow(row.type, row.config);
+		});
+	}
 
 	let mapConfig = $state<SpiritWorldMapConfig>({
 		background_image_path: null,
@@ -68,7 +85,7 @@
 	const rowItems = $derived.by<LocationRowItem[]>(() => {
 		const items: LocationRowItem[] = [];
 		for (const loc of locations) {
-			const rows = loc.reward_rows ?? [];
+			const rows = getLocationRewardRows(loc.id);
 			for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
 				const row = rows[rowIndex];
 				if (!row || !hasRewardContent(row)) continue;
@@ -95,41 +112,6 @@
 	});
 
 	const placedCount = $derived(placedRows.length);
-
-	function normalizeRewardRows(rows: any): GameLocationRewardRow[] {
-		if (!Array.isArray(rows)) return [];
-		return rows.map((row) => {
-			if (!row || typeof row !== 'object') {
-				return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
-			}
-
-			// Back-compat for earlier shape: { icon_ids: [...] }
-			if (Array.isArray((row as any).icon_ids)) {
-				return {
-					type: 'gain',
-					gain_icon_ids: normalizeRewardIconTokens((row as any).icon_ids)
-				} satisfies GameLocationRewardRow;
-			}
-
-			const rawType = (row as any).type;
-			if (rawType === 'text') {
-				return {
-					type: 'text',
-					text: typeof (row as any).text === 'string' ? (row as any).text : ''
-				} satisfies GameLocationRewardRow;
-			}
-
-			const type = rawType === 'trade' ? 'trade' : 'gain';
-			const gain_icon_ids = normalizeRewardIconTokens((row as any).gain_icon_ids);
-
-			if (type === 'trade') {
-				const cost_icon_ids = normalizeRewardIconTokens((row as any).cost_icon_ids);
-				return { type: 'trade', cost_icon_ids, gain_icon_ids } satisfies GameLocationRewardRow;
-			}
-
-			return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
-		});
-	}
 
 	function hasRewardContent(row: GameLocationRewardRow): boolean {
 		if (row.type === 'text') return row.text.trim().length > 0;
@@ -170,7 +152,7 @@
 		loading = true;
 		error = null;
 		try {
-			await Promise.all([loadAllIcons(), loadLocations(), loadConfig()]);
+			await Promise.all([loadAllIcons(), loadLocations(), loadRewardRowData(), loadConfig()]);
 			const migrated = migrateLegacyLocationPlacements(mapConfig);
 			if (migrated) {
 				mapConfig = migrated;
@@ -186,13 +168,19 @@
 	async function loadLocations() {
 		const { data, error: err } = await supabase
 			.from('game_locations')
-			.select('id, name, reward_rows')
+			.select('id, name')
 			.order('name');
 		if (err) throw new Error(err.message);
-		locations = (data ?? []).map((row: any) => ({
-			...row,
-			reward_rows: normalizeRewardRows(row.reward_rows)
-		})) as Location[];
+		locations = (data ?? []) as Location[];
+	}
+
+	async function loadRewardRowData() {
+		const [rows, assignments] = await Promise.all([
+			fetchAll<GameLocationRowCompositionRow>('game_location_rows', '*'),
+			fetchAll<RewardRowAssignment>('reward_row_assignments', '*')
+		]);
+		rewardRowRecords = rows;
+		rewardRowAssignments = assignments;
 	}
 
 	async function loadConfig() {
@@ -211,7 +199,8 @@
 			const loc = locationById.get(key);
 			if (!loc) continue;
 
-			const rowsWithIndex = (loc.reward_rows ?? [])
+			const locRows = getLocationRewardRows(loc.id);
+			const rowsWithIndex = locRows
 				.map((row, rowIndex) => ({ row, rowIndex }))
 				.filter(({ row }) => !!row && hasRewardContent(row));
 
@@ -403,6 +392,10 @@
 
 	let exporting = $state(false);
 	let exportError = $state<string | null>(null);
+	const EXPORT_IMAGE_TYPE = 'image/jpeg';
+	const EXPORT_IMAGE_QUALITY = 0.92;
+	const EXPORT_IMAGE_FILENAME = 'spirit_world_with_rewards.jpg';
+	const EXPORT_IMAGE_STORAGE_PATH = `spirit_world/${EXPORT_IMAGE_FILENAME}`;
 
 	async function exportMap() {
 		if (!backgroundUrl || !bgSize) {
@@ -453,14 +446,14 @@
 
 			const blob: Blob = await new Promise((resolve, reject) => {
 				canvas.toBlob((value) => {
-					if (!value) return reject(new Error('Failed to render export PNG.'));
+					if (!value) return reject(new Error('Failed to render export JPG.'));
 					resolve(value);
-				}, 'image/png');
+				}, EXPORT_IMAGE_TYPE, EXPORT_IMAGE_QUALITY);
 			});
 
-			const storagePath = 'spirit_world/spirit_world_with_rewards.png';
+			const storagePath = EXPORT_IMAGE_STORAGE_PATH;
 			const { error: uploadError } = await supabase.storage.from('game_assets').upload(storagePath, blob, {
-				contentType: 'image/png',
+				contentType: EXPORT_IMAGE_TYPE,
 				upsert: true
 			});
 			if (uploadError) throw uploadError;
@@ -474,7 +467,7 @@
 			const objectUrl = URL.createObjectURL(blob);
 			const a = document.createElement('a');
 			a.href = objectUrl;
-			a.download = 'spirit_world_with_rewards.png';
+			a.download = EXPORT_IMAGE_FILENAME;
 			a.click();
 			URL.revokeObjectURL(objectUrl);
 		} catch (err) {
@@ -487,7 +480,7 @@
 
 <PageLayout
 	title="Spirit World"
-	subtitle="Place location rewards on the Spirit World background and export a composite PNG"
+	subtitle="Place location rewards on the Spirit World background and export a composite JPG"
 	{tabs}
 	{activeTab}
 	onTabChange={(id) => (activeTab = id)}
@@ -723,7 +716,7 @@
 				<div class="panel">
 					<div class="panel__header">
 						<h2>Export</h2>
-						<span class="pill">PNG</span>
+						<span class="pill">JPG</span>
 					</div>
 					<Button variant="primary" onclick={exportMap} loading={exporting}>
 						Export Spirit World
@@ -945,9 +938,6 @@
 												{/if}
 											</div>
 										</div>
-										{#if !(mapConfig.hide_all_labels ?? false)}
-											<div class="placed__label">{item.locationName} · {rowLabel(item.row, item.rowIndex)}</div>
-										{/if}
 									</div>
 								{/each}
 							</div>
@@ -1083,8 +1073,14 @@
 		min-width: 0;
 		padding: 0.35rem 0.45rem;
 		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.22);
-		border: 1px solid rgba(255, 255, 255, 0.3);
+		position: relative;
+		background: rgba(56, 35, 20, 0.9);
+		border: 1px solid rgba(255, 255, 255, 0.5);
+		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+	}
+
+	.reward-preview__row > * {
+		filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.55));
 	}
 
 	.reward-preview__icons {

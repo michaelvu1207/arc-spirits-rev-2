@@ -9,6 +9,7 @@
 	import { Modal } from '$lib/components/layout';
 	import { IconPicker } from '$lib/components/shared';
 	import { Button, Input, Select, Textarea } from '$lib/components/ui';
+	import { normalizeOptionalText, normalizeLanguageCode, getTranslationValue } from '$lib/i18n/translations';
 
 	interface Props {
 		allIcons: IconPoolRow[];
@@ -48,31 +49,6 @@
 	let iconTagSaving = $state<Record<string, boolean>>({});
 
 	const iconById = $derived.by(() => new Map(allIcons.map((icon) => [icon.id, icon])));
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function getTranslationValue(input: unknown, lang: string): string | null {
-		if (!lang || lang === BASE_LANGUAGE) return null;
-		if (!input || typeof input !== 'object') return null;
-		const record = input as Record<string, unknown>;
-		const direct = record[lang];
-		if (typeof direct === 'string') return normalizeOptionalText(direct);
-
-		for (const [key, value] of Object.entries(record)) {
-			if (normalizeLanguageCode(key) !== lang) continue;
-			if (typeof value !== 'string') continue;
-			return normalizeOptionalText(value);
-		}
-
-		return null;
-	}
 
 	function getBaseGuideName(icon: IconPoolRow): string {
 		return normalizeOptionalText(icon.icon_guide_name) ?? icon.name;

@@ -15,26 +15,30 @@
 				{ href: '/dice', label: 'Dice', icon: '🎲' },
 				{ href: '/editions', label: 'Editions', icon: '📦' },
 				{ href: '/scenarios', label: 'Scenarios', icon: '🎭' },
-				{ href: '/artifacts', label: 'Artifacts', icon: '🧩' },
-					{ href: '/hex-spirits', label: 'Hex Spirits', icon: '⚔️' },
-					{ href: '/guardians', label: 'Guardians', icon: '🕯️' },
-				{ href: '/arcane-abyss', label: 'Monster Cards', icon: '👹' },
-				{ href: '/travelers', label: 'Travelers', icon: '🧭' },
-				{ href: '/missions', label: 'Missions', icon: '🗺️' },
-				{ href: '/vengeance-cards', label: 'Vengeance Cards', icon: '🩸' },
+				{ href: '/hex-spirits', label: 'Hex Spirits', icon: '⚔️' },
+				{ href: '/guardians', label: 'Guardians', icon: '🕯️' },
+				{ href: '/icons', label: 'Icons', icon: '🖍️' }
+			]
+		},
+		{
+			title: 'Stage Decks',
+			items: [
+				{ href: '/monsters-v2', label: 'Monsters', icon: '👾' },
 				{ href: '/game-locations', label: 'Game Locations', icon: '📍' },
 				{ href: '/spirit-world', label: 'Spirit World', icon: '🗺️' },
-				{ href: '/icons', label: 'Icons', icon: '🖍️' }
+				{ href: '/reward-rows', label: 'Reward Rows', icon: '🎁' },
+				{ href: '/events', label: 'Events', icon: '📜' },
+				{ href: '/stage-completion', label: 'Stage Completion', icon: '🏁' }
 			]
 		},
 		{
 			title: 'Exports & Analysis',
 			items: [
 				{ href: '/assets', label: 'Assets Gallery', icon: '🖼️' },
-				{ href: '/screenshot-upload', label: 'Screenshot Upload', icon: '📸' },
 				{ href: '/json-viewer', label: 'JSON Viewer', icon: '📋' },
 				{ href: '/analysis', label: 'Analysis', icon: '📊' },
-				{ href: '/tts-menu', label: 'TTS Menu', icon: '🎮' }
+				{ href: '/tts-menu', label: 'TTS Menu', icon: '🎮' },
+			{ href: '/3d-models', label: '3D Models', icon: '🧊' }
 			]
 		},
 		{

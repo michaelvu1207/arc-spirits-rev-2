@@ -131,28 +131,11 @@ function drawSlashMarks(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
 	ctx.restore();
 }
 
-function normalizeRewardTrackUrls(track: unknown, killedIndex: number): string[][] {
-	const targetLen = killedIndex + 1; // includes slot0 participation
-	const safe: string[][] = Array.isArray(track)
-		? track.map((slot) =>
-				Array.isArray(slot)
-					? slot
-							.filter((url): url is string => typeof url === 'string')
-							.map((url) => url.trim())
-							.filter(Boolean)
-					: []
-			)
-		: [];
-
-	while (safe.length < targetLen) safe.push([]);
-	return safe.slice(0, targetLen);
-}
-
 export async function generateMonsterCardPNG(
 	monster: MonsterRow & { effects?: SpecialEffectRow[] },
 	artUrl?: string | null,
 	iconUrl?: string | null,
-	rewardTrackIconUrls?: (string | null)[][],
+	rewardIconUrls?: (string | null)[],
 	language: MonsterCardUiLanguage = 'base'
 ): Promise<Blob> {
 	if (!monster.id || !monster.name) {
@@ -401,6 +384,7 @@ export async function generateMonsterCardPNG(
 	// Effects section: flexes to fill remaining space and always renders (hosts damage box).
 	const effects = monster.effects ?? [];
 	const effectTypeOrder = ['before_combat', 'during_combat', 'after_combat', 'combat_type'] as const;
+	const MAX_SPECIAL_EFFECTS = 6;
 	const available = innerBottom - yPos;
 	const effectsHeight = Math.max(0, available);
 
@@ -430,7 +414,7 @@ export async function generateMonsterCardPNG(
 			const EFFECT_TEXT_SCALE = 0.8;
 			const lineHeight = Math.max(10, Math.round(20 * EFFECT_TEXT_SCALE));
 			const typeBadgeHeight = Math.max(10, Math.round(18 * EFFECT_TEXT_SCALE));
-			const effectGap = Math.max(6, Math.round(10 * EFFECT_TEXT_SCALE));
+			const effectGap = 0;
 			const typeBadgeGap = Math.max(3, Math.round(5 * EFFECT_TEXT_SCALE));
 			const firstLineYOffset = Math.max(8, Math.round(12 * EFFECT_TEXT_SCALE));
 			const bulletBaselineOffset = Math.max(3, Math.round(5 * EFFECT_TEXT_SCALE));
@@ -450,7 +434,7 @@ export async function generateMonsterCardPNG(
 				ctx.fillStyle = 'rgba(148, 163, 184, 0.8)';
 				ctx.fillText(ui.noSpecialEffects, effectsX + pad, effectY + firstLineYOffset);
 			} else {
-				const displayedEffects = effects.slice(0, 4);
+				const displayedEffects = effects.slice(0, MAX_SPECIAL_EFFECTS);
 				const byType = new Map<(typeof effectTypeOrder)[number], typeof displayedEffects>();
 
 			for (const effect of displayedEffects) {
@@ -626,187 +610,56 @@ export async function generateMonsterCardPNG(
 	ctx.textAlign = 'left';
 	ctx.textBaseline = 'alphabetic';
 
-	// Barrier reward track (marker start + damage/killed slots; participation renders in the callout box)
-	const killedBarrierIndex = Math.max(1, barrierValue);
-	const rewardSlots = normalizeRewardTrackUrls(rewardTrackIconUrls, killedBarrierIndex);
-	const showTutorial = (monster as any).show_tutorial ?? true;
-	const participationUrls = rewardSlots[0] ?? [];
-	const displaySlotCount = killedBarrierIndex; // excludes participation (slot 0), includes KILLED
-	const showCallout = showTutorial || participationUrls.length > 0;
+	// Rewards bar (flat ordered list)
+	const rewardUrls = (rewardIconUrls ?? [])
+		.filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
+		.map((u) => u.trim());
 
-	// Tutorial / Participation callout (left side, hovering over the bottom bar)
-	if (showCallout) {
-		const calloutW = 200;
-		const calloutH = 55;
-		const calloutX = 12;
-		const calloutY = bottomBarY - calloutH;
+	{
+		const rewardsLabel = 'REWARDS';
+		const labelPadX = 12;
+		const iconSize = 32;
+		const iconGap = 6;
+		const maxIcons = 12;
+		const centerY = bottomBarY + bottomBarH / 2;
+		const iconY = bottomBarY + (bottomBarH - iconSize) / 2;
 
 		ctx.save();
-		const calloutGrad = ctx.createLinearGradient(0, calloutY, 0, calloutY + calloutH);
-		calloutGrad.addColorStop(0, '#4a0a0a');
-		calloutGrad.addColorStop(0.5, '#2a0606');
-		calloutGrad.addColorStop(1, '#1a0404');
-		ctx.fillStyle = calloutGrad;
-		roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
-		ctx.fill();
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'middle';
+		ctx.fillStyle = 'rgba(248, 250, 252, 0.75)';
+		ctx.font = '800 10px Opsilon, serif';
+		ctx.fillText(rewardsLabel, labelPadX, centerY);
+		let x = labelPadX + ctx.measureText(rewardsLabel).width + 10;
 
-		// Border (hide bottom edge to match the UI)
-		ctx.strokeStyle = '#7f1d1d';
-		ctx.lineWidth = 2;
-		roundRect(ctx, calloutX, calloutY, calloutW, calloutH, 10);
-		ctx.stroke();
-		ctx.fillStyle = bottomGrad;
-		ctx.fillRect(calloutX - 1, calloutY + calloutH - 2, calloutW + 2, 4);
-
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'top';
-		ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
-		ctx.font = '800 12px Opsilon, serif';
-
-		const calloutTitle = showTutorial ? ui.calloutTutorialTitle : ui.calloutParticipationTitle;
-		ctx.fillText(calloutTitle, calloutX + calloutW / 2, calloutY + 8);
-
-		if (showTutorial) {
-			ctx.fillStyle = 'rgba(248, 250, 252, 0.5)';
-			ctx.font = '500 10px Opsilon, serif';
-			const maxW = calloutW - 24;
-			const lines = wrapText(ctx, ui.calloutTutorialText, maxW).slice(0, 2);
-			const startY = calloutY + 26;
-			for (let i = 0; i < lines.length; i++) {
-				ctx.fillText(lines[i], calloutX + calloutW / 2, startY + i * 12);
-			}
+		if (rewardUrls.length === 0) {
+			ctx.fillStyle = 'rgba(148, 163, 184, 0.75)';
+			ctx.font = '700 10px Opsilon, serif';
+			ctx.fillText('None', x, centerY);
+			ctx.restore();
 		} else {
-			const iconSize = 30;
-			const iconGap = 6;
-			const maxIcons = 5;
-			const urls = participationUrls.slice(0, maxIcons);
-			const totalW = urls.length * iconSize + Math.max(0, urls.length - 1) * iconGap;
-			let x = calloutX + (calloutW - totalW) / 2;
-			const y = calloutY + 24;
-			for (const url of urls) {
+			for (const url of rewardUrls.slice(0, maxIcons)) {
 				try {
 					const img = await loadImage(url);
-					drawImageContain(ctx, img, x, y, iconSize, iconSize);
+					ctx.save();
+					ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+					ctx.shadowBlur = 2;
+					ctx.shadowOffsetY = 1;
+					drawImageContain(ctx, img, x, iconY, iconSize, iconSize);
+					ctx.restore();
 				} catch (err) {
-					console.warn('Failed to load participation icon', err);
+					console.warn('Failed to load reward icon', err);
 				}
 				x += iconSize + iconGap;
 			}
-		}
 
-		ctx.restore();
-	}
-
-	// Barrier track styling to match live preview
-	const trackPad = 4;
-	const segmentGap = 2;
-	const trackY = bottomBarY + trackPad;
-	const trackH = bottomBarH - trackPad * 2;
-	const trackX = trackPad;
-	const trackRightX = MONSTER_CARD_WIDTH - trackPad;
-	const trackW = Math.max(0, trackRightX - trackX);
-
-	// Helper to get gradient color from red to black (matching live preview)
-	function getGradientColor(step: number, totalSteps: number): { top: string; bottom: string } {
-		const t = totalSteps > 0 ? step / totalSteps : 1;
-		const r = Math.round(74 * (1 - t));
-		const g = Math.round(21 * (1 - t));
-		const b = Math.round(21 * (1 - t));
-		const r2 = Math.round(45 * (1 - t));
-		const g2 = Math.round(10 * (1 - t));
-		const b2 = Math.round(10 * (1 - t));
-		return {
-			top: `rgb(${r}, ${g}, ${b})`,
-			bottom: `rgb(${r2}, ${g2}, ${b2})`
-		};
-	}
-
-	if (displaySlotCount > 0 && trackW > 0 && trackH > 0) {
-		const totalSegmentCount = displaySlotCount + 1; // marker start + reward slots
-		const totalGaps = (totalSegmentCount - 1) * segmentGap;
-		const segmentW = (trackW - totalGaps) / totalSegmentCount;
-		const labelFontSize = 12;
-		const labelLineH = 11;
-		const iconGap = 4;
-		const iconSize = 32;
-
-		ctx.save();
-
-		// Draw each segment as individual rounded rect with gradient
-		for (let segIdx = 0; segIdx <= displaySlotCount; segIdx++) {
-			const segX = trackX + segIdx * (segmentW + segmentGap);
-			const colors = getGradientColor(segIdx, killedBarrierIndex);
-
-			// Segment background gradient
-			const segGrad = ctx.createLinearGradient(segX, trackY, segX, trackY + trackH);
-			segGrad.addColorStop(0, colors.top);
-			segGrad.addColorStop(1, colors.bottom);
-			ctx.fillStyle = segGrad;
-			roundRect(ctx, segX, trackY, segmentW, trackH, 3);
-			ctx.fill();
-
-			// Label
-			ctx.fillStyle = 'rgba(248, 250, 252, 0.6)';
-			ctx.font = `700 ${labelFontSize}px Opsilon, serif`;
-			ctx.textAlign = 'center';
-			ctx.textBaseline = 'top';
-
-			const centerX = segX + segmentW / 2;
-			const labelY = trackY + 4;
-
-			if (segIdx === 0) {
-				// Marker Start
-				ctx.fillText(ui.trackMarker, centerX, labelY);
-				ctx.fillText(ui.trackStart, centerX, labelY + labelLineH);
-			} else if (segIdx === killedBarrierIndex) {
-				// KILLED
-				ctx.fillText(ui.trackKilled, centerX, labelY);
-			} else {
-				// Damage N
-				ctx.fillText(ui.trackDamage(segIdx), centerX, labelY);
+			if (rewardUrls.length > maxIcons) {
+				ctx.fillStyle = 'rgba(226, 232, 240, 0.75)';
+				ctx.font = '800 10px Opsilon, serif';
+				ctx.fillText(`+${rewardUrls.length - maxIcons}`, x, centerY);
 			}
-
-			// Icons for this slot (skip marker start which is slot 0)
-			if (segIdx > 0) {
-				const urls = rewardSlots[segIdx] ?? [];
-				if (urls.length > 0) {
-					const iconZoneY = trackY + 4 + labelLineH + 6;
-					const iconZoneH = Math.max(0, trackH - (4 + labelLineH + 6) - 4);
-
-					const maxCols = Math.max(1, Math.min(3, Math.floor((segmentW - 4 + iconGap) / (iconSize + iconGap))));
-					const cols = Math.max(1, Math.min(urls.length, maxCols));
-					const rows = Math.max(1, Math.ceil(urls.length / cols));
-
-					const gridW = cols * iconSize + (cols - 1) * iconGap;
-					const gridH = rows * iconSize + (rows - 1) * iconGap;
-					const startX = segX + (segmentW - gridW) / 2;
-					const startY = iconZoneY + (iconZoneH - gridH) / 2;
-
-					for (let idx = 0; idx < urls.length; idx++) {
-						const url = urls[idx];
-						if (!url) continue;
-						const col = idx % cols;
-						const row = Math.floor(idx / cols);
-						const x = startX + col * (iconSize + iconGap);
-						const y = startY + row * (iconSize + iconGap);
-
-						try {
-							const img = await loadImage(url);
-							ctx.save();
-							ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-							ctx.shadowBlur = 2;
-							ctx.shadowOffsetY = 1;
-							drawImageContain(ctx, img, x, y, iconSize, iconSize);
-							ctx.restore();
-						} catch (err) {
-							console.warn('Failed to load reward track icon', err);
-						}
-					}
-				}
-			}
+			ctx.restore();
 		}
-
-		ctx.restore();
 	}
 
 	ctx.restore();

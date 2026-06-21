@@ -3,7 +3,11 @@
 	import PageLayout from '$lib/components/layout/PageLayout.svelte';
 	import type { Tab } from '$lib/components/layout/TabBar.svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import type { ClassRow, HexSpiritRow, OriginRow, RarityTraitRow, UnitRow } from '$lib/types/gameData';
+	import type { ClassRow, CostDuplicates, EditionRow, HexSpiritRow, OriginRow, RarityTraitRow, UnitRow } from '$lib/types/gameData';
+	import {
+		fetchEditionRecords,
+		DEFAULT_COST_DUPLICATES
+	} from '$lib/features/editions/editions';
 	import { parseEffectSchema } from '$lib/features/classes/classes';
 	import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
 	import {
@@ -224,6 +228,155 @@
 	let showSettingsModal = false;
 	let availableConfigs: string[] = [];
 	let newConfigName = '';
+
+	// Bag class distribution state
+	let shopEditions: EditionRow[] = $state([]);
+	let shopClasses: ClassRow[] = $state([]);
+	let shopSpirits: HexSpiritRow[] = $state([]);
+
+	const ARCANE_ABYSS_MIN_COST = 7; // costs < 7 = Spirit World, costs ≥ 7 = Arcane Abyss
+	const DRAW_HAND_SIZE = 4;
+	const DRAW_SIM_ITERATIONS = 50000;
+
+	interface BagClassSpirit {
+		name: string;
+		cost: number;
+		copies: number;
+	}
+
+	interface BagClassStat {
+		classId: string;
+		className: string;
+		color: string | null;
+		count: number;
+		percentage: number;
+		spirits: BagClassSpirit[];
+	}
+
+	interface BagAnalysis {
+		label: string;
+		totalCards: number;
+		uniqueSpirits: number;
+		classDistribution: BagClassStat[];
+		drawProbabilities: Map<string, number>;
+	}
+
+	let spiritWorldBag: BagAnalysis | null = $state(null);
+	let arcaneAbyssBag: BagAnalysis | null = $state(null);
+	let expandedClasses: Set<string> = $state(new Set());
+
+	function toggleClassExpand(bagLabel: string, classId: string) {
+		const key = `${bagLabel}:${classId}`;
+		const next = new Set(expandedClasses);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		expandedClasses = next;
+	}
+
+	function computeBagAnalysis(
+		label: string,
+		spirits: HexSpiritRow[],
+		costDuplicates: CostDuplicates,
+		classMap: Map<string, ClassRow>
+	): BagAnalysis {
+		const classCountMap = new Map<string, number>();
+		const classSpiritMap = new Map<string, Map<string, BagClassSpirit>>();
+		const pool: string[] = [];
+		let totalCards = 0;
+
+		for (const spirit of spirits) {
+			const multiplier = costDuplicates[String(spirit.cost)] ?? 1;
+			totalCards += multiplier;
+
+			// Deduplicate class_ids — a spirit with 2× Fighter still counts as 1 Fighter
+			const uniqueClassIds = new Set(spirit.traits?.class_ids ?? []);
+
+			for (const classId of uniqueClassIds) {
+				classCountMap.set(classId, (classCountMap.get(classId) ?? 0) + multiplier);
+				if (!classSpiritMap.has(classId)) classSpiritMap.set(classId, new Map());
+				classSpiritMap.get(classId)!.set(spirit.id, {
+					name: spirit.name,
+					cost: spirit.cost,
+					copies: multiplier
+				});
+			}
+
+			for (let i = 0; i < multiplier; i++) {
+				pool.push(spirit.id);
+			}
+		}
+
+		const totalClassSlots = Array.from(classCountMap.values()).reduce((s, v) => s + v, 0);
+
+		const classDistribution: BagClassStat[] = Array.from(classCountMap.entries())
+			.map(([classId, count]) => {
+				const cls = classMap.get(classId);
+				const spirits = Array.from((classSpiritMap.get(classId) ?? new Map()).values()).sort((a, b) => a.cost - b.cost);
+				return {
+					classId,
+					className: cls?.name ?? 'Unknown',
+					color: cls?.color ?? null,
+					count,
+					percentage: totalClassSlots > 0 ? (count / totalClassSlots) * 100 : 0,
+					spirits
+				};
+			})
+			.sort((a, b) => b.count - a.count);
+
+		// Monte Carlo: draw DRAW_HAND_SIZE cards, track P(at least 1 of each class)
+		const drawProbabilities = new Map<string, number>();
+		if (pool.length > 0) {
+			const spiritById = new Map(spirits.map((s) => [s.id, s]));
+			const hitCounts = new Map<string, number>();
+			for (const cid of classCountMap.keys()) hitCounts.set(cid, 0);
+
+			const drawSize = Math.min(DRAW_HAND_SIZE, pool.length);
+			for (let iter = 0; iter < DRAW_SIM_ITERATIONS; iter++) {
+				const arr = [...pool];
+				const classesInHand = new Set<string>();
+				for (let i = 0; i < drawSize; i++) {
+					const j = i + Math.floor(Math.random() * (arr.length - i));
+					[arr[i], arr[j]] = [arr[j], arr[i]];
+					const spirit = spiritById.get(arr[i]);
+					if (spirit) {
+						for (const cid of spirit.traits?.class_ids ?? []) {
+							classesInHand.add(cid);
+						}
+					}
+				}
+				for (const cid of classesInHand) {
+					hitCounts.set(cid, (hitCounts.get(cid) ?? 0) + 1);
+				}
+			}
+			for (const [cid, hits] of hitCounts) {
+				drawProbabilities.set(cid, hits / DRAW_SIM_ITERATIONS);
+			}
+		}
+
+		return { label, totalCards, uniqueSpirits: spirits.length, classDistribution, drawProbabilities };
+	}
+
+	function computeBagAnalyses() {
+		if (shopSpirits.length === 0) {
+			spiritWorldBag = null;
+			arcaneAbyssBag = null;
+			return;
+		}
+
+		// Use the default/complete edition for cost_duplicates config
+		const edition = shopEditions.find((e) => e.is_default) ?? shopEditions[0];
+		const costDuplicates = edition?.cost_duplicates ?? DEFAULT_COST_DUPLICATES;
+		const classMap = new Map(shopClasses.map((c) => [c.id, c]));
+
+		// Use ALL spirits (complete edition = all spirits in the database)
+		const allSpirits = shopSpirits;
+
+		const swSpirits = allSpirits.filter((s) => s.cost < ARCANE_ABYSS_MIN_COST);
+		const aaSpirits = allSpirits.filter((s) => s.cost >= ARCANE_ABYSS_MIN_COST && s.cost <= 9);
+
+		spiritWorldBag = computeBagAnalysis('Spirit World', swSpirits, costDuplicates, classMap);
+		arcaneAbyssBag = computeBagAnalysis('Arcane Abyss', aaSpirits, costDuplicates, classMap);
+	}
 
 	// =====================
 	// ALT DICE STATE
@@ -1472,9 +1625,15 @@
 		shopLoading = true;
 		shopError = null;
 		try {
-			const { data, error: unitsError } = await supabase.from('hex_spirits').select('*');
-			if (unitsError) throw unitsError;
-			units = data ?? [];
+			const [records, eds, cls] = await Promise.all([
+				fetchHexSpiritRecords(),
+				fetchEditionRecords(),
+				fetchClassRecords()
+			]);
+			units = records;
+			shopEditions = eds;
+			shopClasses = cls;
+			shopSpirits = records;
 		} catch (err) {
 			shopError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -1482,6 +1641,7 @@
 			if (!settingsLoading) {
 				recompute();
 			}
+			computeBagAnalyses();
 		}
 		await loadSettings();
 		await loadConfigList();
@@ -1629,6 +1789,7 @@
 			purchaseSuccessRate,
 			totalStages
 		});
+
 	}
 
 	function activeOverrides(): RarityOverrides {
@@ -2345,12 +2506,77 @@
 				</div>
 			</section>
 		{:else if activeTab === 'shop'}
-			<!-- SHOP ANALYSIS TAB (simplified, full version would be too long) -->
+			<!-- SHOP / BAG CLASS DISTRIBUTION TAB -->
 				<section class="tab-section">
-					<p class="tab-description">Live breakdown of pool composition and legendary appearance odds.</p>
-					<div class="card">
-						<p>Shop analysis content placeholder.</p>
-					</div>
+					<p class="tab-description">Class distribution in Spirit World and Arcane Abyss bags (complete edition). Draw {DRAW_HAND_SIZE} probability = chance at least 1 spirit with that class appears.</p>
+
+					{#if shopLoading}
+						<div class="card"><p class="muted">Loading data...</p></div>
+					{:else if shopError}
+						<div class="card"><p style="color: #f87171;">{shopError}</p></div>
+					{:else}
+						<div class="bag-columns">
+							{#each [spiritWorldBag, arcaneAbyssBag] as bag}
+								{#if bag}
+									<div class="card bag-edition-card">
+										<h2>{bag.label}</h2>
+										<p class="muted">{bag.uniqueSpirits} unique spirits, {bag.totalCards} total cards in bag</p>
+
+										{#if bag.classDistribution.length > 0}
+											<div class="class-bar-chart">
+												{#each bag.classDistribution as stat}
+													{@const maxCount = bag.classDistribution[0]?.count ?? 1}
+													{@const barPct = (stat.count / maxCount) * 100}
+													{@const drawProb = bag.drawProbabilities.get(stat.classId) ?? 0}
+													{@const expandKey = `${bag.label}:${stat.classId}`}
+													{@const isExpanded = expandedClasses.has(expandKey)}
+													<button
+														type="button"
+														class="class-bar-row"
+														class:is-expanded={isExpanded}
+														onclick={() => toggleClassExpand(bag.label, stat.classId)}
+													>
+														<span class="class-bar-label" style={stat.color ? `color: ${stat.color}` : ''}>
+															{stat.className}
+														</span>
+														<div class="class-bar-track">
+															<div
+																class="class-bar-fill"
+																style="width: {barPct}%; background: {stat.color ?? 'rgba(148, 163, 184, 0.5)'};"
+															></div>
+														</div>
+														<span class="class-bar-count">{stat.count}</span>
+														<span class="class-bar-pct">{stat.percentage.toFixed(1)}%</span>
+														<span class="class-bar-draw" title="P(at least 1 in {DRAW_HAND_SIZE}-card hand)">
+															{(drawProb * 100).toFixed(1)}%
+														</span>
+													</button>
+													{#if isExpanded}
+														<div class="class-spirit-list">
+															{#each stat.spirits as spirit}
+																<span class="class-spirit-chip">
+																	{spirit.name}
+																	<span class="class-spirit-meta">({spirit.cost}c ×{spirit.copies})</span>
+																</span>
+															{/each}
+														</div>
+													{/if}
+												{/each}
+											</div>
+
+											<div class="class-bar-legend">
+												<span class="muted">Count = class slots in bag</span>
+												<span class="muted">% = share of class slots</span>
+												<span class="muted">Last = P(≥1 in draw {DRAW_HAND_SIZE})</span>
+											</div>
+										{:else}
+											<p class="muted">No classes found.</p>
+										{/if}
+									</div>
+								{/if}
+							{/each}
+						</div>
+					{/if}
 				</section>
 			{:else if activeTab === 'alt-dice'}
 			<!-- ALT DICE TAB -->
@@ -3420,5 +3646,130 @@
 		.stats-table {
 			flex: 0 0 300px;
 		}
+	}
+
+	/* Shop / Bag class distribution styles */
+	.bag-columns {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.5rem;
+	}
+
+	@media (max-width: 900px) {
+		.bag-columns {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.bag-edition-card h2 {
+		margin: 0 0 0.25rem;
+		font-size: 0.95rem;
+		color: #f8fafc;
+	}
+
+	.class-bar-chart {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		margin-top: 0.5rem;
+	}
+
+	.class-bar-row {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		background: none;
+		border: none;
+		border-radius: 3px;
+		padding: 0.15rem 0.25rem;
+		cursor: pointer;
+		width: 100%;
+		text-align: left;
+		transition: background 0.15s ease;
+	}
+
+	.class-bar-row:hover {
+		background: rgba(148, 163, 184, 0.08);
+	}
+
+	.class-bar-row.is-expanded {
+		background: rgba(148, 163, 184, 0.12);
+	}
+
+	.class-bar-label {
+		width: 90px;
+		font-size: 0.7rem;
+		font-weight: 600;
+		text-align: right;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.class-bar-track {
+		flex: 1;
+		height: 14px;
+		background: rgba(30, 41, 59, 0.6);
+		border-radius: 3px;
+		overflow: hidden;
+	}
+
+	.class-bar-fill {
+		height: 100%;
+		border-radius: 3px;
+		opacity: 0.7;
+		transition: width 0.3s ease;
+	}
+
+	.class-bar-count {
+		width: 28px;
+		font-size: 0.7rem;
+		color: #e2e8f0;
+		text-align: right;
+		font-weight: 600;
+	}
+
+	.class-bar-pct {
+		width: 40px;
+		font-size: 0.65rem;
+		color: #94a3b8;
+		text-align: right;
+	}
+
+	.class-bar-draw {
+		width: 45px;
+		font-size: 0.65rem;
+		color: #a5f3fc;
+		text-align: right;
+		font-weight: 500;
+	}
+
+	.class-spirit-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		padding: 0.25rem 0.25rem 0.25rem 95px;
+	}
+
+	.class-spirit-chip {
+		font-size: 0.6rem;
+		padding: 0.15rem 0.35rem;
+		background: rgba(30, 41, 59, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		border-radius: 3px;
+		color: #e2e8f0;
+	}
+
+	.class-spirit-meta {
+		color: #64748b;
+		font-size: 0.55rem;
+	}
+
+	.class-bar-legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.5rem;
+		font-size: 0.6rem;
 	}
 </style>

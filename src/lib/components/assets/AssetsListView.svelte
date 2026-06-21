@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { AssetImage } from './types';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
+	import { useMultiSelect } from '$lib/composables';
 
 	type Props = {
 		originImages: AssetImage[];
@@ -20,7 +21,7 @@
 		onDeleteMultiple
 	}: Props = $props();
 
-	let selectedIds = $state<Set<string>>(new Set());
+	const selection = useMultiSelect();
 
 	// Combine all assets for total count
 	const allAssets = $derived([
@@ -31,37 +32,19 @@
 		...miscAssetImages
 	]);
 
-	function toggleSelect(id: string) {
-		const newSet = new Set(selectedIds);
-		if (newSet.has(id)) {
-			newSet.delete(id);
-		} else {
-			newSet.add(id);
-		}
-		selectedIds = newSet;
-	}
-
-	function selectAll() {
-		selectedIds = new Set(allAssets.map((asset) => asset.filename));
-	}
-
-	function deselectAll() {
-		selectedIds = new Set();
-	}
-
 	function deleteSelected() {
-		if (onDeleteMultiple && selectedIds.size > 0) {
-			onDeleteMultiple(Array.from(selectedIds));
-			selectedIds = new Set();
+		if (onDeleteMultiple && selection.selectedCount > 0) {
+			onDeleteMultiple(Array.from(selection.selectedIds));
+			selection.deselectAll();
 		}
 	}
 </script>
 
 <MultiSelectBar
-	selectedCount={selectedIds.size}
+	selectedCount={selection.selectedCount}
 	totalCount={allAssets.length}
-	onSelectAll={selectAll}
-	onDeselectAll={deselectAll}
+	onSelectAll={() => selection.selectAll(allAssets.map((asset) => asset.filename))}
+	onDeselectAll={selection.deselectAll}
 	onDeleteSelected={deleteSelected}
 />
 
@@ -70,12 +53,12 @@
 		<h2>Origin Icons ({originImages.length})</h2>
 		<div class="asset-list">
 			{#each originImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
+				<div class="asset-row" class:selected={selection.isSelected(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.filename)}
-							onchange={() => toggleSelect(asset.filename)}
+							checked={selection.isSelected(asset.filename)}
+							onchange={() => selection.toggle(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -91,12 +74,12 @@
 		<h2>Rune Icons ({runeImages.length})</h2>
 		<div class="asset-list">
 			{#each runeImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
+				<div class="asset-row" class:selected={selection.isSelected(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.filename)}
-							onchange={() => toggleSelect(asset.filename)}
+							checked={selection.isSelected(asset.filename)}
+							onchange={() => selection.toggle(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -112,12 +95,12 @@
 		<h2>Hex Spirit Images ({hexSpiritImages.length})</h2>
 		<div class="asset-list">
 			{#each hexSpiritImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
+				<div class="asset-row" class:selected={selection.isSelected(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.filename)}
-							onchange={() => toggleSelect(asset.filename)}
+							checked={selection.isSelected(asset.filename)}
+							onchange={() => selection.toggle(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -133,12 +116,12 @@
 		<h2>Dice Faces ({diceFaceImages.length})</h2>
 		<div class="asset-list">
 			{#each diceFaceImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
+				<div class="asset-row" class:selected={selection.isSelected(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.filename)}
-							onchange={() => toggleSelect(asset.filename)}
+							checked={selection.isSelected(asset.filename)}
+							onchange={() => selection.toggle(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />
@@ -154,12 +137,12 @@
 		<h2>Misc Assets ({miscAssetImages.length})</h2>
 		<div class="asset-list">
 			{#each miscAssetImages as asset}
-				<div class="asset-row" class:selected={selectedIds.has(asset.filename)}>
+				<div class="asset-row" class:selected={selection.isSelected(asset.filename)}>
 					<div class="checkbox-wrapper">
 						<input
 							type="checkbox"
-							checked={selectedIds.has(asset.filename)}
-							onchange={() => toggleSelect(asset.filename)}
+							checked={selection.isSelected(asset.filename)}
+							onchange={() => selection.toggle(asset.filename)}
 						/>
 					</div>
 					<img src={asset.url} alt={asset.name} />

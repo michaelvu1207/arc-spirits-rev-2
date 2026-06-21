@@ -20,7 +20,7 @@ if (!env.anonKey) {
 	throw new Error('Missing Supabase anon key. Set PUBLIC_SUPABASE_ANON_KEY in your environment.');
 }
 
-export type Rev2Client = SupabaseClient<any, any, 'arc-spirits-rev2'>;
+export type Rev2Client = SupabaseClient<any, any, 'arc_spirits_assets'>;
 
 export const supabase: Rev2Client = createClient(env.url, env.anonKey, {
 	auth: {
@@ -28,7 +28,7 @@ export const supabase: Rev2Client = createClient(env.url, env.anonKey, {
 		autoRefreshToken: true
 	},
 	db: {
-		schema: 'arc-spirits-rev2'
+		schema: 'arc_spirits_assets'
 	}
 });
 

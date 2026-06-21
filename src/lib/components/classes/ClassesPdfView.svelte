@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ClassRow, SpecialCategoryRow } from '$lib/types/gameData';
+	import type { ClassRow } from '$lib/types/gameData';
 	import type { Effect, EffectBreakpoint, DiceEffect } from '$lib/types/effects';
 	import html2canvas from 'html2canvas';
 	import jsPDF from 'jspdf';
@@ -15,12 +15,11 @@
 
 	interface Props {
 		classes: ClassRow[];
-		specialCategories: SpecialCategoryRow[];
 		diceNameById: Map<string, string>;
 		language?: TranslationLanguage;
 	}
 
-	let { classes, specialCategories, diceNameById, language = BASE_LANGUAGE }: Props = $props();
+	let { classes, diceNameById, language = BASE_LANGUAGE }: Props = $props();
 
 	// Preview state
 	let previewImages = $state<string[]>([]);
@@ -131,10 +130,6 @@
 		return getTranslationValue(entry.footer_translations, String(language)) ?? entry.footer ?? '';
 	}
 
-	function getClassById(id: string): ClassRow | undefined {
-		return classes.find((c) => c.id === id);
-	}
-
 	const getPrismatic = parsePrismaticJson;
 
 	// Helper to render a regular class card
@@ -202,105 +197,21 @@
 	`;
 	}
 
-	// Helper to render a special category card
-	function renderSpecialCategoryCard(category: SpecialCategoryRow): string {
-		const renderSlot = (slotIds: string[], slotIndex: number) => {
-			if (slotIds.length === 0) {
-				return `<div style="flex:1; padding:6px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:4px; display:flex; align-items:center; justify-content:center;">
-				<span style="font-size:7px; color:#94a3b8; font-style:italic;">Slot ${slotIndex + 1}</span>
-			</div>`;
-			}
-
-			const classesHtml = slotIds
-				.map((classId) => {
-					const cls = getClassById(classId);
-					if (!cls) return '';
-
-					const effectSchema = sortBreakpointsByCount(
-						resolveDiceIdsInSchema(parseEffectSchema(cls.effect_schema))
-					);
-
-					const breakpointsHtml = effectSchema
-						.map(
-							(bp) =>
-								`<div style="font-size:6px; color:#64748b; line-height:1.2;">(${getBreakpointCount(bp)}) ${bp.effects.map((e) => summarizeEffectWithScaling(cls.name, e)).join(', ')}</div>`
-						)
-						.join('');
-
-					const displayName = getClassName(cls);
-					const iconUrl = getIconUrl(cls.icon_png, cls.updated_at);
-					const iconHtml = iconUrl
-						? `<div style="width:14px; height:14px; background-color:#ffffff; border-radius:3px; display:flex; align-items:center; justify-content:center;"><img src="${iconUrl}" style="width:100%; height:100%; object-fit:contain;" crossorigin="anonymous" /></div>`
-						: `<span style="font-size:10px;">${cls.icon_emoji ?? '🛡️'}</span>`;
-					return `
-					<div style="padding-left:6px; border-left:2px solid ${cls.color ?? '#8b5cf6'};">
-						<div style="display:flex; align-items:center; gap:4px; margin-bottom:2px;">
-							${iconHtml}
-							<span style="font-size:8px; font-weight:600; color:#1e293b;">${displayName}</span>
-						</div>
-						${breakpointsHtml}
-					</div>
-				`;
-				})
-				.join('');
-
-			return `<div style="flex:1; padding:6px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; display:flex; flex-direction:column; gap:4px;">
-			${classesHtml}
-		</div>`;
-		};
-
-		const description = category.description
-			? `<p style="margin:4px 0 6px 0; font-size:8px; color:#475569; line-height:1.3;">${category.description}</p>`
-			: '';
-
-		return `
-		<div style="padding: 10px; border: 3px solid ${category.color ?? '#8b5cf6'}; background: #ffffff; border-radius: 8px; display: flex; flex-direction: column;">
-			<div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-				<span style="font-size:18px; line-height:1;">${category.icon_emoji ?? '⚡'}</span>
-				<h3 style="margin:0; font-size:14px; font-weight:700; color:#1e293b; line-height:1.2;">${category.name}</h3>
-			</div>
-			${description}
-			<div style="display:flex; flex-direction:column; gap:4px; flex:1;">
-				${renderSlot(category.slot_1_class_ids, 0)}
-				${renderSlot(category.slot_2_class_ids, 1)}
-				${renderSlot(category.slot_3_class_ids, 2)}
-			</div>
-		</div>
-	`;
-	}
-
 	function getPageChunks() {
-		const specialClassIds = new Set(
-			specialCategories.flatMap((cat) => [
-				...cat.slot_1_class_ids,
-				...cat.slot_2_class_ids,
-				...cat.slot_3_class_ids
-			])
-		);
-
-		const regularClasses = classes.filter((c) => !specialClassIds.has(c.id));
-		const sorted = [...regularClasses].sort(
+		const sorted = [...classes].sort(
 			(a, b) => a.position - b.position || a.name.localeCompare(b.name)
 		);
 
-		type CardItem =
-			| { type: 'class'; data: ClassRow }
-			| { type: 'special'; data: SpecialCategoryRow };
-		const allCards: CardItem[] = [
-			...specialCategories.map((cat) => ({ type: 'special' as const, data: cat })),
-			...sorted.map((cls) => ({ type: 'class' as const, data: cls }))
-		];
-
 		const chunkSize = 9;
-		const chunks: CardItem[][] = [];
-		for (let i = 0; i < allCards.length; i += chunkSize) {
-			chunks.push(allCards.slice(i, i + chunkSize));
+		const chunks: ClassRow[][] = [];
+		for (let i = 0; i < sorted.length; i += chunkSize) {
+			chunks.push(sorted.slice(i, i + chunkSize));
 		}
 		return chunks;
 	}
 
 	async function generatePreview() {
-		if (!classes.length && !specialCategories.length) {
+		if (!classes.length) {
 			previewImages = [];
 			return;
 		}
@@ -332,15 +243,7 @@
 							Arc Spirits Classes
 						</h1>
 						<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; grid-auto-rows: min-content;">
-							${group
-								.map((item) => {
-									if (item.type === 'special') {
-										return renderSpecialCategoryCard(item.data);
-									} else {
-										return renderClassCard(item.data);
-									}
-								})
-								.join('')}
+							${group.map((cls) => renderClassCard(cls)).join('')}
 						</div>
 					</div>
 				`;
@@ -380,7 +283,7 @@
 	}
 
 	async function exportToPDF() {
-		if (!classes.length && !specialCategories.length) {
+		if (!classes.length) {
 			alert('No classes to export.');
 			return;
 		}
@@ -417,15 +320,7 @@
 							Arc Spirits Classes
 						</h1>
 						<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; grid-auto-rows: min-content;">
-							${group
-								.map((item) => {
-									if (item.type === 'special') {
-										return renderSpecialCategoryCard(item.data);
-									} else {
-										return renderClassCard(item.data);
-									}
-								})
-								.join('')}
+							${group.map((cls) => renderClassCard(cls)).join('')}
 						</div>
 					</div>
 				`;
@@ -474,8 +369,7 @@
 	});
 
 	$effect(() => {
-		// Re-generate preview when classes or specialCategories change
-		if (classes.length || specialCategories.length) {
+		if (classes.length) {
 			generatePreview();
 		}
 	});
@@ -485,7 +379,7 @@
 	<div class="pdf-header">
 		<div class="pdf-info">
 			<h3>Class Cards PDF</h3>
-			<p>{classes.length} classes, {specialCategories.length} special categories, {previewImages.length} pages</p>
+			<p>{classes.length} classes, {previewImages.length} pages</p>
 		</div>
 		<div class="pdf-actions">
 			<Button variant="secondary" onclick={generatePreview} disabled={generatingPreview}>

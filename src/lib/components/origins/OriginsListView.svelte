@@ -1,67 +1,49 @@
 <script lang="ts">
-	import type { OriginRow, CallingCard } from '$lib/types/gameData';
-	import { publicAssetUrl } from '$lib/utils';
-	import { Button } from '$lib/components/ui';
-	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
+import type { OriginRow } from '$lib/types/gameData';
+import { publicAssetUrl } from '$lib/utils';
+import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
+	import { useMultiSelect } from '$lib/composables';
 
 	type Props = {
 		origins: OriginRow[];
 		onEdit: (origin: OriginRow) => void;
 		onDelete: (origin: OriginRow) => void;
+		onToggleEnabled?: (origin: OriginRow, enabled: boolean) => void;
 		onDeleteMultiple: (ids: string[]) => void;
 	};
 
-	let { origins, onEdit, onDelete, onDeleteMultiple }: Props = $props();
+	let { origins, onEdit, onDelete, onToggleEnabled, onDeleteMultiple }: Props = $props();
 
-	let selectedIds = $state<Set<string>>(new Set());
+	const selection = useMultiSelect();
 
 	function getIconUrl(path: string | null | undefined, updatedAt?: string | number | null): string | null {
 		return publicAssetUrl(path, { updatedAt: updatedAt ?? undefined });
 	}
 
-	function toggleSelect(id: string, event: Event) {
-		event.stopPropagation();
-		const newSet = new Set(selectedIds);
-		if (newSet.has(id)) {
-			newSet.delete(id);
-		} else {
-			newSet.add(id);
-		}
-		selectedIds = newSet;
-	}
-
-	function selectAll() {
-		selectedIds = new Set(origins.map((o) => o.id));
-	}
-
-	function deselectAll() {
-		selectedIds = new Set();
-	}
-
 	function deleteSelected() {
-		onDeleteMultiple(Array.from(selectedIds));
-		selectedIds = new Set();
+		onDeleteMultiple(Array.from(selection.selectedIds));
+		selection.deselectAll();
 	}
 </script>
 
 <MultiSelectBar
-	selectedCount={selectedIds.size}
+	selectedCount={selection.selectedCount}
 	totalCount={origins.length}
-	onSelectAll={selectAll}
-	onDeselectAll={deselectAll}
+	onSelectAll={() => selection.selectAll(origins.map((o) => o.id))}
+	onDeselectAll={selection.deselectAll}
 	onDeleteSelected={deleteSelected}
 />
 
 <div class="list-view">
 	{#each origins as origin (origin.id)}
-		<article class="origin-card" class:selected={selectedIds.has(origin.id)}>
+		<article class="origin-card" class:selected={selection.isSelected(origin.id)}>
 			<header>
 				<div class="checkbox-wrapper">
 					<input
 						type="checkbox"
-						checked={selectedIds.has(origin.id)}
-						onclick={(e) => toggleSelect(origin.id, e)}
+						checked={selection.isSelected(origin.id)}
+						onclick={(e) => { e.stopPropagation(); selection.toggle(origin.id); }}
 						aria-label="Select {origin.name}"
 					/>
 				</div>
@@ -85,30 +67,17 @@
 						onEdit={() => onEdit(origin)}
 						onDelete={() => onDelete(origin)}
 						onGenerate={null}
+						onToggleEnabled={
+							onToggleEnabled
+								? () => onToggleEnabled(origin, !(origin.is_enabled ?? true))
+								: null
+						}
+						toggleLabel={origin.is_enabled === false ? 'Enable' : 'Disable'}
 					/>
 				</div>
 			</header>
 			{#if origin.description}
 				<p class="muted">{origin.description}</p>
-			{/if}
-			{#if (origin.calling_card as CallingCard | null)?.enabled && (origin.calling_card as CallingCard)?.breakpoints?.length}
-				{@const callingCard = origin.calling_card as CallingCard}
-				<ul class="calling-card-breakpoints">
-					{#each callingCard.breakpoints as bp, index (`${origin.id}-cc-bp-${index}`)}
-						<li class="calling-card-breakpoints__item">
-							<div class="calling-card-breakpoints__line">
-								<span class="calling-card-breakpoints__count">
-									({bp.count} {bp.label || 'Unique'})
-								</span>
-								<div class="calling-card-breakpoints__effects">
-									<span class="effect-tag">
-										{bp.icon_ids?.length || 0} icon{bp.icon_ids?.length !== 1 ? 's' : ''}
-									</span>
-								</div>
-							</div>
-						</li>
-					{/each}
-				</ul>
 			{/if}
 			<div class="meta">
 				{#if origin.color}
@@ -250,48 +219,4 @@
 		font-size: 0.75rem;
 	}
 
-	.calling-card-breakpoints {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		gap: 0.3rem;
-	}
-
-	.calling-card-breakpoints__item {
-		background: rgba(15, 23, 42, 0.55);
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		border-radius: 6px;
-		padding: 0.3rem 0.4rem;
-	}
-
-	.calling-card-breakpoints__line {
-		display: flex;
-		gap: 0.3rem;
-		align-items: center;
-		flex-wrap: wrap;
-	}
-
-	.calling-card-breakpoints__count {
-		font-weight: 600;
-		color: #cbd5f5;
-		font-size: 0.75rem;
-	}
-
-	.calling-card-breakpoints__effects {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.25rem;
-	}
-
-	.effect-tag {
-		display: inline-flex;
-		align-items: center;
-		padding: 0.15rem 0.35rem;
-		border-radius: 999px;
-		background: rgba(59, 130, 246, 0.18);
-		color: #e0e7ff;
-		font-size: 0.7rem;
-		letter-spacing: 0.02em;
-	}
 </style>

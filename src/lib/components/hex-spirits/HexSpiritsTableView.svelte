@@ -1,6 +1,8 @@
 <script lang="ts">
-	import type { HexSpiritRow, RuneRow } from '$lib/types/gameData';
+	import type { HexSpiritRow, MatItemRow } from '$lib/types/gameData';
+	import { awakenRuneTokensSlotsUsed } from '$lib/utils/awakenRuneTokens';
 	import { supabase } from '$lib/api/supabaseClient';
+	import { normalizeLanguageCode, normalizeOptionalText } from '$lib/i18n/translations';
 
 	type SortColumn =
 		| 'name'
@@ -23,7 +25,7 @@
 		spirits: HexSpiritRow[];
 		originLookup: Lookup;
 		classLookup: Lookup;
-		runes: RuneRow[];
+		runes: MatItemRow[];
 		onEdit: (spirit: HexSpiritRow) => void;
 	}
 
@@ -53,15 +55,6 @@
 		pl: 'Polish',
 		ko: 'Korean'
 	};
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
 
 	function getNameTranslation(spirit: HexSpiritRow, lang: string): string | null {
 		if (lang === 'primary') return spirit.name;
@@ -245,8 +238,8 @@
 					bValue = b.traits?.class_ids?.length ?? 0;
 					break;
 				case 'runes':
-					aValue = a.rune_cost?.length ?? 0;
-					bValue = b.rune_cost?.length ?? 0;
+					aValue = a.awaken_condition?.type === 'rune_cost' ? a.awaken_condition.rune_ids?.length ?? 0 : 0;
+					bValue = b.awaken_condition?.type === 'rune_cost' ? b.awaken_condition.rune_ids?.length ?? 0 : 0;
 					break;
 				case 'has_game_print':
 					aValue = a.game_print_image_path ? 1 : 0;
@@ -353,7 +346,7 @@
 						{/if}
 					</th>
 					<th class="sortable" onclick={() => handleSort('runes')}>
-						Runes
+						Awaken
 						{#if sortColumn === 'runes'}
 							<span class="sort-indicator">{sortDirection === 'asc' ? '▲' : '▼'}</span>
 						{/if}
@@ -421,7 +414,7 @@
 						<td>{classLookup.getLabel(primaryClassId(spirit), 'None')}</td>
 						<td class="cell-center">{spirit.traits?.origin_ids?.length ?? 0}</td>
 						<td class="cell-center">{spirit.traits?.class_ids?.length ?? 0}</td>
-						<td class="cell-center">{spirit.rune_cost?.length ?? 0}</td>
+						<td class="cell-center">{#if spirit.awaken_condition?.type === 'rune_cost'}{awakenRuneTokensSlotsUsed(spirit.awaken_condition.rune_ids ?? [])}{:else if spirit.awaken_condition?.type === 'text'}T{:else}0{/if}</td>
 						<td class="cell-center">
 							<span class="status-badge" class:status-badge--yes={spirit.game_print_image_path}></span>
 						</td>

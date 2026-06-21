@@ -9,11 +9,11 @@
 		maxSelection?: number;
 	}
 
-	let {
-		selected = $bindable<string[]>([]),
-		onselect,
-		maxSelection = 4
-	}: Props = $props();
+		let {
+			selected = $bindable<string[]>([]),
+			onselect,
+			maxSelection = 6
+		}: Props = $props();
 
 	let effects = $state<SpecialEffectRow[]>([]);
 	let loading = $state(true);

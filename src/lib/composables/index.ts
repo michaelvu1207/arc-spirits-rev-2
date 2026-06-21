@@ -17,3 +17,4 @@ export { useFormModal } from './useFormModal.svelte';
 export { useFilteredData } from './useFilteredData.svelte';
 export { useLookup } from './useLookup.svelte';
 export { useFileUpload } from './useFileUpload.svelte';
+export { useMultiSelect } from './useMultiSelect.svelte';

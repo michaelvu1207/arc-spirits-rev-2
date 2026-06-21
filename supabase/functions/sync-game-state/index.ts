@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 
 // Schema constant matching existing pattern
-const SCHEMA = "arc-spirits-rev2";
+const SCHEMA = "arc_spirits_assets";
 
 // Type definitions for incoming payload
 interface Spirit {

@@ -272,12 +272,12 @@ async function drawRewardRowsGroup(options: {
 		options.ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
 		options.ctx.shadowBlur = 10;
 		options.ctx.shadowOffsetY = 3;
-		options.ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+		options.ctx.fillStyle = 'rgba(56, 35, 20, 0.9)';
 		roundRect(options.ctx, -padX, -padY, maxRowW + padX * 2, rowHeights + padY * 2, 12);
 		options.ctx.fill();
 		options.ctx.shadowColor = 'transparent';
 		options.ctx.lineWidth = 1;
-		options.ctx.strokeStyle = 'rgba(255, 255, 255, 0.34)';
+		options.ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
 		options.ctx.stroke();
 		options.ctx.restore();
 	}

@@ -28,19 +28,17 @@ generators/
 Generate PNG images for game cards (artifacts, monsters, events).
 
 ```typescript
-import { generateArtifactCardPNG, generateMonsterCardPNG, generateEventCardPNG, generateTravelerCardPNG } from '$lib/generators/cards';
+import { generateArtifactCardPNG, generateMonsterCardPNG, generateEventCardPNG } from '$lib/generators/cards';
 
 // Generate artifact card
 const artifactBlob = await generateArtifactCardPNG(artifact, origins, runes, tags, guardians);
 
 // Generate monster card
-const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewardTrackIconUrls, 'en');
+const monsterBlob = await generateMonsterCardPNG(monster, artUrl, iconUrl, rewardIconUrls, 'en');
 
 // Generate event card
 const eventBlob = await generateEventCardPNG(event);
 
-// Generate traveler card
-const travelerBlob = await generateTravelerCardPNG(traveler);
 ```
 
 ### Dice Generators
@@ -123,11 +121,6 @@ The `shared/canvas.ts` module provides these utilities:
 - **Dimensions**: 600x400px
 - **Features**: Diagonal overlay, grayscale zoomed art (130%), order badge
 - **Styling**: Blue accent color for events
-
-### Traveler Cards
-- **Dimensions**: 600x437px
-- **Features**: Canvas-rendered traveler layout with art window, description, gain/trade rows
-- **Rendering**: Drawn directly to canvas for consistent 1:1 output
 
 ## Dice Generator Details
 

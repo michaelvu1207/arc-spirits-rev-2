@@ -1,29 +1,57 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
-		FOLDER_TYPES,
-		type FolderType,
-		type IconPlacementConfig,
+		FRAME_TIERS,
+		type FrameTier,
+		type FrontIconPlacementConfig,
+		type FrontIconTierConfig,
 		type IconSlot,
-		loadIconPlacementConfig,
-		saveIconPlacementConfig,
+		type IconColor,
+		loadFrontIconPlacementConfig,
+		saveFrontIconPlacementConfig,
+		loadFrontIconPlacementConfigFromDatabase,
+		saveFrontIconPlacementConfigToDatabase,
 		createDefaultConfig
 	} from '$lib/generators/spirits/spiritIconPlacer';
 	import { loadImage } from '$lib/generators/shared/canvas';
 
+	const TIER_DISPLAY_NAMES: Record<FrameTier, string> = {
+		spirit_world: 'Spirit World',
+		abyss: 'Abyss',
+		abyss_void_astral: 'Abyss (Void/Astral)',
+		arcane: 'Arcane',
+		fairy: 'Fairy',
+		human_enclave: 'Human Enclave',
+		royal_family: 'Royal Family'
+	};
+
+	type SlotGroup = 'origin' | 'class';
+
 	interface Props {
 		isOpen: boolean;
-		sampleImageUrls: Record<FolderType, string | null>;
+		sampleImageUrls: Record<FrameTier, string | null>;
+		sampleImageUrlOptions?: Record<FrameTier, string[]>;
 		onClose: () => void;
-		onSave: (config: IconPlacementConfig) => void;
-		onGenerateAll: () => void;
+		onSave: (config: FrontIconPlacementConfig) => void;
+		onGenerateAll?: () => void;
+		onGenerateTier?: (tier: FrameTier) => void;
+		showGenerateActions?: boolean;
 	}
 
-	let { isOpen, sampleImageUrls, onClose, onSave, onGenerateAll }: Props = $props();
+	let {
+		isOpen,
+		sampleImageUrls,
+		sampleImageUrlOptions,
+		onClose,
+		onSave,
+		onGenerateAll,
+		onGenerateTier,
+		showGenerateActions = true
+	}: Props = $props();
 
-	let config: IconPlacementConfig = $state(createDefaultConfig());
-	let currentFolder: FolderType = $state('Human');
-	let currentSlotType: 'icon_slots' | 'rune_slots' = $state('icon_slots');
+	let config: FrontIconPlacementConfig = $state(createDefaultConfig());
+	let currentTier: FrameTier = $state('spirit_world');
+	let selectedGroup: SlotGroup = $state('origin');
 	let selectedSlotIndex: number | null = $state(null);
 
 	let jsonEditorOpen = $state(false);
@@ -32,28 +60,49 @@
 
 	let canvasEl: HTMLCanvasElement | null = $state(null);
 	let sampleImage: HTMLImageElement | null = $state(null);
+	let selectedSampleUrl: string | null = $state(null);
+	let loadedSampleUrl: string | null = $state(null);
 	let displayScale = $state(1);
-	let draggingSlot: number | null = $state(null);
+	let draggingSlot: { group: SlotGroup; index: number } | null = $state(null);
 	let dragOffset = $state({ x: 0, y: 0 });
 
-	// Computed slots
-	let currentSlots = $derived.by(() => {
-		const folderConfig = config[currentFolder];
-		if (typeof folderConfig === 'number') return [];
-		return folderConfig?.[currentSlotType] ?? [];
+	function getTierConfig(): FrontIconTierConfig | null {
+		const tc = config[currentTier];
+		if (!tc || typeof tc === 'number') return null;
+		return tc;
+	}
+
+	let originSlots = $derived.by(() => {
+		const tc = getTierConfig();
+		return tc?.origin_slots ?? [];
 	});
 
-	let currentSize = $derived(
-		currentSlotType === 'icon_slots' ? config._icon_size : config._rune_size
-	);
+	let classSlots = $derived.by(() => {
+		const tc = getTierConfig();
+		return tc?.class_slots ?? [];
+	});
+
+	let activeSlots = $derived(selectedGroup === 'origin' ? originSlots : classSlots);
+
+	let currentSize = $derived(config._icon_size);
+	let classIconColor = $derived.by(() => {
+		const tc = getTierConfig();
+		return tc?.class_icon_color ?? 'dark';
+	});
 
 	onMount(() => {
-		config = loadIconPlacementConfig();
+		config = loadFrontIconPlacementConfig();
+		loadFrontIconPlacementConfigFromDatabase().then((storedConfig) => {
+			config = storedConfig;
+		});
 	});
 
 	$effect(() => {
-		if (isOpen && currentFolder) {
-			loadSampleImage(currentFolder);
+		if (isOpen && currentTier) {
+			const url = getCurrentSampleUrl();
+			if (url !== loadedSampleUrl) {
+				loadSampleImageUrl(url);
+			}
 		}
 	});
 
@@ -63,25 +112,56 @@
 		}
 	});
 
-	async function loadSampleImage(folder: FolderType) {
-		const url = sampleImageUrls[folder];
+	function getSampleOptions(tier: FrameTier): string[] {
+		const options = sampleImageUrlOptions?.[tier] ?? [];
+		const fallback = sampleImageUrls[tier];
+		return Array.from(new Set(fallback ? [fallback, ...options] : options));
+	}
+
+	function getCurrentSampleUrl(): string | null {
+		const options = getSampleOptions(currentTier);
+		if (selectedSampleUrl && options.includes(selectedSampleUrl)) {
+			return selectedSampleUrl;
+		}
+		return options[0] ?? null;
+	}
+
+	function randomizeSampleImage() {
+		const options = getSampleOptions(currentTier);
+		if (options.length === 0) return;
+		if (options.length === 1) {
+			selectedSampleUrl = options[0];
+			return;
+		}
+
+		let next = options[Math.floor(Math.random() * options.length)];
+		if (next === getCurrentSampleUrl()) {
+			const currentIndex = options.indexOf(next);
+			next = options[(currentIndex + 1 + Math.floor(Math.random() * (options.length - 1))) % options.length];
+		}
+		selectedSampleUrl = next;
+	}
+
+	async function loadSampleImageUrl(url: string | null) {
 		if (!url) {
 			sampleImage = null;
+			loadedSampleUrl = null;
 			return;
 		}
 		try {
 			sampleImage = await loadImage(url);
+			loadedSampleUrl = url;
 			calculateDisplayScale();
 			drawCanvas();
 		} catch (err) {
 			console.warn('Failed to load sample image:', err);
 			sampleImage = null;
+			loadedSampleUrl = null;
 		}
 	}
 
 	function calculateDisplayScale() {
 		if (!sampleImage) return;
-		// Fit to 600px width max
 		const maxWidth = 600;
 		displayScale = Math.min(1, maxWidth / sampleImage.width);
 	}
@@ -98,32 +178,44 @@
 		canvasEl.width = scaledWidth;
 		canvasEl.height = scaledHeight;
 
-		// Draw sample image
 		ctx.drawImage(sampleImage, 0, 0, scaledWidth, scaledHeight);
 
-		// Draw slot rectangles
 		const size = currentSize * displayScale;
-		const colors =
-			currentSlotType === 'icon_slots'
-				? ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
-				: ['#FFD93D', '#FF8C42'];
+		const originColors = ['#FF6B6B', '#FF9F43'];
+		const classColors = ['#4ECDC4', '#45B7D1', '#96CEB4'];
 
-		currentSlots.forEach((slot, i) => {
-			const color = colors[i % colors.length];
+		originSlots.forEach((slot, i) => {
+			const color = originColors[i % originColors.length];
 			const x = slot.x * displayScale;
 			const y = slot.y * displayScale;
+			const isSelected = selectedGroup === 'origin' && selectedSlotIndex === i;
 
-			// Draw rectangle
 			ctx.strokeStyle = color;
-			ctx.lineWidth = selectedSlotIndex === i ? 4 : 2;
+			ctx.lineWidth = isSelected ? 4 : 2;
 			ctx.strokeRect(x, y, size, size);
 
-			// Draw slot number
 			ctx.fillStyle = color;
 			ctx.font = `bold ${14 * displayScale}px Arial`;
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
-			ctx.fillText(String(i + 1), x + size / 2, y + size / 2);
+			ctx.fillText(`O${i + 1}`, x + size / 2, y + size / 2);
+		});
+
+		classSlots.forEach((slot, i) => {
+			const color = classColors[i % classColors.length];
+			const x = slot.x * displayScale;
+			const y = slot.y * displayScale;
+			const isSelected = selectedGroup === 'class' && selectedSlotIndex === i;
+
+			ctx.strokeStyle = color;
+			ctx.lineWidth = isSelected ? 4 : 2;
+			ctx.strokeRect(x, y, size, size);
+
+			ctx.fillStyle = color;
+			ctx.font = `bold ${14 * displayScale}px Arial`;
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(`C${i + 1}`, x + size / 2, y + size / 2);
 		});
 	}
 
@@ -135,17 +227,26 @@
 		const realY = (event.clientY - rect.top) / displayScale;
 		const size = currentSize;
 
-		// Check if clicking on a slot
-		for (let i = 0; i < currentSlots.length; i++) {
-			const slot = currentSlots[i];
-			if (
-				realX >= slot.x &&
-				realX <= slot.x + size &&
-				realY >= slot.y &&
-				realY <= slot.y + size
-			) {
+		// Check origin slots first
+		for (let i = 0; i < originSlots.length; i++) {
+			const slot = originSlots[i];
+			if (realX >= slot.x && realX <= slot.x + size && realY >= slot.y && realY <= slot.y + size) {
+				selectedGroup = 'origin';
 				selectedSlotIndex = i;
-				draggingSlot = i;
+				draggingSlot = { group: 'origin', index: i };
+				dragOffset = { x: realX - slot.x, y: realY - slot.y };
+				drawCanvas();
+				return;
+			}
+		}
+
+		// Check class slots
+		for (let i = 0; i < classSlots.length; i++) {
+			const slot = classSlots[i];
+			if (realX >= slot.x && realX <= slot.x + size && realY >= slot.y && realY <= slot.y + size) {
+				selectedGroup = 'class';
+				selectedSlotIndex = i;
+				draggingSlot = { group: 'class', index: i };
 				dragOffset = { x: realX - slot.x, y: realY - slot.y };
 				drawCanvas();
 				return;
@@ -158,13 +259,13 @@
 	}
 
 	function handleCanvasDrag(event: MouseEvent) {
-		if (draggingSlot === null || !sampleImage || !canvasEl) return;
+		if (!draggingSlot || !sampleImage || !canvasEl) return;
 
 		const rect = canvasEl.getBoundingClientRect();
 		const realX = (event.clientX - rect.left) / displayScale;
 		const realY = (event.clientY - rect.top) / displayScale;
 
-		updateSlotPosition(draggingSlot, {
+		updateSlotPosition(draggingSlot.group, draggingSlot.index, {
 			x: Math.max(0, Math.round(realX - dragOffset.x)),
 			y: Math.max(0, Math.round(realY - dragOffset.y))
 		});
@@ -182,42 +283,47 @@
 		const realX = Math.round((event.clientX - rect.left) / displayScale);
 		const realY = Math.round((event.clientY - rect.top) / displayScale);
 
-		addSlot({ x: realX, y: realY });
+		addSlot(selectedGroup, { x: realX, y: realY });
 	}
 
-	function addSlot(position?: { x: number; y: number }) {
-		const folderConfig = config[currentFolder];
-		if (typeof folderConfig === 'number') return;
+	function addSlot(group: SlotGroup, position?: { x: number; y: number }) {
+		const tc = getTierConfig();
+		if (!tc) return;
 
-		const offset = currentSlots.length * 30;
+		const slots = group === 'origin' ? tc.origin_slots : tc.class_slots;
+		const offset = slots.length * 30;
 		const newSlot: IconSlot = position ?? { x: 50 + offset, y: 50 + offset };
+		const key = group === 'origin' ? 'origin_slots' : 'class_slots';
 
 		config = {
 			...config,
-			[currentFolder]: {
-				...folderConfig,
-				[currentSlotType]: [...(folderConfig[currentSlotType] ?? []), newSlot]
+			[currentTier]: {
+				...tc,
+				[key]: [...slots, newSlot]
 			}
 		};
 
-		selectedSlotIndex = currentSlots.length;
+		selectedGroup = group;
+		selectedSlotIndex = slots.length;
 		drawCanvas();
 	}
 
 	function removeSelectedSlot() {
 		if (selectedSlotIndex === null) return;
 
-		const folderConfig = config[currentFolder];
-		if (typeof folderConfig === 'number') return;
+		const tc = getTierConfig();
+		if (!tc) return;
 
-		const newSlots = [...(folderConfig[currentSlotType] ?? [])];
+		const key = selectedGroup === 'origin' ? 'origin_slots' : 'class_slots';
+		const slots = selectedGroup === 'origin' ? tc.origin_slots : tc.class_slots;
+		const newSlots = [...slots];
 		newSlots.splice(selectedSlotIndex, 1);
 
 		config = {
 			...config,
-			[currentFolder]: {
-				...folderConfig,
-				[currentSlotType]: newSlots
+			[currentTier]: {
+				...tc,
+				[key]: newSlots
 			}
 		};
 
@@ -225,66 +331,81 @@
 		drawCanvas();
 	}
 
-	function updateSlotPosition(index: number, pos: { x: number; y: number }) {
-		const folderConfig = config[currentFolder];
-		if (typeof folderConfig === 'number') return;
+	function updateSlotPosition(group: SlotGroup, index: number, pos: { x: number; y: number }) {
+		const tc = getTierConfig();
+		if (!tc) return;
 
-		const newSlots = [...(folderConfig[currentSlotType] ?? [])];
+		const key = group === 'origin' ? 'origin_slots' : 'class_slots';
+		const slots = group === 'origin' ? tc.origin_slots : tc.class_slots;
+		const newSlots = [...slots];
 		newSlots[index] = { ...newSlots[index], ...pos };
 
 		config = {
 			...config,
-			[currentFolder]: {
-				...folderConfig,
-				[currentSlotType]: newSlots
+			[currentTier]: {
+				...tc,
+				[key]: newSlots
 			}
 		};
 
 		drawCanvas();
 	}
 
-	function handleSizeChange(type: 'icon' | 'rune', value: number) {
-		if (type === 'icon') {
-			config = { ...config, _icon_size: value };
-		} else {
-			config = { ...config, _rune_size: value };
-		}
+	function handleSizeChange(value: number) {
+		config = { ...config, _icon_size: value };
 		drawCanvas();
 	}
 
-	function copyFromFolder(sourceFolder: FolderType) {
-		const sourceConfig = config[sourceFolder];
-		if (typeof sourceConfig === 'number') return;
+	function handleClassIconColorChange(color: IconColor) {
+		const tc = getTierConfig();
+		if (!tc) return;
+		config = {
+			...config,
+			[currentTier]: { ...tc, class_icon_color: color }
+		};
+	}
+
+	function selectSlot(group: SlotGroup, index: number) {
+		selectedGroup = group;
+		selectedSlotIndex = index;
+		drawCanvas();
+	}
+
+	function copyFromTier(sourceTier: FrameTier) {
+		const sourceConfig = config[sourceTier];
+		if (typeof sourceConfig === 'number' || !sourceConfig) return;
 
 		config = {
 			...config,
-			[currentFolder]: {
-				...sourceConfig
-			}
+			[currentTier]: { ...sourceConfig }
 		};
 		drawCanvas();
 	}
 
-	function handleSave() {
-		saveIconPlacementConfig(config);
+	async function persistConfig() {
+		saveFrontIconPlacementConfig(config);
+		await saveFrontIconPlacementConfigToDatabase(config);
+	}
+
+	async function handleSave() {
+		await persistConfig();
 		onSave(config);
 	}
 
-	function handleGenerate() {
-		saveIconPlacementConfig(config);
-		onGenerateAll();
+	async function handleGenerate() {
+		await persistConfig();
+		onGenerateAll?.();
 	}
 
-	function handleSlotTypeChange(type: 'icon_slots' | 'rune_slots') {
-		currentSlotType = type;
-		selectedSlotIndex = null;
-		drawCanvas();
+	async function handleGenerateTier() {
+		await persistConfig();
+		onGenerateTier?.(currentTier);
 	}
 
-	function handleFolderChange(folder: FolderType) {
-		currentFolder = folder;
+	function handleTierChange(tier: FrameTier) {
+		currentTier = tier;
+		selectedSampleUrl = null;
 		selectedSlotIndex = null;
-		loadSampleImage(folder);
 	}
 
 	function openJsonEditor() {
@@ -300,10 +421,9 @@
 
 	function applyJsonConfig() {
 		try {
-			const parsed = JSON.parse(jsonText) as IconPlacementConfig;
-			// Validate structure
-			if (typeof parsed._icon_size !== 'number' || typeof parsed._rune_size !== 'number') {
-				throw new Error('Missing _icon_size or _rune_size');
+			const parsed = JSON.parse(jsonText) as FrontIconPlacementConfig;
+			if (typeof parsed._icon_size !== 'number') {
+				throw new Error('Missing _icon_size');
 			}
 			config = parsed;
 			jsonError = '';
@@ -319,7 +439,6 @@
 		try {
 			await navigator.clipboard.writeText(text);
 		} catch {
-			// Fallback for older browsers
 			const textarea = document.createElement('textarea');
 			textarea.value = text;
 			document.body.appendChild(textarea);
@@ -341,135 +460,152 @@
 	<div class="modal-backdrop" role="button" tabindex="0" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()}>
 		<div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<header class="modal__header">
-				<h2>Icon Placement Configuration</h2>
-				<button type="button" class="modal__close" onclick={onClose}>✕</button>
+				<h2>Front Icon Placement Configuration</h2>
+				<button type="button" class="modal__close" onclick={onClose}>&#x2715;</button>
 			</header>
 
 			<div class="modal__body">
 				<div class="config-layout">
 					<!-- Left Panel: Controls -->
 					<div class="controls-panel">
-						<!-- Folder Type Selector -->
+						<!-- Tier Selector -->
 						<div class="control-group">
-							<label class="control-label">Folder Type</label>
+							<label class="control-label">Frame Tier</label>
 							<select
 								class="control-select"
-								value={currentFolder}
-								onchange={(e) => handleFolderChange(e.currentTarget.value as FolderType)}
+								value={currentTier}
+								onchange={(e) => handleTierChange(e.currentTarget.value as FrameTier)}
 							>
-								{#each FOLDER_TYPES as folder}
-									<option value={folder}>{folder}</option>
+								{#each FRAME_TIERS as tier}
+									<option value={tier}>{TIER_DISPLAY_NAMES[tier]}</option>
 								{/each}
 							</select>
 						</div>
 
-						<!-- Slot Type Selector -->
-						<div class="control-group">
-							<label class="control-label">Slot Type</label>
-							<div class="slot-type-buttons">
-								<button
-									type="button"
-									class={`slot-type-btn ${currentSlotType === 'icon_slots' ? 'active' : ''}`}
-									onclick={() => handleSlotTypeChange('icon_slots')}
-								>
-									Icons (Origin/Class)
-								</button>
-								<button
-									type="button"
-									class={`slot-type-btn ${currentSlotType === 'rune_slots' ? 'active' : ''}`}
-									onclick={() => handleSlotTypeChange('rune_slots')}
-								>
-									Runes
-								</button>
-							</div>
-						</div>
-
-						<!-- Slot Controls -->
-						<div class="control-group">
-							<label class="control-label">Slots ({currentSlots.length})</label>
+						<!-- Origin Slots -->
+						<div class="control-group slot-section slot-section--origin">
+							<label class="control-label control-label--origin">Origin Slots ({originSlots.length})</label>
 							<div class="slot-buttons">
-								<button type="button" class="btn btn--sm" onclick={() => addSlot()}>
-									Add Slot
+								<button type="button" class="btn btn--sm" onclick={() => addSlot('origin')}>
+									Add
 								</button>
 								<button
 									type="button"
 									class="btn btn--sm btn--danger"
 									onclick={removeSelectedSlot}
-									disabled={selectedSlotIndex === null}
+									disabled={selectedGroup !== 'origin' || selectedSlotIndex === null}
 								>
-									Remove Selected
+									Remove
 								</button>
+							</div>
+							<div class="slot-list">
+								{#each originSlots as slot, i}
+									<button
+										type="button"
+										class={`slot-item slot-item--origin ${selectedGroup === 'origin' && selectedSlotIndex === i ? 'selected' : ''}`}
+										onclick={() => selectSlot('origin', i)}
+									>
+										O{i + 1}: ({slot.x}, {slot.y})
+									</button>
+								{/each}
 							</div>
 						</div>
 
-						<!-- Slot List -->
-						<div class="slot-list">
-							{#each currentSlots as slot, i}
+						<!-- Class Slots -->
+						<div class="control-group slot-section slot-section--class">
+							<label class="control-label control-label--class">Class Slots ({classSlots.length})</label>
+							<div class="slot-buttons">
+								<button type="button" class="btn btn--sm" onclick={() => addSlot('class')}>
+									Add
+								</button>
 								<button
 									type="button"
-									class={`slot-item ${selectedSlotIndex === i ? 'selected' : ''}`}
-									onclick={() => { selectedSlotIndex = i; drawCanvas(); }}
+									class="btn btn--sm btn--danger"
+									onclick={removeSelectedSlot}
+									disabled={selectedGroup !== 'class' || selectedSlotIndex === null}
 								>
-									{currentSlotType === 'icon_slots' ? 'Icon' : 'Rune'} {i + 1}: ({slot.x}, {slot.y})
+									Remove
 								</button>
-							{/each}
+							</div>
+							<div class="color-toggle">
+								<span class="color-toggle-label">Color:</span>
+								<button
+									type="button"
+									class={`color-btn ${classIconColor === 'dark' ? 'color-btn--active' : ''}`}
+									onclick={() => handleClassIconColorChange('dark')}
+								>
+									<span class="color-swatch color-swatch--dark"></span>
+									Dark
+								</button>
+								<button
+									type="button"
+									class={`color-btn ${classIconColor === 'white' ? 'color-btn--active' : ''}`}
+									onclick={() => handleClassIconColorChange('white')}
+								>
+									<span class="color-swatch color-swatch--white"></span>
+									White
+								</button>
+							</div>
+							<div class="slot-list">
+								{#each classSlots as slot, i}
+									<button
+										type="button"
+										class={`slot-item slot-item--class ${selectedGroup === 'class' && selectedSlotIndex === i ? 'selected' : ''}`}
+										onclick={() => selectSlot('class', i)}
+									>
+										C{i + 1}: ({slot.x}, {slot.y})
+									</button>
+								{/each}
+							</div>
 						</div>
 
 						<!-- Size Controls -->
 						<div class="control-group">
-							<label class="control-label">Sizes</label>
+							<label class="control-label">Icon Size</label>
 							<div class="size-inputs">
 								<label class="size-input">
-									<span>Icon:</span>
+									<span>Size:</span>
 									<input
 										type="number"
 										value={config._icon_size}
-										onchange={(e) => handleSizeChange('icon', Number(e.currentTarget.value))}
-									/>
-								</label>
-								<label class="size-input">
-									<span>Rune:</span>
-									<input
-										type="number"
-										value={config._rune_size}
-										onchange={(e) => handleSizeChange('rune', Number(e.currentTarget.value))}
+										onchange={(e) => handleSizeChange(Number(e.currentTarget.value))}
 									/>
 								</label>
 							</div>
 						</div>
 
 						<!-- Selected Slot Position -->
-						{#if selectedSlotIndex !== null && currentSlots[selectedSlotIndex]}
+						{#if selectedSlotIndex !== null && activeSlots[selectedSlotIndex]}
 							<div class="control-group">
-								<label class="control-label">Selected Position</label>
+								<label class="control-label">Selected: {selectedGroup === 'origin' ? 'O' : 'C'}{selectedSlotIndex + 1}</label>
 								<div class="position-inputs">
 									<label class="position-input">
 										<span>X:</span>
 										<input
 											type="number"
-											value={currentSlots[selectedSlotIndex].x}
-											onchange={(e) => updateSlotPosition(selectedSlotIndex!, { x: Number(e.currentTarget.value), y: currentSlots[selectedSlotIndex!].y })}
+											value={activeSlots[selectedSlotIndex].x}
+											onchange={(e) => updateSlotPosition(selectedGroup, selectedSlotIndex!, { x: Number(e.currentTarget.value), y: activeSlots[selectedSlotIndex!].y })}
 										/>
 									</label>
 									<label class="position-input">
 										<span>Y:</span>
 										<input
 											type="number"
-											value={currentSlots[selectedSlotIndex].y}
-											onchange={(e) => updateSlotPosition(selectedSlotIndex!, { x: currentSlots[selectedSlotIndex!].x, y: Number(e.currentTarget.value) })}
+											value={activeSlots[selectedSlotIndex].y}
+											onchange={(e) => updateSlotPosition(selectedGroup, selectedSlotIndex!, { x: activeSlots[selectedSlotIndex!].x, y: Number(e.currentTarget.value) })}
 										/>
 									</label>
 								</div>
 							</div>
 						{/if}
 
-						<!-- Copy From Folder -->
+						<!-- Copy From Tier -->
 						<div class="control-group">
 							<label class="control-label">Copy From</label>
 							<div class="copy-controls">
 								<select class="control-select" id="copy-source">
-									{#each FOLDER_TYPES as folder}
-										<option value={folder}>{folder}</option>
+									{#each FRAME_TIERS as tier}
+										<option value={tier}>{TIER_DISPLAY_NAMES[tier]}</option>
 									{/each}
 								</select>
 								<button
@@ -477,7 +613,7 @@
 									class="btn btn--sm"
 									onclick={() => {
 										const select = document.getElementById('copy-source') as HTMLSelectElement;
-										copyFromFolder(select.value as FolderType);
+										copyFromTier(select.value as FrameTier);
 									}}
 								>
 									Copy Here
@@ -525,6 +661,17 @@
 
 					<!-- Right Panel: Canvas Preview -->
 					<div class="preview-panel">
+						<div class="preview-toolbar">
+							<span class="preview-count">{getSampleOptions(currentTier).length} reference image{getSampleOptions(currentTier).length === 1 ? '' : 's'}</span>
+							<button
+								type="button"
+								class="btn btn--sm btn--secondary"
+								onclick={randomizeSampleImage}
+								disabled={getSampleOptions(currentTier).length <= 1}
+							>
+								Random Image
+							</button>
+						</div>
 						{#if sampleImage}
 							<canvas
 								bind:this={canvasEl}
@@ -536,12 +683,12 @@
 								oncontextmenu={handleCanvasRightClick}
 							></canvas>
 							<p class="preview-hint">
-								Left-click to select/drag slots. Right-click to add new slot.
+								Left-click to select/drag slots. Right-click to add slot to active group ({selectedGroup}).
 							</p>
 						{:else}
 							<div class="preview-placeholder">
-								<p>No sample image available for "{currentFolder}"</p>
-								<p class="preview-hint">Upload a game print image to a spirit with cost matching this folder to see a preview.</p>
+								<p>No sample image available for "{TIER_DISPLAY_NAMES[currentTier]}"</p>
+								<p class="preview-hint">Upload a game print image to a spirit in this tier to see a preview.</p>
 							</div>
 						{/if}
 					</div>
@@ -552,9 +699,14 @@
 				<button type="button" class="btn btn--secondary" onclick={handleSave}>
 					Save Configuration
 				</button>
-				<button type="button" class="btn btn--primary" onclick={handleGenerate}>
-					Generate All Game Prints with Icons
-				</button>
+				{#if showGenerateActions}
+					<button type="button" class="btn btn--secondary" onclick={handleGenerateTier}>
+						Generate {TIER_DISPLAY_NAMES[currentTier]} Only
+					</button>
+					<button type="button" class="btn btn--primary" onclick={handleGenerate}>
+						Generate All Game Prints with Icons
+					</button>
+				{/if}
 			</footer>
 		</div>
 	</div>
@@ -565,7 +717,7 @@
 		position: fixed;
 		inset: 0;
 		background: rgba(2, 6, 23, 0.85);
-		z-index: 100;
+		z-index: 1300;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -622,14 +774,14 @@
 
 	.config-layout {
 		display: grid;
-		grid-template-columns: 280px 1fr;
+		grid-template-columns: 300px 1fr;
 		gap: 1.5rem;
 	}
 
 	.controls-panel {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: 0.75rem;
 	}
 
 	.control-group {
@@ -646,6 +798,14 @@
 		color: rgba(148, 163, 184, 0.8);
 	}
 
+	.control-label--origin {
+		color: #FF6B6B;
+	}
+
+	.control-label--class {
+		color: #4ECDC4;
+	}
+
 	.control-select {
 		padding: 0.5rem;
 		background: rgba(30, 41, 59, 0.8);
@@ -655,31 +815,19 @@
 		font-size: 0.9rem;
 	}
 
-	.slot-type-buttons {
-		display: flex;
-		gap: 0.5rem;
-	}
-
-	.slot-type-btn {
-		flex: 1;
+	.slot-section {
 		padding: 0.5rem;
-		background: rgba(30, 41, 59, 0.6);
-		border: 1px solid rgba(148, 163, 184, 0.2);
 		border-radius: 6px;
-		color: #94a3b8;
-		font-size: 0.8rem;
-		cursor: pointer;
-		transition: all 0.15s ease;
 	}
 
-	.slot-type-btn:hover {
-		background: rgba(30, 41, 59, 0.8);
+	.slot-section--origin {
+		background: rgba(255, 107, 107, 0.06);
+		border: 1px solid rgba(255, 107, 107, 0.15);
 	}
 
-	.slot-type-btn.active {
-		background: rgba(99, 102, 241, 0.3);
-		border-color: rgba(99, 102, 241, 0.5);
-		color: #f8fafc;
+	.slot-section--class {
+		background: rgba(78, 205, 196, 0.06);
+		border: 1px solid rgba(78, 205, 196, 0.15);
 	}
 
 	.slot-buttons {
@@ -691,17 +839,17 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
-		max-height: 150px;
+		max-height: 120px;
 		overflow-y: auto;
 	}
 
 	.slot-item {
-		padding: 0.5rem 0.75rem;
+		padding: 0.4rem 0.6rem;
 		background: rgba(30, 41, 59, 0.6);
 		border: 1px solid rgba(148, 163, 184, 0.15);
 		border-radius: 6px;
 		color: #e2e8f0;
-		font-size: 0.85rem;
+		font-size: 0.8rem;
 		text-align: left;
 		cursor: pointer;
 		transition: all 0.15s ease;
@@ -714,6 +862,16 @@
 	.slot-item.selected {
 		background: rgba(99, 102, 241, 0.25);
 		border-color: rgba(99, 102, 241, 0.5);
+	}
+
+	.slot-item--origin.selected {
+		background: rgba(255, 107, 107, 0.2);
+		border-color: rgba(255, 107, 107, 0.5);
+	}
+
+	.slot-item--class.selected {
+		background: rgba(78, 205, 196, 0.2);
+		border-color: rgba(78, 205, 196, 0.5);
 	}
 
 	.size-inputs,
@@ -746,6 +904,58 @@
 		font-size: 0.85rem;
 	}
 
+	.color-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+
+	.color-toggle-label {
+		font-size: 0.75rem;
+		color: #94a3b8;
+		margin-right: 0.25rem;
+	}
+
+	.color-btn {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.25rem 0.5rem;
+		background: rgba(30, 41, 59, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		border-radius: 4px;
+		color: #94a3b8;
+		font-size: 0.75rem;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.color-btn:hover {
+		background: rgba(30, 41, 59, 0.8);
+	}
+
+	.color-btn--active {
+		background: rgba(78, 205, 196, 0.15);
+		border-color: rgba(78, 205, 196, 0.4);
+		color: #e2e8f0;
+	}
+
+	.color-swatch {
+		display: inline-block;
+		width: 12px;
+		height: 12px;
+		border-radius: 2px;
+		border: 1px solid rgba(148, 163, 184, 0.3);
+	}
+
+	.color-swatch--dark {
+		background: #333;
+	}
+
+	.color-swatch--white {
+		background: #fff;
+	}
+
 	.copy-controls {
 		display: flex;
 		gap: 0.5rem;
@@ -760,6 +970,19 @@
 		flex-direction: column;
 		align-items: center;
 		gap: 0.75rem;
+	}
+
+	.preview-toolbar {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.preview-count {
+		color: #94a3b8;
+		font-size: 0.8rem;
 	}
 
 	.preview-canvas {

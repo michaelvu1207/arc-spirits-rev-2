@@ -172,10 +172,6 @@ export async function generateRuneIconCanvas(
 		throw new Error('Could not get canvas context');
 	}
 
-	// Background size: 50% bigger than canvas
-	const bgSize = size * 1.5;
-	const bgOffset = (bgSize - size) / 2; // Center the larger background
-
 	// Draw background image if provided, otherwise draw hexagon (solid fill)
 	if (options.backgroundUrl) {
 		try {
@@ -186,8 +182,15 @@ export async function generateRuneIconCanvas(
 				bgImg.onerror = reject;
 				bgImg.src = options.backgroundUrl!;
 			});
-			// Draw background image 50% bigger, centered
-			ctx.drawImage(bgImg, -bgOffset, -bgOffset, bgSize, bgSize);
+			// Draw background image centered (contain, no stretch)
+			const iw = bgImg.naturalWidth || bgImg.width || 1;
+			const ih = bgImg.naturalHeight || bgImg.height || 1;
+			const scale = Math.min(size / iw, size / ih);
+			const dw = iw * scale;
+			const dh = ih * scale;
+			const dx = (size - dw) / 2;
+			const dy = (size - dh) / 2;
+			ctx.drawImage(bgImg, dx, dy, dw, dh);
 		} catch (err) {
 			console.warn('Failed to load background image, falling back to hexagon:', err);
 			// Fallback to hexagon
@@ -236,8 +239,8 @@ export async function generateRuneIconCanvas(
 		ctx.stroke();
 	}
 
-	// Icon size: 30% smaller than original iconSize
-	const scaledIconSize = iconSize * 0.7;
+	// Icon size: 44% smaller than original iconSize (0.7 * 0.8)
+	const scaledIconSize = iconSize * 0.56;
 	const iconPadding = (iconSize - scaledIconSize) / 2;
 	const outlineEnabled = !options.disableIconOutline;
 	const iconOutlinePx = outlineEnabled ? Math.max(2, Math.round(scaledIconSize * 0.03)) : 0;
@@ -401,36 +404,19 @@ export async function generateRuneIconCanvas(
 		}
 	}
 
-	// Clip the entire canvas to a circle (the rune icon itself should be circular)
-	const canvasRadius = size / 2;
-	const tempCanvas = document.createElement('canvas');
-	tempCanvas.width = size;
-	tempCanvas.height = size;
-	const tempCtx = tempCanvas.getContext('2d');
-	if (!tempCtx) {
-		throw new Error('Could not get temp canvas context');
-	}
-
-	// Create circular clipping path
-	tempCtx.beginPath();
-	tempCtx.arc(canvasRadius, canvasRadius, canvasRadius, 0, Math.PI * 2);
-	tempCtx.clip();
-
-	// Draw the original canvas content onto the temp canvas
-	tempCtx.drawImage(canvas, 0, 0);
-
-	// Draw an outer ring if requested (inside the clipped circle)
+	// Draw an outer ring if requested (no circular clipping applied)
 	if (outerRingColor && outerRingWidthPx > 0) {
-		tempCtx.save();
-		tempCtx.strokeStyle = outerRingColor;
-		tempCtx.lineWidth = outerRingWidthPx;
-		tempCtx.beginPath();
-		tempCtx.arc(canvasRadius, canvasRadius, canvasRadius - outerRingWidthPx / 2, 0, Math.PI * 2);
-		tempCtx.stroke();
-		tempCtx.restore();
+		const canvasRadius = size / 2;
+		ctx.save();
+		ctx.strokeStyle = outerRingColor;
+		ctx.lineWidth = outerRingWidthPx;
+		ctx.beginPath();
+		ctx.arc(canvasRadius, canvasRadius, canvasRadius - outerRingWidthPx / 2, 0, Math.PI * 2);
+		ctx.stroke();
+		ctx.restore();
 	}
 
-	return tempCanvas.toDataURL('image/png');
+	return canvas.toDataURL('image/png');
 }
 
 /**

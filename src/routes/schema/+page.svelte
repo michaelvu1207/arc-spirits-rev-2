@@ -4,7 +4,7 @@
 
 	let dagreLib: typeof import('dagre') | null = null;
 
-	// Schema data for arc-spirits-rev2
+	// Schema data for arc_spirits_assets
 	const tables = [
 		// Core Game Entities
 		{
@@ -15,12 +15,13 @@
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'name', type: 'text' },
-				{ name: 'is_enabled', type: 'boolean' },
 				{ name: 'cost', type: 'integer' },
 				{ name: 'traits', type: 'jsonb', note: '→ classes, origins' },
-				{ name: 'rune_cost', type: 'uuid[]', note: '→ runes' },
+				{ name: 'awaken_condition', type: 'jsonb', note: '→ runes (or text)' },
 				{ name: 'art_raw_image_path', type: 'text' },
-				{ name: 'game_print_image_path', type: 'text' }
+				{ name: 'game_print_image_path', type: 'text' },
+				{ name: 'back_side_base', type: 'text' },
+				{ name: 'back_side_export', type: 'text' }
 			]
 		},
 		{
@@ -42,25 +43,26 @@
 			name: 'classes',
 			color: '#8b5cf6',
 			category: 'Traits',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'position', type: 'integer' },
-				{ name: 'color', type: 'text' },
-				{ name: 'icon_png', type: 'text' },
-				{ name: 'effect_schema', type: 'jsonb' }
-			]
+				columns: [
+					{ name: 'id', type: 'uuid', pk: true },
+					{ name: 'name', type: 'text' },
+					{ name: 'position', type: 'integer' },
+					{ name: 'class_type', type: 'text', note: 'normal|human|special' },
+					{ name: 'color', type: 'text' },
+					{ name: 'icon_png', type: 'text' },
+					{ name: 'effect_schema', type: 'jsonb' }
+				]
 		},
 		{
-			id: 'runes',
-			name: 'runes',
+			id: 'mat_items',
+			name: 'mat_items',
 			color: '#10b981',
 			category: 'Core',
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'name', type: 'text' },
+				{ name: 'kind', type: 'text', note: 'rune|relic' },
 				{ name: 'origin_id', type: 'uuid', fk: 'origins' },
-				{ name: 'class_id', type: 'uuid', fk: 'classes' },
 				{ name: 'icon_path', type: 'text' }
 			]
 		},
@@ -86,85 +88,11 @@
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'name', type: 'text' },
 				{ name: 'origin_id', type: 'uuid', fk: 'origins' },
-				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
 				{ name: 'background_image_path', type: 'text' },
 				{ name: 'image_with_icons_path', type: 'text' }
 			]
 		},
-		{
-			id: 'artifacts',
-			name: 'artifacts',
-			color: '#ec4899',
-			category: 'Core',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'benefit', type: 'text' },
-				{ name: 'recipe_box', type: 'jsonb', note: '→ runes' },
-				{ name: 'guardian_id', type: 'uuid', fk: 'guardians' },
-				{ name: 'tag_ids', type: 'uuid[]', note: '→ artifact_tags' },
-				{ name: 'template_id', type: 'uuid', fk: 'artifact_templates' }
-			]
-		},
-		{
-			id: 'artifact_tags',
-			name: 'artifact_tags',
-			color: '#6b7280',
-			category: 'Support',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'color', type: 'text' },
-				{ name: 'rank', type: 'integer' }
-			]
-		},
-		{
-			id: 'artifact_templates',
-			name: 'artifact_templates',
-			color: '#6b7280',
-			category: 'Support',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'config', type: 'jsonb' },
-				{ name: 'is_active', type: 'boolean' }
-			]
-		},
 		// Monsters & Combat
-		{
-			id: 'monsters',
-			name: 'monsters',
-			color: '#ef4444',
-			category: 'Combat',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'barrier', type: 'integer' },
-				{ name: 'damage', type: 'integer' },
-				{ name: 'state', type: 'text' },
-				{ name: 'invade_location_id', type: 'uuid', fk: 'game_locations' },
-				{ name: 'reward_icons', type: 'uuid[]', note: '→ icon_pool' },
-				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
-				{ name: 'trade_rows', type: 'jsonb', note: '→ icon_pool' },
-				{ name: 'gain_rows', type: 'jsonb', note: '→ icon_pool' }
-			]
-		},
-		{
-			id: 'travelers',
-			name: 'travelers',
-			color: '#f59e0b',
-			category: 'Combat',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'barrier', type: 'integer' },
-				{ name: 'damage', type: 'integer' },
-				{ name: 'state', type: 'text' },
-				{ name: 'invade_location_id', type: 'uuid', fk: 'game_locations' },
-				{ name: 'reward_icons', type: 'uuid[]', note: '→ icon_pool' },
-				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' }
-			]
-		},
 		{
 			id: 'special_effects',
 			name: 'special_effects',
@@ -176,30 +104,6 @@
 				{ name: 'description', type: 'text' },
 				{ name: 'icon', type: 'text' },
 				{ name: 'color', type: 'text' }
-			]
-		},
-		{
-			id: 'monster_special_effects',
-			name: 'monster_special_effects',
-			color: '#a855f7',
-			category: 'Combat',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'monster_id', type: 'uuid', fk: 'monsters' },
-				{ name: 'special_effect_id', type: 'uuid', fk: 'special_effects' },
-				{ name: 'position', type: 'integer' }
-			]
-		},
-		{
-			id: 'traveler_special_effects',
-			name: 'traveler_special_effects',
-			color: '#a855f7',
-			category: 'Combat',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'traveler_id', type: 'uuid', fk: 'travelers' },
-				{ name: 'special_effect_id', type: 'uuid', fk: 'special_effects' },
-				{ name: 'position', type: 'integer' }
 			]
 		},
 		// Scenarios (unified deck)
@@ -227,13 +131,12 @@
 			columns: [
 				{ name: 'id', type: 'uuid', pk: true },
 				{ name: 'scenario_id', type: 'uuid', fk: 'scenarios' },
-				{ name: 'kind', type: 'text', note: 'monster|location|traveler|event' },
+				{ name: 'kind', type: 'text', note: 'monster|location|event' },
 				{ name: 'order_num', type: 'integer' },
 				{ name: 'quantity', type: 'integer', note: 'monster only' },
-				{ name: 'entry_stage', type: 'text', note: 'location/traveler only' },
+				{ name: 'entry_stage', type: 'text', note: 'location only' },
 				{ name: 'monster_id', type: 'uuid', fk: 'monsters' },
 				{ name: 'game_location_id', type: 'uuid', fk: 'game_locations' },
-				{ name: 'traveler_id', type: 'uuid', fk: 'travelers' },
 				{ name: 'event_id', type: 'uuid', fk: 'event_cards' },
 				{ name: 'data', type: 'jsonb' }
 			]
@@ -249,29 +152,11 @@
 				{ name: 'stage', type: 'text', note: 'stage_1..endgame' },
 				{ name: 'title', type: 'text' },
 				{ name: 'description', type: 'text' },
-				{ name: 'stage_completion', type: 'text' },
 				{ name: 'reward_rows', type: 'jsonb', note: '→ icon_pool' },
 				{ name: 'image_path', type: 'text' },
 				{ name: 'card_image_path', type: 'text' },
 				{ name: 'data', type: 'jsonb' },
 				{ name: 'order_num', type: 'integer' }
-			]
-		},
-		{
-			id: 'missions',
-			name: 'missions',
-			color: '#06b6d4',
-			category: 'Core',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'title', type: 'text' },
-				{ name: 'description', type: 'text' },
-				{ name: 'reward_text', type: 'text' },
-				{ name: 'reward_icon_ids', type: 'jsonb', note: '→ icon_pool' },
-				{ name: 'tags', type: 'text[]' },
-				{ name: 'order_num', type: 'integer' },
-				{ name: 'quantity', type: 'integer' },
-				{ name: 'card_image_path', type: 'text' }
 			]
 		},
 		// Legacy (pre-unified scenarios)
@@ -287,12 +172,10 @@
 				{ name: 'stage', type: 'text', note: 'stage_1..endgame' },
 				{ name: 'title', type: 'text' },
 				{ name: 'description', type: 'text' },
-				{ name: 'stage_completion', type: 'text', note: 'event only' },
 				{ name: 'reward_rows', type: 'jsonb', note: 'event only → icon_pool' },
 				{ name: 'image_path', type: 'text' },
 				{ name: 'card_image_path', type: 'text' },
 				{ name: 'game_location_id', type: 'uuid', fk: 'game_locations', note: 'stage_location only' },
-				{ name: 'traveler_id', type: 'uuid', fk: 'travelers', note: 'traveler only' },
 				{ name: 'data', type: 'jsonb' },
 				{ name: 'order_num', type: 'integer' }
 			]
@@ -393,19 +276,6 @@
 			]
 		},
 		{
-			id: 'special_categories',
-			name: 'special_categories',
-			color: '#22c55e',
-			category: 'Config',
-			columns: [
-				{ name: 'id', type: 'uuid', pk: true },
-				{ name: 'name', type: 'text' },
-				{ name: 'slot_1_class_ids', type: 'uuid[]', note: '→ classes' },
-				{ name: 'slot_2_class_ids', type: 'uuid[]', note: '→ classes' },
-				{ name: 'slot_3_class_ids', type: 'uuid[]', note: '→ classes' }
-			]
-		},
-		{
 			id: 'rarity_traits',
 			name: 'rarity_traits',
 			color: '#22c55e',
@@ -446,22 +316,11 @@
 		// Direct FK relationships
 		{ source: 'guardians', target: 'origins', type: 'fk', label: 'origin_id' },
 		{ source: 'game_locations', target: 'origins', type: 'fk', label: 'origin_id' },
-		{ source: 'runes', target: 'origins', type: 'fk', label: 'origin_id' },
-		{ source: 'runes', target: 'classes', type: 'fk', label: 'class_id' },
-		{ source: 'artifacts', target: 'guardians', type: 'fk', label: 'guardian_id' },
-		{ source: 'artifacts', target: 'artifact_templates', type: 'fk', label: 'template_id' },
+		{ source: 'mat_items', target: 'origins', type: 'fk', label: 'origin_id' },
 		{ source: 'dice_sides', target: 'custom_dice', type: 'fk', label: 'dice_id' },
-		{ source: 'monsters', target: 'game_locations', type: 'fk', label: 'invade_location_id' },
-		{ source: 'travelers', target: 'game_locations', type: 'fk', label: 'invade_location_id' },
-		{ source: 'monster_special_effects', target: 'monsters', type: 'fk', label: 'monster_id' },
-		{ source: 'monster_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
-		{ source: 'traveler_special_effects', target: 'travelers', type: 'fk', label: 'traveler_id' },
-		{ source: 'traveler_special_effects', target: 'special_effects', type: 'fk', label: 'special_effect_id' },
 		{ source: 'scenarios', target: 'editions', type: 'fk', label: 'edition_id' },
 		{ source: 'scenario_deck_entries', target: 'scenarios', type: 'fk', label: 'scenario_id' },
-		{ source: 'scenario_deck_entries', target: 'monsters', type: 'fk', label: 'monster_id' },
 		{ source: 'scenario_deck_entries', target: 'game_locations', type: 'fk', label: 'game_location_id' },
-		{ source: 'scenario_deck_entries', target: 'travelers', type: 'fk', label: 'traveler_id' },
 		{ source: 'scenario_deck_entries', target: 'event_cards', type: 'fk', label: 'event_id' },
 		{ source: 'stage_cards', target: 'game_locations', type: 'fk', label: 'game_location_id' },
 		{ source: 'scenario_cards', target: 'scenarios', type: 'fk', label: 'scenario_id' },
@@ -470,20 +329,11 @@
 		// JSON/Array references
 		{ source: 'hex_spirits', target: 'classes', type: 'json', label: 'traits.class_ids' },
 		{ source: 'hex_spirits', target: 'origins', type: 'json', label: 'traits.origin_ids' },
-		{ source: 'hex_spirits', target: 'runes', type: 'array', label: 'rune_cost' },
-		{ source: 'artifacts', target: 'runes', type: 'json', label: 'recipe_box' },
-		{ source: 'artifacts', target: 'artifact_tags', type: 'array', label: 'tag_ids' },
-		{ source: 'monsters', target: 'icon_pool', type: 'array', label: 'reward_icons' },
-		{ source: 'monsters', target: 'icon_pool', type: 'json', label: 'reward_rows' },
-		{ source: 'travelers', target: 'icon_pool', type: 'array', label: 'reward_icons' },
-		{ source: 'travelers', target: 'icon_pool', type: 'json', label: 'reward_rows' },
-		{ source: 'game_locations', target: 'icon_pool', type: 'json', label: 'reward_rows' },
-		{ source: 'editions', target: 'origins', type: 'array', label: 'origin_ids' },
-		{ source: 'special_categories', target: 'classes', type: 'array', label: 'slot_*_class_ids' },
-		{ source: 'origins', target: 'hex_spirits', type: 'json', label: 'calling_card' },
+		{ source: 'hex_spirits', target: 'mat_items', type: 'json', label: 'awaken_condition.rune_ids' },
+			{ source: 'editions', target: 'origins', type: 'array', label: 'origin_ids' },
+{ source: 'origins', target: 'hex_spirits', type: 'json', label: 'calling_card' },
 		{ source: 'icon_pool', target: 'origins', type: 'poly', label: 'source_id (origin)' },
 		{ source: 'icon_pool', target: 'classes', type: 'poly', label: 'source_id (class)' },
-		{ source: 'scenario_cards', target: 'monsters', type: 'poly', label: 'card_id (monster)' },
 		{ source: 'scenario_cards', target: 'stage_cards', type: 'poly', label: 'card_id (stage_card)' }
 		];
 
@@ -810,7 +660,7 @@
 	<div class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
 		<div>
 			<h1 class="text-xl font-bold text-white">Database Schema Visualizer</h1>
-			<p class="text-sm text-gray-400">arc-spirits-rev2 schema • {tables.length} tables • {relationships.length} relationships</p>
+			<p class="text-sm text-gray-400">arc_spirits_assets schema • {tables.length} tables • {relationships.length} relationships</p>
 		</div>
 
 		<div class="flex items-center gap-4">

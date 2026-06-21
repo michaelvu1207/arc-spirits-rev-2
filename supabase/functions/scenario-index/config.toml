@@ -1,0 +1,3 @@
+[functions.scenario-index]
+verify_jwt = false
+

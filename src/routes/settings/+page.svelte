@@ -8,14 +8,193 @@
 	} from '$lib/settings/eventCardBackground';
 	import { EventCardPreview, type Event } from '$lib/components/abyss-deck';
 	import { ImageUploader } from '$lib/components/shared';
+	import { supabase } from '$lib/api/supabaseClient';
+
+	// --- TTS asset compression ---
+	// Discovery (which paths to compress) happens in the browser to keep the
+	// edge function lean — earlier the function did discovery itself and OOMed
+	// on cold start (export JSON parse + supabase-js + imagescript WASM all
+	// resident at once → WORKER_RESOURCE_LIMIT). The function now only accepts
+	// an explicit `paths` array; we chunk the work into small requests.
+	type CompressBatchResponse = {
+		total: number;
+		processed: number;
+		remaining: number;
+		errors: Array<{ source_url: string; source_path: string; error: string }>;
+		byCategory: Record<string, { processed: number; bytes: number }>;
+		durationMs: number;
+	};
+	const COMPRESS_CHUNK_SIZE = 10;
+	const SOURCE_BUCKET = 'game_assets';
+	const PROJECT_REF = 'gvxfokbptelmvvlxbigh';
+	const SUPABASE_HOST = `https://${PROJECT_REF}.supabase.co`;
+	let compressBusy = $state(false);
+	let compressLog = $state<string[]>([]);
+	let compressProgress = $state<{ done: number; total: number; errors: number } | null>(null);
+
+	function logCompress(msg: string) {
+		const stamp = new Date().toLocaleTimeString();
+		compressLog = [...compressLog, `[${stamp}] ${msg}`].slice(-100);
+	}
+
+	const URL_RE = /https?:\/\/[^\s"'<>)\\]+/g;
+	const SOURCE_URL_RE = new RegExp(
+		`https?://[a-z0-9-]+\\.supabase\\.co/storage/v1/(?:object|render/image)/public/${SOURCE_BUCKET}/([^?\\s"'<>]+)`,
+		'i'
+	);
+
+	function* walkStrings(o: unknown): Generator<string> {
+		if (o == null) return;
+		if (typeof o === 'string') {
+			yield o;
+			return;
+		}
+		if (Array.isArray(o)) {
+			for (const v of o) yield* walkStrings(v);
+			return;
+		}
+		if (typeof o === 'object') {
+			for (const v of Object.values(o as Record<string, unknown>)) yield* walkStrings(v);
+		}
+	}
+
+	async function discoverAllSourcePaths(): Promise<string[]> {
+		const url = `${SUPABASE_HOST}/functions/v1/export-all-tts-json`;
+		const res = await fetch(url, {
+			headers: {
+				apikey: import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY ?? ''
+			}
+		});
+		if (!res.ok) throw new Error(`export-all-tts-json: HTTP ${res.status}`);
+		const data = await res.json();
+		const paths = new Set<string>();
+		for (const s of walkStrings(data)) {
+			const matches = s.match(URL_RE);
+			if (!matches) continue;
+			for (const u of matches) {
+				const cleaned = u.replace(/[",\\;]+$/, '');
+				const m = cleaned.match(SOURCE_URL_RE);
+				if (m) paths.add(decodeURIComponent(m[1]).split('?')[0]);
+			}
+		}
+		return [...paths];
+	}
+
+	async function fetchExistingPaths(): Promise<Set<string>> {
+		const out = new Set<string>();
+		const PAGE = 1000;
+		let from = 0;
+		while (true) {
+			const { data, error } = await supabase
+				.from('asset_compressed')
+				.select('source_path')
+				.range(from, from + PAGE - 1);
+			if (error) throw new Error(`asset_compressed select: ${error.message}`);
+			for (const r of data ?? []) {
+				if (r.source_path) out.add(r.source_path);
+			}
+			if (!data || data.length < PAGE) break;
+			from += PAGE;
+		}
+		return out;
+	}
+
+	async function callCompress(paths: string[]): Promise<CompressBatchResponse> {
+		const { data, error } = await supabase.functions.invoke<CompressBatchResponse>(
+			'compress-pending-assets',
+			{ body: { paths } }
+		);
+		if (error) throw new Error(error.message);
+		if (!data) throw new Error('No response from compress-pending-assets');
+		return data;
+	}
+
+	// Asks the edge function for paths whose source bytes have been updated
+	// since the last compression (drift detection). The button counts these
+	// as pending so re-uploads (e.g. a new spirit world image at the same
+	// storage path) get picked up automatically.
+	async function fetchStalePaths(): Promise<string[]> {
+		const { data, error } = await supabase.functions.invoke<{ stale: string[] }>(
+			'compress-pending-assets',
+			{ body: { mode: 'list_stale' } }
+		);
+		if (error) throw new Error(`list_stale: ${error.message}`);
+		return data?.stale ?? [];
+	}
+
+	async function runCompression(force = false) {
+		if (compressBusy) return;
+		compressBusy = true;
+		compressLog = [];
+		compressProgress = null;
+		logCompress(force ? 'Force-recompressing all assets…' : 'Compressing pending assets…');
+
+		try {
+			const allPaths = await discoverAllSourcePaths();
+			logCompress(`Discovered ${allPaths.length} source assets in game_assets/`);
+
+			let pending: string[];
+			if (force) {
+				pending = allPaths;
+			} else {
+				const [existing, stale] = await Promise.all([
+					fetchExistingPaths(),
+					fetchStalePaths()
+				]);
+				const newPaths = allPaths.filter((p) => !existing.has(p));
+				const merged = new Set([...newPaths, ...stale]);
+				pending = [...merged];
+				logCompress(
+					`Already compressed: ${existing.size}, new: ${newPaths.length}, stale (re-uploaded): ${stale.length}, total pending: ${pending.length}`
+				);
+			}
+
+			if (pending.length === 0) {
+				logCompress('Nothing to do — everything is up to date.');
+				compressProgress = { done: 0, total: 0, errors: 0 };
+				return;
+			}
+
+			compressProgress = { done: 0, total: pending.length, errors: 0 };
+
+			let done = 0;
+			let errors = 0;
+			for (let i = 0; i < pending.length; i += COMPRESS_CHUNK_SIZE) {
+				const chunk = pending.slice(i, i + COMPRESS_CHUNK_SIZE);
+				const res = await callCompress(chunk);
+				done += res.processed;
+				errors += res.errors.length;
+				compressProgress = { done, total: pending.length, errors };
+				logCompress(
+					`chunk ${Math.floor(i / COMPRESS_CHUNK_SIZE) + 1}: ${res.processed}/${chunk.length} ok, ${res.errors.length} err, ${res.durationMs} ms`
+				);
+				for (const err of res.errors.slice(0, 3)) {
+					logCompress(`  ✗ ${err.source_path}: ${err.error}`);
+				}
+			}
+			logCompress(`Done. Processed ${done}/${pending.length}, errors ${errors}.`);
+		} catch (e) {
+			logCompress(`✗ ${(e as Error).message}`);
+		} finally {
+			compressBusy = false;
+		}
+	}
+
+	function confirmForceRecompress() {
+		if (
+			confirm(
+				'Force-recompress every asset (~430 files)?\n\nThis re-encodes everything from source, takes a few minutes, and overwrites the compressed bucket. Use only when presets have changed.'
+			)
+		) {
+			runCompression(true);
+		}
+	}
 
 	let colors: RarityColors = {
 		Rare: '#60a5fa',
 		Epic: '#a78bfa',
 		Legendary: '#fbbf24'
 	};
-
-	let previewRarity: Rarity = 'Rare';
 
 	const rarities: Rarity[] = ['Rare', 'Epic', 'Legendary'];
 
@@ -31,18 +210,16 @@
 		title: 'Veil of Shadows',
 		description:
 			'Darkness descends as the boundary between realms weakens. Hidden truths emerge from the depths.',
-		stage_completion: null,
 		image_path: null,
 		card_image_path: null,
 		reward_rows: [],
 		order_num: 7,
 		created_at: null,
-		updated_at: null,
-		data: {},
-		game_location_id: null,
-		traveler_id: null,
-		art_url: null
-	};
+			updated_at: null,
+			data: {},
+			game_location_id: null,
+			art_url: null
+		};
 
 	onMount(() => {
 		const unsubscribe = rarityColors.subscribe((value) => {
@@ -86,10 +263,6 @@ function hexToRgba(hex: string, alpha = 0.25) {
 function getRarityColor(rarity: Rarity) {
 	return colors[rarity] || '#60a5fa';
 }
-
-$: previewColor = getRarityColor(previewRarity);
-$: previewGlow = hexToRgba(previewColor, 0.25);
-$: previewBackground = hexToRgba(previewColor, 0.15);
 
 	function setEventBgMode(mode: EventCardBackgroundSettings['mode']) {
 		eventCardBackground.update((current) => ({ ...current, mode }));
@@ -156,6 +329,45 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 	</header>
 
 	<div class="settings-content">
+		<section class="settings-section">
+			<h2>TTS Asset Compression</h2>
+			<p class="section-description">
+				Re-encodes assets from <code>game_assets</code> into <code>game_assets_compressed</code>
+				with per-category presets (JPEG for cards, PNG with alpha for tokens). The TTS mod
+				serves the compressed mirror when its <code>useCompressedAssets</code> flag is on
+				(~793 MB → ~31 MB total payload). Run this after generating new art so the new
+				assets are ready for TTS.
+			</p>
+
+			<div class="settings-actions">
+				<button class="btn" onclick={() => runCompression(false)} disabled={compressBusy}>
+					{compressBusy ? 'Working…' : 'Compress new assets'}
+				</button>
+				<button
+					class="btn btn-danger"
+					onclick={confirmForceRecompress}
+					disabled={compressBusy}
+					title="Re-encodes every asset from source, even ones already in the compressed bucket. Use after changing presets."
+				>
+					Force recompress all
+				</button>
+			</div>
+
+			{#if compressProgress}
+				<div class="compress-stats">
+					<span><strong>Progress:</strong> {compressProgress.done} / {compressProgress.total}</span>
+					<span><strong>Errors:</strong> {compressProgress.errors}</span>
+					{#if compressProgress.total > 0}
+						<span><strong>{Math.round((compressProgress.done / compressProgress.total) * 100)}%</strong></span>
+					{/if}
+				</div>
+			{/if}
+
+			{#if compressLog.length > 0}
+				<pre class="compress-log">{compressLog.join('\n')}</pre>
+			{/if}
+		</section>
+
 		<section class="settings-section">
 			<h2>Rarity Colors</h2>
 			<p class="section-description">
@@ -331,52 +543,6 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 			</div>
 		</section>
 
-		<section class="settings-section">
-			<h2>Preview</h2>
-			<p class="section-description">See how cards look with your color choices.</p>
-
-			<div class="preview-controls">
-				<label>
-					Preview Rarity:
-					<select bind:value={previewRarity}>
-						<option value="Rare">Rare</option>
-						<option value="Epic">Epic</option>
-						<option value="Legendary">Legendary</option>
-					</select>
-				</label>
-			</div>
-
-			<div class="preview-grid">
-				<article
-					class="card artifact-card preview-card"
-					style:--rarity-color={previewColor}
-					style:--rarity-border={previewColor}
-					style:--rarity-glow={previewGlow}
-					style:--rarity-background={previewBackground}
-				>
-					<header>
-						<div>
-							<h2>Sample Artifact</h2>
-							<small>Origin Name</small>
-						</div>
-					</header>
-					<div class="artifact-card__body">
-						<p class="benefit">
-							This is a preview of how an artifact card will look with the {previewRarity} rarity color
-							scheme. The border and accents will use your selected color.
-						</p>
-						<div class="recipe-icons">
-							<div class="rune-icon-container" title="Sample Rune">
-								<div class="rune-icon-placeholder">🔮</div>
-							</div>
-							<div class="rune-icon-container" title="Sample Rune">
-								<div class="rune-icon-placeholder">🔮</div>
-							</div>
-						</div>
-					</div>
-				</article>
-			</div>
-		</section>
 	</div>
 </section>
 
@@ -455,6 +621,55 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 		gap: 0.75rem;
 		padding-top: 1rem;
 		border-top: 1px solid rgba(148, 163, 184, 0.18);
+		flex-wrap: wrap;
+	}
+
+	.btn-danger {
+		background: rgba(220, 38, 38, 0.15);
+		border-color: rgba(248, 113, 113, 0.4);
+		color: #fca5a5;
+	}
+	.btn-danger:hover {
+		background: rgba(220, 38, 38, 0.25);
+	}
+	.btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.compress-stats {
+		display: flex;
+		gap: 1.25rem;
+		flex-wrap: wrap;
+		margin-top: 1rem;
+		padding: 0.75rem 1rem;
+		background: rgba(15, 23, 42, 0.6);
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		border-radius: 6px;
+		color: #cbd5f5;
+		font-size: 0.9rem;
+	}
+
+	.compress-log {
+		margin-top: 1rem;
+		max-height: 220px;
+		overflow-y: auto;
+		padding: 0.75rem 1rem;
+		background: rgba(2, 6, 23, 0.85);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		border-radius: 6px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.78rem;
+		color: #cbd5f5;
+		white-space: pre-wrap;
+	}
+
+	code {
+		background: rgba(15, 23, 42, 0.6);
+		padding: 0.1rem 0.35rem;
+		border-radius: 4px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.85em;
 	}
 
 	.event-bg-controls {
@@ -537,78 +752,5 @@ $: previewBackground = hexToRgba(previewColor, 0.15);
 		display: flex;
 		justify-content: center;
 		padding-top: 0.5rem;
-	}
-
-	.preview-controls {
-		margin-bottom: 1.5rem;
-	}
-
-	.preview-controls label {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		color: #cbd5f5;
-	}
-
-	.preview-controls select {
-		padding: 0.4rem 0.7rem;
-	}
-
-	.preview-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-		gap: 1rem;
-	}
-
-	.preview-card {
-		border: 1px solid rgba(148, 163, 184, 0.18) !important;
-		border-left: 4px solid var(--rarity-color, #60a5fa) !important;
-		box-shadow: 0 0 20px var(--rarity-glow, rgba(96, 165, 250, 0.25)) !important;
-		transition: box-shadow 0.3s ease, border-left-color 0.3s ease;
-	}
-
-	.preview-card:hover {
-		box-shadow: 0 0 30px var(--rarity-glow, rgba(96, 165, 250, 0.4)) !important;
-	}
-
-	.rune-icon-placeholder {
-		width: 32px;
-		height: 32px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 1.5rem;
-		background: rgba(148, 163, 184, 0.1);
-		border-radius: 6px;
-	}
-
-	.artifact-card__body {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		justify-content: space-between;
-		margin-top: 0.5rem;
-	}
-
-	.benefit {
-		margin: 0;
-		color: #cbd5f5;
-		white-space: pre-wrap;
-		flex: 1;
-	}
-
-	.recipe-icons {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin-top: auto;
-		justify-content: flex-end;
-		align-items: center;
-		padding-top: 0.5rem;
-	}
-
-	.rune-icon-container {
-		position: relative;
-		display: inline-block;
 	}
 </style>

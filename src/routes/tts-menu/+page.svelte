@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui';
 	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { processAndUploadImage } from '$lib/utils/storage';
+	import { fetchOriginRecords } from '$lib/features/origins/origins';
 	import type { GuardianRow, OriginRow } from '$lib/types/gameData';
 
 	const storage = supabase.storage.from('game_assets');
@@ -74,14 +75,13 @@
 			// Fetch guardians and origins
 			const [guardiansRes, originsRes] = await Promise.all([
 				supabase.from('guardians').select('*').order('name'),
-				supabase.from('origins').select('*').order('position')
+				fetchOriginRecords()
 			]);
 
 			if (guardiansRes.error) throw guardiansRes.error;
-			if (originsRes.error) throw originsRes.error;
 
 			guardians = guardiansRes.data ?? [];
-			origins = originsRes.data ?? [];
+			origins = originsRes.filter((origin) => origin.is_enabled !== false);
 
 			// Check for existing background image
 			const bgExists = await checkFileExists(BACKGROUND_PATH);

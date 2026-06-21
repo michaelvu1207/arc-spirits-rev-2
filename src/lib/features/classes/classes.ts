@@ -1,5 +1,5 @@
 import { supabase, type Rev2Client } from '$lib/api/supabaseClient';
-import type { ClassRow, Json } from '$lib/types/gameData';
+import type { ClassRow, ClassType, Json } from '$lib/types/gameData';
 import type {
 	BackupTrimEffect,
 	BenefitEffect,
@@ -30,6 +30,8 @@ export interface ClassFormData {
 	tags: string[];
 	prismatic: PrismaticForm | null;
 	effect_schema: EffectBreakpoint[];
+	class_type: ClassType;
+	is_special: boolean;
 }
 
 const DEFAULT_ICON_EMOJI = '🛡️';
@@ -49,9 +51,11 @@ export function emptyClassForm(position = 1): ClassFormData {
 		color: DEFAULT_COLOR,
 		description: '',
 		footer: '',
-		tags: [],
-		prismatic: null,
-		effect_schema: []
+			tags: [],
+			prismatic: null,
+			effect_schema: [],
+			class_type: 'normal',
+			is_special: false
 	};
 }
 
@@ -67,7 +71,9 @@ export function classRowToForm(row: ClassRow): ClassFormData {
 		footer: row.footer ?? '',
 		tags: Array.isArray(row.tags) ? [...row.tags] : [],
 		prismatic: parsePrismaticJson(row.prismatic),
-		effect_schema: parseEffectSchema(row.effect_schema)
+		effect_schema: parseEffectSchema(row.effect_schema),
+		class_type: getClassType(row),
+		is_special: row.is_special ?? false
 	};
 }
 
@@ -92,10 +98,12 @@ export async function saveClassRecord(
 		color: sanitized.color ?? null,
 		description: sanitized.description ?? null,
 		footer: sanitized.footer ?? null,
-		tags: sanitized.tags, // send empty array instead of null to satisfy array columns
-		effect_schema: sanitized.effect_schema, // always array for jsonb column
-		updated_at: new Date().toISOString()
-	};
+			tags: sanitized.tags, // send empty array instead of null to satisfy array columns
+			effect_schema: sanitized.effect_schema, // always array for jsonb column
+			class_type: sanitized.class_type,
+			is_special: sanitized.class_type === 'special',
+			updated_at: new Date().toISOString()
+		};
 	// Only send prismatic if the column exists (omitted to avoid 400 on current schema)
 
 	if (classId) {
@@ -298,10 +306,19 @@ function sanitizeClassForm(form: ClassFormData): ClassFormData {
 		color,
 		description: description ?? '',
 		footer: footer ?? '',
-		tags,
-		prismatic,
-		effect_schema
-	});
+			tags,
+			prismatic,
+			effect_schema,
+			class_type: form.class_type,
+			is_special: form.class_type === 'special'
+		});
+	}
+
+function getClassType(row: ClassRow): ClassType {
+	if (row.class_type === 'normal' || row.class_type === 'special' || row.class_type === 'human') {
+		return row.class_type;
+	}
+	return row.is_special ? 'special' : 'normal';
 }
 
 function sanitizeMultiline(value: string): string | null {

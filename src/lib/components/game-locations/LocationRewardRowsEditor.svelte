@@ -18,14 +18,14 @@
 		maxIconsPerList = 5
 	}: Props = $props();
 	
-	const MAX_REWARD_ROWS = 3;
+	const MAX_REWARD_ROWS = 5;
 
 	let iconPoolLoaded = $state(false);
 	type PickingState =
 		| { rowIndex: number; list: 'gain' | 'cost'; mode: 'append' }
 		| { rowIndex: number; list: 'gain' | 'cost'; mode: 'edit'; tokenIndex: number };
 	let picking = $state<PickingState | null>(null);
-	const slotLimits = { gain: 6, trade_cost: 3, trade_gain: 6 };
+	const slotLimits = { gain: 6, trade_cost: 6, trade_gain: 6 };
 
 	onMount(() => {
 		void (async () => {
@@ -281,14 +281,14 @@
 												<span class="location-reward-rows__icon-placeholder">OR</span>
 											{:else}
 												<div class="location-reward-rows__or-group">
-													{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+													{#each token.icon_ids.slice(0, 4) as iconId, iconIdx (iconIdx)}
 														{@const url = getIconPoolUrl(iconId)}
 														{#if url}
 															<img src={url} alt="OR icon" />
 														{:else}
 															<span class="location-reward-rows__icon-placeholder">?</span>
 														{/if}
-														{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+														{#if iconIdx < Math.min(4, token.icon_ids.length) - 1}
 															<span class="location-reward-rows__or-slash">/</span>
 														{/if}
 													{/each}
@@ -376,14 +376,14 @@
 													<span class="location-reward-rows__icon-placeholder">OR</span>
 												{:else}
 													<div class="location-reward-rows__or-group">
-														{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+														{#each token.icon_ids.slice(0, 4) as iconId, iconIdx (iconIdx)}
 															{@const url = getIconPoolUrl(iconId)}
 															{#if url}
 																<img src={url} alt="OR icon" />
 															{:else}
 																<span class="location-reward-rows__icon-placeholder">?</span>
 															{/if}
-															{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+															{#if iconIdx < Math.min(4, token.icon_ids.length) - 1}
 																<span class="location-reward-rows__or-slash">/</span>
 															{/if}
 														{/each}
@@ -470,14 +470,14 @@
 													<span class="location-reward-rows__icon-placeholder">OR</span>
 												{:else}
 													<div class="location-reward-rows__or-group">
-														{#each token.icon_ids.slice(0, 2) as iconId, iconIdx (iconIdx)}
+														{#each token.icon_ids.slice(0, 4) as iconId, iconIdx (iconIdx)}
 															{@const url = getIconPoolUrl(iconId)}
 															{#if url}
 																<img src={url} alt="OR icon" />
 															{:else}
 																<span class="location-reward-rows__icon-placeholder">?</span>
 															{/if}
-															{#if iconIdx < Math.min(2, token.icon_ids.length) - 1}
+															{#if iconIdx < Math.min(4, token.icon_ids.length) - 1}
 																<span class="location-reward-rows__or-slash">/</span>
 															{/if}
 														{/each}
@@ -546,7 +546,7 @@
 						const usedElsewhere = rewardIconTokensSlotsUsed(otherTokens);
 						const budget = Math.max(0, maxFor(row, activePicking.list) - usedElsewhere);
 						const currentCost = rewardIconTokenSlotCost(activeToken);
-						const maxPossible = Math.min(2, Math.max(budget, currentCost));
+						const maxPossible = Math.min(4, Math.max(budget, currentCost));
 						return maxPossible;
 					})()}
 					{@const pickerMultiple = activePicking.mode === 'append' || (!!activeToken && isRewardOrIconToken(activeToken))}

@@ -1,19 +1,25 @@
-	<script lang="ts">
-		import { onMount } from 'svelte';
-		import { supabase } from '$lib/api/supabaseClient';
-		import type { GameLocationRewardRow, GameLocationRow, OriginRow } from '$lib/types/gameData';
-		import { getErrorMessage } from '$lib/utils';
-		import { loadAllIcons, getIconPoolUrl } from '$lib/utils/iconPool';
-		import { isRewardOrIconToken, normalizeRewardIconTokens, rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
-		import { PageLayout, Modal, type Tab } from '$lib/components/layout';
-		import { ConfirmDialog, DataGrid, FilterBar, ImageUploader } from '$lib/components/shared';
-		import { LocationRewardRowsEditor } from '$lib/components/game-locations';
-		import { Button, FormField, Input, Select } from '$lib/components/ui';
+		<script lang="ts">
+			import { onMount } from 'svelte';
+			import { supabase } from '$lib/api/supabaseClient';
+			import type { GameLocationRewardRow, GameLocationRow, GameLocationRowCompositionRow, RewardRowAssignment, OriginRow } from '$lib/types/gameData';
+			import { configToRewardRow } from '$lib/types/gameData';
+			import { generateFinalLocationCardFromLayout } from '$lib/generators/game-locations/locationCardIconPlacer';
+			import { getErrorMessage } from '$lib/utils';
+			import { loadAllIcons } from '$lib/utils/iconPool';
+			import { rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
+			import { publicAssetUrl } from '$lib/utils/storage';
+			import { fetchAll } from '$lib/services/dataService';
+			import { fetchOriginRecords } from '$lib/features/origins/origins';
+			import { PageLayout, Modal, type Tab } from '$lib/components/layout';
+			import { ConfirmDialog, DataGrid, FilterBar, ImageUploader, RewardRowPreview } from '$lib/components/shared';
+			import { LocationCardLayoutConfigurator } from '$lib/components/game-locations';
+			import { Button, FormField, Input, Select } from '$lib/components/ui';
 
-		const tabs: Tab[] = [
-			{ id: 'locations', label: 'Locations', icon: '📍' }
-		];
-		let activeTab = $state('locations');
+			const tabs: Tab[] = [
+				{ id: 'locations', label: 'Locations', icon: '📍' },
+				{ id: 'cards', label: 'Card Gallery', icon: '🖼️' }
+			];
+			let activeTab = $state('locations');
 
 		type OriginOption = Pick<OriginRow, 'id' | 'name'>;
 		type Location = GameLocationRow;
@@ -35,15 +41,37 @@
 		let formData = $state({
 			name: '',
 			origin_id: null as string | null,
-			background_image_path: null as string | null,
-			reward_rows: normalizeRewardRows([])
+			background_image_path: null as string | null
 		});
 
-	let showDeleteConfirm = $state(false);
-	let deleting = $state(false);
-	let deleteTarget = $state<Location | null>(null);
+		let showDeleteConfirm = $state(false);
+		let deleting = $state(false);
+		let deleteTarget = $state<Location | null>(null);
 
-		const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
+	let generatingLocationIds = $state(new Set<string>());
+
+	// Standalone reward rows + assignments
+	let rewardRowRecords = $state<GameLocationRowCompositionRow[]>([]);
+	let rewardRowAssignments = $state<RewardRowAssignment[]>([]);
+
+	/** Get resolved reward rows for a location from junction table. */
+	function getLocationRewardRows(locationId: string): GameLocationRewardRow[] {
+		const assigned = rewardRowAssignments
+			.filter((a) => a.location_id === locationId)
+			.sort((a, b) => a.row_index - b.row_index);
+
+		return assigned.map((a) => {
+			const row = rewardRowRecords.find((r) => r.id === a.row_id);
+			if (!row) return { type: 'gain', gain_icon_ids: [] } as GameLocationRewardRow;
+			return configToRewardRow(row.type, row.config);
+		});
+	}
+	let progressMessage = $state<string | null>(null);
+	let showLayoutConfigurator = $state(false);
+	let bulkGenerating = $state(false);
+	let bulkCancelRequested = $state(false);
+
+			const originNameById = $derived.by(() => new Map(origins.map((o) => [o.id, o.name])));
 
 	const filteredLocations = $derived.by(() => {
 		const term = searchQuery.trim().toLowerCase();
@@ -54,12 +82,28 @@
 		});
 		});
 
-		const subtitleText = $derived.by(() => `${filteredLocations.length} locations`);
+			const subtitleText = $derived.by(() => `${filteredLocations.length} locations`);
 
-		onMount(() => {
-			const params = new URLSearchParams(window.location.search);
-			const create = params.get('create');
-			const editId = params.get('edit');
+			function handleTabChange(tabId: string) {
+				activeTab = tabId;
+			}
+
+			function getLocationBackgroundUrl(location: Location): string | null {
+				return publicAssetUrl(location.background_image_path, { updatedAt: location.updated_at ?? 0 });
+			}
+
+			function getLocationCardImageUrl(location: Location): string | null {
+				return publicAssetUrl(location.image_with_icons_path, { updatedAt: location.updated_at ?? 0 });
+			}
+
+			function getRewardRowsHref(location: Location): string {
+				return `/reward-rows?location_id=${location.id}`;
+			}
+
+			onMount(() => {
+				const params = new URLSearchParams(window.location.search);
+				const create = params.get('create');
+				const editId = params.get('edit');
 
 			void loadData().finally(() => {
 				if (create === '1') {
@@ -100,7 +144,7 @@
 		error = null;
 		try {
 			await loadAllIcons();
-			await Promise.all([loadOrigins(), loadLocations()]);
+			await Promise.all([loadOrigins(), loadLocations(), loadRewardRowData()]);
 		} catch (err) {
 			error = getErrorMessage(err);
 		} finally {
@@ -108,68 +152,35 @@
 		}
 	}
 
-	async function loadOrigins() {
-		const { data, error: err } = await supabase.from('origins').select('id, name').order('name');
-		if (err) throw new Error(err.message);
-		origins = (data ?? []) as OriginOption[];
+	async function loadRewardRowData() {
+		const [rows, assignments] = await Promise.all([
+			fetchAll<GameLocationRowCompositionRow>('game_location_rows', '*'),
+			fetchAll<RewardRowAssignment>('reward_row_assignments', '*')
+		]);
+		rewardRowRecords = rows;
+		rewardRowAssignments = assignments;
 	}
 
-	function normalizeRewardRows(rows: any): GameLocationRewardRow[] {
-		if (!Array.isArray(rows)) return [];
-		return rows.map((row) => {
-			if (!row || typeof row !== 'object') {
-				return { type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow;
-			}
-
-			// Back-compat for earlier shape: { icon_ids: [...] }
-			if (Array.isArray((row as any).icon_ids)) {
-				return {
-					type: 'gain',
-					gain_icon_ids: normalizeRewardIconTokens((row as any).icon_ids)
-				} satisfies GameLocationRewardRow;
-			}
-
-			const rawType = (row as any).type;
-			if (rawType === 'text') {
-				return {
-					type: 'text',
-					text: typeof (row as any).text === 'string' ? (row as any).text : ''
-				} satisfies GameLocationRewardRow;
-			}
-
-			const type = rawType === 'trade' ? 'trade' : 'gain';
-			const gain_icon_ids = normalizeRewardIconTokens((row as any).gain_icon_ids);
-
-			if (type === 'trade') {
-				const cost_icon_ids = normalizeRewardIconTokens((row as any).cost_icon_ids);
-
-				return {
-					type: 'trade',
-					cost_icon_ids,
-					gain_icon_ids
-				} satisfies GameLocationRewardRow;
-			}
-
-			return { type: 'gain', gain_icon_ids } satisfies GameLocationRewardRow;
-		});
+	async function loadOrigins() {
+		const originRecords = await fetchOriginRecords();
+		origins = originRecords
+			.filter((origin) => origin.is_enabled !== false)
+			.filter((origin) => Boolean(origin.id) && Boolean(origin.name))
+			.map((origin) => ({ id: origin.id, name: origin.name }))
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 		async function loadLocations() {
 			const { data, error: err } = await supabase.from('game_locations').select('*').order('name');
 			if (err) throw new Error(err.message);
-
-		locations = (data ?? []).map((row: any) => ({
-			...row,
-			reward_rows: normalizeRewardRows(row.reward_rows)
-		})) as Location[];
+		locations = (data ?? []) as Location[];
 	}
 
 		function resetForm() {
 			formData = {
 				name: '',
 				origin_id: null,
-				background_image_path: null,
-				reward_rows: normalizeRewardRows([])
+				background_image_path: null
 			};
 			formError = null;
 			nameError = null;
@@ -186,8 +197,7 @@
 			formData = {
 				name: location.name,
 				origin_id: location.origin_id,
-				background_image_path: location.background_image_path ?? null,
-				reward_rows: normalizeRewardRows(location.reward_rows)
+				background_image_path: location.background_image_path ?? null
 			};
 			formError = null;
 			nameError = null;
@@ -207,8 +217,7 @@
 			const payload = {
 				name,
 				origin_id: formData.origin_id,
-				background_image_path: formData.background_image_path,
-				reward_rows: normalizeRewardRows(formData.reward_rows)
+				background_image_path: formData.background_image_path
 			};
 
 		saving = true;
@@ -265,20 +274,120 @@
 			deleteTarget = null;
 		}
 	}
-</script>
+
+	async function generateLocationCardInternal(location: Location, opts?: { label?: string }): Promise<boolean> {
+		if (generatingLocationIds.has(location.id)) return false;
+
+		const nextGenerating = new Set(generatingLocationIds);
+		nextGenerating.add(location.id);
+		generatingLocationIds = nextGenerating;
+
+		progressMessage = opts?.label ?? `Generating card for "${location.name}"...`;
+		try {
+			if (!location.background_image_path) throw new Error('Location is missing a base image.');
+			const { path: uploadedPath, updated_at: updatedAt } = await generateFinalLocationCardFromLayout(location, {
+				configKey: 'base',
+				rewardRows: getLocationRewardRows(location.id)
+			});
+
+			const idx = locations.findIndex((l) => l.id === location.id);
+			if (idx >= 0) {
+				const nextLocations = [...locations];
+				nextLocations[idx] = { ...nextLocations[idx], image_with_icons_path: uploadedPath, updated_at: updatedAt };
+				locations = nextLocations;
+			}
+			progressMessage = `✓ Generated card for "${location.name}"`;
+			return true;
+		} catch (err) {
+			progressMessage = `✗ Failed to generate card for "${location.name}": ${getErrorMessage(err)}`;
+			console.error('Failed to generate game location card:', err);
+			return false;
+		} finally {
+			const next = new Set(generatingLocationIds);
+			next.delete(location.id);
+			generatingLocationIds = next;
+		}
+	}
+
+	async function generateLocationCard(location: Location) {
+		await generateLocationCardInternal(location);
+	}
+
+	function requestCancelBulkGeneration() {
+		if (!bulkGenerating) return;
+		bulkCancelRequested = true;
+		progressMessage = 'Cancelling after current card…';
+	}
+
+	async function generateAllFilteredLocationCards() {
+		if (bulkGenerating) return;
+
+		const targets = filteredLocations.filter((loc) => !!loc.background_image_path);
+		if (targets.length === 0) {
+			alert('No locations with background images in the current filter.');
+			return;
+		}
+
+		if (targets.length > 25) {
+			const ok = confirm(`Generate ${targets.length} location cards? This will overwrite existing PNGs.`);
+			if (!ok) return;
+		}
+
+		bulkGenerating = true;
+		bulkCancelRequested = false;
+
+		let okCount = 0;
+		let failCount = 0;
+
+		try {
+			for (let i = 0; i < targets.length; i++) {
+				if (bulkCancelRequested) break;
+				const loc = targets[i]!;
+				const label = `Generating (${i + 1}/${targets.length}) "${loc.name}"…`;
+				const ok = await generateLocationCardInternal(loc, { label });
+				if (ok) okCount++;
+				else failCount++;
+			}
+
+			if (bulkCancelRequested) {
+				progressMessage = `⏹ Cancelled: generated ${okCount}/${targets.length} cards (${failCount} failed).`;
+			} else if (failCount > 0) {
+				progressMessage = `✓ Generated ${okCount}/${targets.length} cards (${failCount} failed).`;
+			} else {
+				progressMessage = `✓ Generated ${okCount}/${targets.length} cards.`;
+			}
+		} finally {
+			bulkGenerating = false;
+			bulkCancelRequested = false;
+		}
+	}
+	</script>
 
 <PageLayout
 		title="Game Locations"
 		subtitle={subtitleText}
 		{tabs}
 		{activeTab}
+		onTabChange={handleTabChange}
 	>
 		{#snippet headerActions()}
 			<Button variant="primary" onclick={openCreate}>+ Location</Button>
+			<Button variant="secondary" onclick={() => (showLayoutConfigurator = true)}>Layout Template</Button>
+			{#if activeTab === 'cards'}
+				<Button variant="secondary" onclick={generateAllFilteredLocationCards} loading={bulkGenerating} disabled={bulkGenerating}>
+					Generate All (Filtered)
+				</Button>
+				{#if bulkGenerating}
+					<Button variant="danger" onclick={requestCancelBulkGeneration}>Cancel</Button>
+				{/if}
+			{/if}
 		{/snippet}
 		{#snippet children()}
 			{#if error}
 				<div class="banner banner--error">{error}</div>
+			{/if}
+			{#if progressMessage}
+				<div class="banner" class:banner--error={progressMessage.startsWith('✗')}>{progressMessage}</div>
 			{/if}
 
 		<FilterBar
@@ -295,16 +404,16 @@
 			onfilterchange={(key, value) => {
 				if (key === 'origin_id') originFilter = value ? String(value) : 'all';
 			}}
-		/>
+			/>
 
-			{#if loading}
-				<div class="placeholder">
-					<p>Loading…</p>
-				</div>
-				{:else}
+				{#if loading}
+					<div class="placeholder">
+						<p>Loading…</p>
+					</div>
+				{:else if activeTab === 'locations'}
 					<DataGrid items={filteredLocations} columns={3} emptyIcon="📍" emptyMessage="No locations yet">
 							{#snippet item({ item })}
-								{@const displayRows = (item.reward_rows ?? []).filter(hasRewardContent)}
+								{@const displayRows = getLocationRewardRows(item.id).filter(hasRewardContent)}
 								<div class="location-card">
 									<header class="location-card__header">
 										<div class="location-card__title">
@@ -318,6 +427,7 @@
 											</p>
 								</div>
 								<div class="location-card__actions">
+									<a class="location-card__link" href={getRewardRowsHref(item)} data-sveltekit-preload-data>Rows</a>
 									<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
 									<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
 								</div>
@@ -328,133 +438,67 @@
 								<p class="location-card__empty-rewards">No rewards set</p>
 							{:else}
 								{#each displayRows as row, idx (idx)}
-									<div
-										class="reward-row"
-										class:reward-row--trade={row.type === 'trade'}
-										class:reward-row--text={row.type === 'text'}
-									>
-										<span class="reward-row__label">
-											{row.type === 'trade' ? 'Trade' : row.type === 'text' ? 'Text' : 'Gain Reward'}
-										</span>
-
-											{#if row.type === 'trade'}
-												<div class="reward-row__trade">
-													<div class="reward-row__icons">
-														{#each row.cost_icon_ids as token, iconIdx (iconIdx)}
-															<div class="reward-row__icon">
-																{#if typeof token === 'string'}
-																	{@const url = getIconPoolUrl(token)}
-																	{#if url}
-																		<img src={url} alt="Cost icon" />
-																	{:else}
-																		<span class="reward-row__icon-placeholder">?</span>
-																	{/if}
-																{:else if isRewardOrIconToken(token)}
-																	{#if token.icon_ids.length === 0}
-																		<span class="reward-row__icon-placeholder">OR</span>
-																	{:else}
-																		<div class="reward-row__or-group">
-																			{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
-																				{@const url = getIconPoolUrl(iconId)}
-																				{#if url}
-																					<img src={url} alt="OR icon" />
-																				{:else}
-																					<span class="reward-row__icon-placeholder">?</span>
-																				{/if}
-																				{#if j < Math.min(2, token.icon_ids.length) - 1}
-																					<span class="reward-row__or-slash">/</span>
-																				{/if}
-																			{/each}
-																		</div>
-																	{/if}
-																{/if}
-															</div>
-														{/each}
-													</div>
-													<span class="reward-row__arrow">→</span>
-													<div class="reward-row__icons">
-														{#each row.gain_icon_ids as token, iconIdx (iconIdx)}
-															<div class="reward-row__icon">
-																{#if typeof token === 'string'}
-																	{@const url = getIconPoolUrl(token)}
-																	{#if url}
-																		<img src={url} alt="Gain icon" />
-																	{:else}
-																		<span class="reward-row__icon-placeholder">?</span>
-																	{/if}
-																{:else if isRewardOrIconToken(token)}
-																	{#if token.icon_ids.length === 0}
-																		<span class="reward-row__icon-placeholder">OR</span>
-																	{:else}
-																		<div class="reward-row__or-group">
-																			{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
-																				{@const url = getIconPoolUrl(iconId)}
-																				{#if url}
-																					<img src={url} alt="OR icon" />
-																				{:else}
-																					<span class="reward-row__icon-placeholder">?</span>
-																				{/if}
-																				{#if j < Math.min(2, token.icon_ids.length) - 1}
-																					<span class="reward-row__or-slash">/</span>
-																				{/if}
-																			{/each}
-																		</div>
-																	{/if}
-																{/if}
-															</div>
-														{/each}
-													</div>
-												</div>
-											{:else if row.type === 'gain'}
-												<div class="reward-row__icons">
-													{#each row.gain_icon_ids as token, iconIdx (iconIdx)}
-														<div class="reward-row__icon">
-															{#if typeof token === 'string'}
-																{@const url = getIconPoolUrl(token)}
-																{#if url}
-																	<img src={url} alt="Reward icon" />
-																{:else}
-																	<span class="reward-row__icon-placeholder">?</span>
-																{/if}
-															{:else if isRewardOrIconToken(token)}
-																{#if token.icon_ids.length === 0}
-																	<span class="reward-row__icon-placeholder">OR</span>
-																{:else}
-																	<div class="reward-row__or-group">
-																		{#each token.icon_ids.slice(0, 2) as iconId, j (j)}
-																			{@const url = getIconPoolUrl(iconId)}
-																			{#if url}
-																				<img src={url} alt="OR icon" />
-																			{:else}
-																				<span class="reward-row__icon-placeholder">?</span>
-																			{/if}
-																			{#if j < Math.min(2, token.icon_ids.length) - 1}
-																				<span class="reward-row__or-slash">/</span>
-																			{/if}
-																		{/each}
-																	</div>
-																{/if}
-															{/if}
-														</div>
-													{/each}
-												</div>
-											{:else}
-												<div class="reward-row__text">{row.text}</div>
-											{/if}
-									</div>
+									<RewardRowPreview {row} iconSize={24} />
 								{/each}
 							{/if}
 						</div>
-					</div>
-					{/snippet}
-				</DataGrid>
-			{/if}
-		{/snippet}
+						</div>
+						{/snippet}
+					</DataGrid>
+				{:else}
+					<DataGrid items={filteredLocations} columns={3} emptyIcon="🖼️" emptyMessage="No locations yet">
+						{#snippet item({ item })}
+							{@const bgUrl = getLocationBackgroundUrl(item)}
+							{@const cardUrl = getLocationCardImageUrl(item)}
+							<div class="location-card location-card--gallery">
+								<div class="location-card__preview" aria-label="Location card preview">
+									{#if cardUrl}
+										<img src={cardUrl} alt={`${item.name} card`} loading="lazy" />
+									{:else if bgUrl}
+										<img src={bgUrl} alt={`${item.name} background`} loading="lazy" />
+										<div class="location-card__preview-overlay">No card PNG</div>
+									{:else}
+										<div class="location-card__preview-placeholder">No image</div>
+									{/if}
+								</div>
+
+								<header class="location-card__header">
+									<div class="location-card__title">
+										<h3>{item.name}</h3>
+										<p class="location-card__subtitle">
+											{#if item.origin_id}
+												Origin: {originNameById.get(item.origin_id) ?? 'Unknown'}
+											{:else}
+												Origin: None
+											{/if}
+										</p>
+									</div>
+									<div class="location-card__actions">
+										<a class="location-card__link" href={getRewardRowsHref(item)} data-sveltekit-preload-data>Rows</a>
+										<Button size="sm" onclick={() => openEdit(item)}>Edit</Button>
+										<Button
+											size="sm"
+											variant="primary"
+											disabled={!bgUrl}
+											loading={generatingLocationIds.has(item.id)}
+											onclick={() => generateLocationCard(item)}
+										>
+											{cardUrl ? 'Regenerate' : 'Generate'}
+										</Button>
+										<Button size="sm" variant="danger" onclick={() => requestDelete(item)}>Delete</Button>
+									</div>
+								</header>
+							</div>
+						{/snippet}
+					</DataGrid>
+				{/if}
+			{/snippet}
 	</PageLayout>
 
 <style>
 	.banner {
 		padding: 0.75rem 1rem;
+		margin: 0 0 0.5rem;
 		border-radius: 10px;
 		border: 1px solid rgba(148, 163, 184, 0.15);
 		background: rgba(15, 23, 42, 0.55);
@@ -484,6 +528,46 @@
 			background: rgba(15, 23, 42, 0.5);
 			box-shadow: 0 10px 20px rgba(2, 6, 23, 0.25);
 		}
+
+	.location-card__preview {
+		width: 100%;
+		aspect-ratio: 600 / 437;
+		border-radius: 12px;
+		overflow: hidden;
+		position: relative;
+		background: rgba(2, 6, 23, 0.5);
+		border: 1px solid rgba(148, 163, 184, 0.15);
+	}
+
+	.location-card__preview img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+
+	.location-card__preview-overlay {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		padding: 0.4rem 0.6rem;
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: rgba(226, 232, 240, 0.95);
+		background: linear-gradient(to top, rgba(2, 6, 23, 0.85), rgba(2, 6, 23, 0));
+	}
+
+	.location-card__preview-placeholder {
+		width: 100%;
+		height: 100%;
+		display: grid;
+		place-items: center;
+		color: #94a3b8;
+		font-weight: 600;
+	}
 
 	.location-card__header {
 		display: flex;
@@ -515,6 +599,20 @@
 		flex-shrink: 0;
 	}
 
+	.location-card__link {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.35rem 0.55rem;
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-decoration: none;
+		border-radius: 8px;
+		border: 1px solid rgba(148, 163, 184, 0.35);
+		color: #e2e8f0;
+		background: rgba(15, 23, 42, 0.55);
+	}
+
 	.location-card__rewards {
 		display: flex;
 		flex-direction: column;
@@ -525,109 +623,6 @@
 		margin: 0;
 		color: #64748b;
 		font-size: 0.875rem;
-	}
-
-	.reward-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem;
-		padding: 0.5rem 0.65rem;
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.22);
-		border: 1px solid rgba(255, 255, 255, 0.3);
-	}
-
-	.reward-row--trade {
-		align-items: flex-start;
-	}
-
-	.reward-row--text {
-		align-items: flex-start;
-	}
-
-	.reward-row__label {
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: #94a3b8;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		white-space: nowrap;
-	}
-
-	.reward-row__icons {
-		display: flex;
-		gap: 0.35rem;
-		flex-wrap: wrap;
-		justify-content: flex-end;
-	}
-
-	.reward-row__text {
-		flex: 1;
-		text-align: right;
-		font-size: 0.85rem;
-		color: #e2e8f0;
-		line-height: 1.2;
-		white-space: pre-wrap;
-	}
-
-	.reward-row__trade {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		justify-content: flex-end;
-		flex: 1;
-	}
-
-	.reward-row__arrow {
-		color: #94a3b8;
-		font-weight: 800;
-	}
-
-	.reward-row__icon {
-		width: 28px;
-		height: 28px;
-		border-radius: 8px;
-		overflow: hidden;
-		background: rgba(15, 23, 42, 0.5);
-		border: 1px solid rgba(148, 163, 184, 0.15);
-		display: grid;
-		place-items: center;
-	}
-
-	.reward-row__icon > img {
-		width: 100%;
-		height: 100%;
-		object-fit: contain;
-	}
-
-	.reward-row__or-group {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 100%;
-		height: 100%;
-		gap: 0;
-		padding: 0.08rem;
-	}
-
-	.reward-row__or-group img {
-		width: 9px;
-		height: 9px;
-		object-fit: contain;
-	}
-
-	.reward-row__or-slash {
-		color: rgba(226, 232, 240, 0.9);
-		font-weight: 800;
-		font-size: 0.85rem;
-		line-height: 1;
-		margin: 0 0.07rem;
-	}
-
-	.reward-row__icon-placeholder {
-		font-size: 0.85rem;
-		color: #64748b;
 	}
 
 	.image-note {
@@ -665,17 +660,34 @@
 					{/snippet}
 					</FormField>
 
-			<LocationRewardRowsEditor bind:rewardRows={formData.reward_rows} />
-			<FormField label="Background Art (optional)" helperText="Used as the default background for this location (and stage location cards).">
-				<ImageUploader
-					bind:value={formData.background_image_path}
-					folder="game_locations"
-					cropTransparent={false}
-					onerror={(err) => alert(`Upload failed: ${err}`)}
-			/>
-		</FormField>
+			{#if editingLocation}
+					{@const editRewardRows = getLocationRewardRows(editingLocation.id).filter(hasRewardContent)}
+					<FormField label="Reward Rows (read-only)" helperText="Edit reward rows on the Reward Rows page.">
+						{#if editRewardRows.length === 0}
+							<p style="color: #64748b; font-size: 0.85rem; margin: 0;">No reward rows assigned.</p>
+						{:else}
+							<div style="display: flex; flex-direction: column; gap: 0.5rem;">
+								{#each editRewardRows as row, idx (idx)}
+									<RewardRowPreview {row} iconSize={28} />
+								{/each}
+							</div>
+						{/if}
+						<a class="location-card__link" href={getRewardRowsHref(editingLocation)} style="margin-top: 0.5rem; width: fit-content;">
+							Edit Reward Rows
+						</a>
+					</FormField>
+				{/if}
+				<FormField label="Background Art (optional)" helperText="Used as the default background for this location (and stage location cards).">
+					<ImageUploader
+						bind:value={formData.background_image_path}
+						folder="game_locations"
+						maxSizeMB={20}
+						cropTransparent={false}
+						onerror={(err) => alert(`Upload failed: ${err}`)}
+				/>
+			</FormField>
 		<p class="image-note">
-			Spirit World placement now uses reward icons directly (no location backgrounds or generated location images).
+			Spirit World v2 can use generated location card images (final-with-icons) or raw background art when building a map.
 		</p>
 	{/snippet}
 
@@ -684,6 +696,13 @@
 		<Button variant="primary" onclick={saveLocation} loading={saving}>Save</Button>
 	{/snippet}
 </Modal>
+
+<LocationCardLayoutConfigurator
+	isOpen={showLayoutConfigurator}
+	locations={locations}
+	getRewardRows={getLocationRewardRows}
+	onClose={() => (showLayoutConfigurator = false)}
+/>
 
 <ConfirmDialog
 	bind:open={showDeleteConfirm}

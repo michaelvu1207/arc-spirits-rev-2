@@ -1,3 +1,2 @@
-export { default as EditionsListView } from './EditionsListView.svelte';
-export { default as EditionsTableView } from './EditionsTableView.svelte';
-export { default as EditionDetails } from './EditionDetails.svelte';
+export { default as OriginToggleChips } from './OriginToggleChips.svelte';
+export { default as CostDuplicatesEditor } from './CostDuplicatesEditor.svelte';

@@ -6,6 +6,8 @@
 const loadedFonts = new Set<string>();
 let opsilonLoaded = false;
 let opsilonLoadPromise: Promise<void> | null = null;
+let vincendoLoaded = false;
+let vincendoLoadPromise: Promise<void> | null = null;
 
 /**
  * Loads a font and ensures it's ready for canvas rendering
@@ -72,6 +74,44 @@ export async function loadOpsilonFont(): Promise<void> {
 	})();
 
 	return opsilonLoadPromise;
+}
+
+/**
+ * Loads the Vincendo font family with all needed weights
+ */
+export async function loadVincendoFont(): Promise<void> {
+	// Return immediately if already loaded
+	if (vincendoLoaded) {
+		return;
+	}
+
+	// If currently loading, wait for that promise
+	if (vincendoLoadPromise) {
+		return vincendoLoadPromise;
+	}
+
+	// Start loading
+	vincendoLoadPromise = (async () => {
+		const regularUrl = '/fonts/Vincendo-Regular.ttf';
+		const italicUrl = '/fonts/Vincendo-Italic.ttf';
+
+		await Promise.all([
+			// Normal weights
+			loadFont('Vincendo', regularUrl, { weight: 'normal', style: 'normal' }),
+			loadFont('Vincendo', regularUrl, { weight: '400', style: 'normal' }),
+			loadFont('Vincendo', regularUrl, { weight: '600', style: 'normal' }),
+			loadFont('Vincendo', regularUrl, { weight: '700', style: 'normal' }),
+			// Italic
+			loadFont('Vincendo', italicUrl, { weight: 'normal', style: 'italic' }),
+			loadFont('Vincendo', italicUrl, { weight: '400', style: 'italic' }),
+			loadFont('Vincendo', italicUrl, { weight: '600', style: 'italic' }),
+			loadFont('Vincendo', italicUrl, { weight: '700', style: 'italic' })
+		]);
+
+		vincendoLoaded = true;
+	})();
+
+	return vincendoLoadPromise;
 }
 
 /**

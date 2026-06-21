@@ -1,13 +1,10 @@
 import type { StageEventCardRow, GameLocationRewardRow, RewardIconToken } from '$lib/types/gameData';
-import { publicAssetUrl, bustUrl } from '$lib/utils/storage';
-import { readEventCardBackgroundSettings } from '$lib/settings/eventCardBackground';
-import type { EventCardBackgroundSettings } from '$lib/settings/eventCardBackground';
-import { DEFAULT_EVENT_TYPE, eventTypeLabel } from '$lib/types/eventTypes';
+import { publicAssetUrl } from '$lib/utils/storage';
 import { loadIconPool, getIconPoolUrl } from '$lib/utils/iconPool';
 import { REWARD_ROW_CONFIG, type RewardRow } from '$lib/types/gameData';
-import { getStageLocationStyleSettings, type StageLocationStyleSettings } from '$lib/types/stageCardStylePresets';
+import { getStageLocationStyleSettings } from '$lib/types/stageCardStylePresets';
 import type { StageLocationRenderStyle } from '$lib/types/stageCardStyles';
-import { getLocationStyleDefinition, getEventStyleDefinition, type CardStyleDefinition } from '$lib/types/cardStyleDefinitions';
+import { getLocationStyleDefinition, type CardStyleDefinition } from '$lib/types/cardStyleDefinitions';
 import {
 	createCanvas,
 	getContext,
@@ -15,8 +12,11 @@ import {
 	canvasToBlob,
 	roundRect,
 	wrapText,
-	loadOpsilonFont
+	loadOpsilonFont,
+	loadVincendoFont
 } from '../shared/canvas';
+import { loadLayoutConfig } from '$lib/services/layoutConfigService';
+import { coerceConfig, type EventCardLayoutConfig } from '../shared/eventCardLayoutConfig';
 
 /**
  * Event Card Generator - V6 Symmetrical Arcane Design
@@ -1805,14 +1805,39 @@ function ellipsizeToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth:
 }
 
 export async function generateEventCardPNG(
-	event: StageEventCardRow,
-	backgroundSettingsOverride?: EventCardBackgroundSettings
+	event: StageEventCardRow
 ): Promise<Blob> {
 	if (!event.id) {
 		throw new Error('Event missing ID');
 	}
 
-	await loadOpsilonFont();
+	// Load layout config
+	const configResult = await loadLayoutConfig('event', 'base');
+	const config = coerceConfig(configResult.config);
+	if (!config) {
+		throw new Error('No layout config found. Please set a default base image in the Event Card Layout Editor first.');
+	}
+
+	const refW = config._ref_w;
+	const refH = config._ref_h;
+
+	// Determine base image path: per-card override → default from layout config
+	const baseImagePath = event.image_path || config.defaultBaseImagePath;
+	if (!baseImagePath) {
+		throw new Error('No base image available. Upload a base image for this event card or set a default base image in the layout editor.');
+	}
+
+	const baseImageUrl = publicAssetUrl(baseImagePath, { updatedAt: event.updated_at ?? 0 });
+	if (!baseImageUrl) {
+		throw new Error('Could not resolve base image URL.');
+	}
+
+	// Load resources in parallel
+	const [, , baseImg] = await Promise.all([
+		loadOpsilonFont(),
+		loadVincendoFont(),
+		loadImage(baseImageUrl)
+	]);
 
 	const rewardRows = Array.isArray(event.reward_rows) ? (event.reward_rows as RewardRow[]) : [];
 	const allPlayersRow =
@@ -1820,14 +1845,13 @@ export async function generateEventCardPNG(
 		rewardRows.find((row) => Array.isArray(row?.icon_ids) && row.icon_ids.length > 0) ??
 		null;
 	const hasRewards = !!allPlayersRow && Array.isArray(allPlayersRow.icon_ids) && allPlayersRow.icon_ids.length > 0;
-	const stageCompletionText = (event.stage_completion ?? '').trim();
-	const hasStageCompletion = stageCompletionText.length > 0;
 
 	if (hasRewards) {
 		await loadIconPool();
 	}
 
-	const canvas = createCanvas(EVENT_CARD_WIDTH * EXPORT_SCALE, EVENT_CARD_HEIGHT * EXPORT_SCALE);
+	// Create canvas at reference dimensions
+	const canvas = createCanvas(refW * EXPORT_SCALE, refH * EXPORT_SCALE);
 	const ctx = getContext(canvas);
 	ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
 	ctx.imageSmoothingEnabled = true;
@@ -1837,378 +1861,147 @@ export async function generateEventCardPNG(
 		// ignore
 	}
 
-	// Clip to rounded rect
-	ctx.save();
-	roundRect(ctx, 0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, 4);
-	ctx.clip();
+	// Draw base image covering the full canvas
+	drawImageCover(ctx, baseImg, 0, 0, refW, refH);
 
-	// Base background - deep purple/indigo
-	ctx.fillStyle = '#080610';
-	ctx.fillRect(0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
+	// --- Title ---
+	const titlePlacement = config.placements.title;
+	const titleBox = config.text_boxes.title;
+	const titleStyle = config.text_styles.title;
 
-	// Single background source (shared across all event cards)
-	const backgroundSettings = backgroundSettingsOverride ?? readEventCardBackgroundSettings();
+	if (event.title) {
+		const titleText = event.title;
+		const titleFont = titleStyle.fontFamily || 'Opsilon';
+		const titleLineH = titleStyle.lineHeight ?? Math.round(titleStyle.fontSize * 1.2);
 
-	// Get the event style definition (default arcane style for events)
-	const eventStyleDef = getEventStyleDefinition('event_v6');
+		ctx.save();
+		ctx.textAlign = titleStyle.align;
+		ctx.textBaseline = 'top';
+		ctx.fillStyle = titleStyle.color;
+		ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+		ctx.shadowBlur = 12;
+		ctx.shadowOffsetY = 2;
 
-	// Global background image (optional)
-	let bgImageUrl: string | null = null;
-	if (backgroundSettings.mode === 'image') {
-		if (backgroundSettings.image.source === 'storage') {
-			bgImageUrl = publicAssetUrl(backgroundSettings.image.path, {
-				bucket: backgroundSettings.image.bucket,
-				updatedAt: backgroundSettings.image.version
-			});
-		} else {
-			bgImageUrl = bustUrl(backgroundSettings.image.url, backgroundSettings.image.version);
+		// Scale + rotation
+		const tScale = Math.max(0.05, titlePlacement.scale);
+		ctx.translate(titlePlacement.x, titlePlacement.y);
+		if (titlePlacement.rotation) ctx.rotate((titlePlacement.rotation * Math.PI) / 180);
+		if (tScale !== 1) ctx.scale(tScale, tScale);
+
+		// Determine max width for wrapping (inside the box)
+		const maxW = titleBox.w;
+		let fontSize = titleStyle.fontSize;
+		ctx.font = `800 ${fontSize}px ${titleFont}, serif`;
+		let lines = wrapText(ctx, titleText, maxW);
+
+		// Shrink font if text overflows the box height
+		const maxLines = Math.max(1, Math.floor(titleBox.h / titleLineH));
+		while (lines.length > maxLines && fontSize > 10) {
+			fontSize -= 1;
+			ctx.font = `800 ${fontSize}px ${titleFont}, serif`;
+			lines = wrapText(ctx, titleText, maxW);
 		}
-	}
+		lines = lines.slice(0, maxLines);
 
-	if (bgImageUrl) {
-		try {
-			const artImg = await loadImage(bgImageUrl);
-			ctx.save();
-			ctx.filter = 'saturate(45%) brightness(35%) contrast(120%)';
-			ctx.globalAlpha = 0.85;
-			drawImageCover(ctx, artImg, 0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
-			ctx.restore();
-		} catch (err) {
-			console.warn('Failed to load event background image:', err);
+		// Draw from top-left of the box (anchor is center of box)
+		const textAnchorX = titleStyle.align === 'center' ? 0 : titleStyle.align === 'right' ? maxW / 2 : -maxW / 2;
+		const textStartY = -titleBox.h / 2;
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = i === lines.length - 1 && lines.length >= maxLines
+				? ellipsizeToWidth(ctx, lines[i], maxW)
+				: lines[i];
+			ctx.fillText(line, textAnchorX, textStartY + i * titleLineH);
 		}
+		ctx.restore();
 	}
 
-	// Shared background accents (same for all event cards)
-	const accentA = hexToRgba(backgroundSettings.gradient.accentAHex, backgroundSettings.gradient.accentAAlpha);
-	const bgAccentA = ctx.createRadialGradient(
-		EVENT_CARD_WIDTH * 0.25,
-		EVENT_CARD_HEIGHT * 0.2,
-		0,
-		EVENT_CARD_WIDTH * 0.25,
-		EVENT_CARD_HEIGHT * 0.2,
-		EVENT_CARD_WIDTH * 0.7
-	);
-	bgAccentA.addColorStop(0, accentA);
-	bgAccentA.addColorStop(0.55, 'rgba(0, 0, 0, 0)');
-	ctx.fillStyle = bgAccentA;
-	ctx.fillRect(0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
+	// --- Description ---
+	const descPlacement = config.placements.description;
+	const descBox = config.text_boxes.description;
+	const descStyle = config.text_styles.description;
 
-	const accentB = hexToRgba(backgroundSettings.gradient.accentBHex, backgroundSettings.gradient.accentBAlpha);
-	const bgAccentB = ctx.createRadialGradient(
-		EVENT_CARD_WIDTH * 0.75,
-		EVENT_CARD_HEIGHT * 0.7,
-		0,
-		EVENT_CARD_WIDTH * 0.75,
-		EVENT_CARD_HEIGHT * 0.7,
-		EVENT_CARD_WIDTH * 0.8
-	);
-	bgAccentB.addColorStop(0, accentB);
-	bgAccentB.addColorStop(0.6, 'rgba(0, 0, 0, 0)');
-	ctx.fillStyle = bgAccentB;
-	ctx.fillRect(0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
+	if (event.description) {
+		const descFont = descStyle.fontFamily || 'Vincendo';
+		const descLineH = descStyle.lineHeight ?? Math.round(descStyle.fontSize * 1.3);
 
-	// Art overlay - radial vignette
-	const vignetteGrad = ctx.createRadialGradient(
-		EVENT_CARD_WIDTH / 2, EVENT_CARD_HEIGHT / 2, 0,
-		EVENT_CARD_WIDTH / 2, EVENT_CARD_HEIGHT / 2, EVENT_CARD_WIDTH * 0.7
-	);
-	vignetteGrad.addColorStop(0, 'transparent');
-	vignetteGrad.addColorStop(0.5, 'rgba(8, 6, 16, 0.6)');
-	vignetteGrad.addColorStop(1, 'rgba(8, 6, 16, 0.95)');
-	ctx.fillStyle = vignetteGrad;
-	ctx.fillRect(0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
+		ctx.save();
+		ctx.textAlign = descStyle.align;
+		ctx.textBaseline = 'top';
+		ctx.fillStyle = descStyle.color;
+		ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+		ctx.shadowBlur = 8;
+		ctx.shadowOffsetY = 2;
 
-	// Top/bottom gradient accents
-	const topGrad = ctx.createLinearGradient(0, 0, 0, EVENT_CARD_HEIGHT);
-	topGrad.addColorStop(0, 'rgba(60, 40, 100, 0.1)');
-	topGrad.addColorStop(0.3, 'transparent');
-	topGrad.addColorStop(0.7, 'transparent');
-	topGrad.addColorStop(1, 'rgba(60, 40, 100, 0.15)');
-	ctx.fillStyle = topGrad;
-	ctx.fillRect(0, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT);
+		const dScale = Math.max(0.05, descPlacement.scale);
+		ctx.translate(descPlacement.x, descPlacement.y);
+		if (descPlacement.rotation) ctx.rotate((descPlacement.rotation * Math.PI) / 180);
+		if (dScale !== 1) ctx.scale(dScale, dScale);
 
-	// Draw frame elements (using event style)
-	drawFrame(ctx, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, eventStyleDef);
-	drawCorners(ctx, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, eventStyleDef);
-	drawParticles(ctx, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, eventStyleDef);
+		const maxW = descBox.w;
+		let fontSize = descStyle.fontSize;
+		ctx.font = `400 ${fontSize}px ${descFont}, serif`;
+		let lines = wrapText(ctx, event.description, maxW);
 
-	// Content area - centered
-	const centerX = EVENT_CARD_WIDTH / 2;
-	let yPos = 90;
+		const maxLines = Math.max(1, Math.floor(descBox.h / descLineH));
+		while (lines.length > maxLines && fontSize > 8) {
+			fontSize -= 1;
+			ctx.font = `400 ${fontSize}px ${descFont}, serif`;
+			lines = wrapText(ctx, event.description, maxW);
+		}
+		lines = lines.slice(0, maxLines);
 
-	// Order number with decorative lines
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'middle';
+		const textAnchorX = descStyle.align === 'center' ? 0 : descStyle.align === 'right' ? maxW / 2 : -maxW / 2;
+		const textStartY = -descBox.h / 2;
 
-	// Order lines
-	const orderLineWidth = 40;
-	const orderLineY = yPos;
-	const orderLineGradLeft = ctx.createLinearGradient(centerX - 60 - orderLineWidth, orderLineY, centerX - 60, orderLineY);
-	orderLineGradLeft.addColorStop(0, 'transparent');
-	orderLineGradLeft.addColorStop(1, 'rgba(167, 139, 250, 0.5)');
-	ctx.fillStyle = orderLineGradLeft;
-	ctx.fillRect(centerX - 60 - orderLineWidth, orderLineY - 0.5, orderLineWidth, 1);
-
-	const orderLineGradRight = ctx.createLinearGradient(centerX + 60, orderLineY, centerX + 60 + orderLineWidth, orderLineY);
-	orderLineGradRight.addColorStop(0, 'rgba(167, 139, 250, 0.5)');
-	orderLineGradRight.addColorStop(1, 'transparent');
-	ctx.fillStyle = orderLineGradRight;
-	ctx.fillRect(centerX + 60, orderLineY - 0.5, orderLineWidth, 1);
-
-	// Type badge text
-	const typeBadgeText = eventTypeLabel(event.stage ?? DEFAULT_EVENT_TYPE).toUpperCase();
-	let badgeFontSize = 18;
-	const maxBadgeWidth = 140;
-	while (badgeFontSize > 12) {
-		ctx.font = `700 ${badgeFontSize}px Opsilon, serif`;
-		if (ctx.measureText(typeBadgeText).width <= maxBadgeWidth) break;
-		badgeFontSize -= 1;
-	}
-	ctx.fillStyle = '#a78bfa';
-	ctx.save();
-	ctx.shadowColor = 'rgba(167, 139, 250, 0.6)';
-	ctx.shadowBlur = 20;
-	ctx.fillText(typeBadgeText, centerX, yPos);
-	ctx.restore();
-
-	yPos += 40;
-
-	// Title
-	const eventTitle = event.title.toUpperCase();
-	let titleFontSize = 36;
-	const maxTitleWidth = EVENT_CARD_WIDTH - 120;
-
-	ctx.fillStyle = '#ede9fe';
-	while (titleFontSize > 20) {
-		ctx.font = `800 ${titleFontSize}px Opsilon, serif`;
-		if (ctx.measureText(eventTitle).width <= maxTitleWidth) break;
-		titleFontSize -= 2;
+		for (let i = 0; i < lines.length; i++) {
+			const line = i === lines.length - 1 && lines.length >= maxLines
+				? ellipsizeToWidth(ctx, lines[i], maxW)
+				: lines[i];
+			ctx.fillText(line, textAnchorX, textStartY + i * descLineH);
+		}
+		ctx.restore();
 	}
 
-	// Word wrap title if needed
-	const titleLines = wrapText(ctx, eventTitle, maxTitleWidth);
+	// --- Reward Row ---
+	if (hasRewards && allPlayersRow) {
+		const rewardPlacement = config.placements.reward_row;
+		const rewardBox = config.text_boxes.reward_row;
 
-	ctx.save();
-	ctx.shadowColor = 'rgba(139, 92, 246, 0.5)';
-	ctx.shadowBlur = 30;
-	for (let i = 0; i < Math.min(titleLines.length, 2); i++) {
-		ctx.fillText(titleLines[i], centerX, yPos + i * (titleFontSize + 4));
-	}
-	ctx.restore();
+		const iconSize = 44;
+		const iconGap = 6;
+		const maxIconsInRow = 6;
 
-	yPos += titleLines.length * (titleFontSize + 4) + 10;
+		const iconUrls = allPlayersRow.icon_ids
+			.map((id) => getIconPoolUrl(id))
+			.filter((u): u is string => typeof u === 'string' && u.length > 0);
 
-	// Decorative divider
-	const dividerY = yPos;
-	const wingWidth = 60;
-
-	// Left wing
-	const leftWingGrad = ctx.createLinearGradient(centerX - 60 - wingWidth, dividerY, centerX - 60, dividerY);
-	leftWingGrad.addColorStop(0, 'transparent');
-	leftWingGrad.addColorStop(1, 'rgba(139, 92, 246, 0.6)');
-	ctx.fillStyle = leftWingGrad;
-	ctx.fillRect(centerX - 60 - wingWidth, dividerY - 0.5, wingWidth, 1);
-
-	// Right wing
-	const rightWingGrad = ctx.createLinearGradient(centerX + 60, dividerY, centerX + 60 + wingWidth, dividerY);
-	rightWingGrad.addColorStop(0, 'rgba(139, 92, 246, 0.6)');
-	rightWingGrad.addColorStop(1, 'transparent');
-	ctx.fillStyle = rightWingGrad;
-	ctx.fillRect(centerX + 60, dividerY - 0.5, wingWidth, 1);
-
-	// Center diamond
-	drawDiamond(ctx, centerX, dividerY, 8, '#8b5cf6');
-
-	yPos += 30;
-
-	// Description
-	const footerY = EVENT_CARD_HEIGHT - 35;
-
-	const iconSize = 44;
-	const iconGap = 6;
-	const rewardDividerW = 280;
-	const rewardDividerToRow = 10;
-	const labelToIconsGap = 16;
-
-	const completionBoxW = 520;
-	const completionPaddingX = 12;
-	const completionPaddingY = 8;
-	const completionLabel = 'STAGE COMPLETION';
-	const completionLabelFontSize = 11;
-	const completionLabelLineHeight = 14;
-	const completionTextFontSize = 13;
-	const completionTextLineHeight = 16;
-	const completionMaxTextWidth = completionBoxW - completionPaddingX * 2;
-
-	let completionBoxTopY: number | null = null;
-	let completionBoxHeight = 0;
-	let completionLines: string[] = [];
-
-	if (hasStageCompletion) {
-		ctx.font = `600 ${completionTextFontSize}px Opsilon, serif`;
-		const wrapped = wrapText(ctx, stageCompletionText, completionMaxTextWidth);
-		completionLines = wrapped.slice(0, 2);
-		completionBoxHeight =
-			completionPaddingY +
-			completionLabelLineHeight +
-			4 +
-			completionLines.length * completionTextLineHeight +
-			completionPaddingY;
-		const completionBottomY = footerY - 6;
-		completionBoxTopY = completionBottomY - completionBoxHeight;
-	}
-
-	const rewardBottomY = completionBoxTopY !== null ? completionBoxTopY - 10 : footerY - 22;
-
-	const iconUrls = hasRewards
-		? allPlayersRow!.icon_ids
-				.map((id) => getIconPoolUrl(id))
-				.filter((u): u is string => typeof u === 'string' && u.length > 0)
-		: [];
-
-	// Rewards are anchored near the bottom so the body text gets maximum room.
-	// Horizontal layout: label on left, icons on right (single row)
-	let rewardDividerY: number | null = null;
-	let rewardLabelText: string | null = null;
-	let rewardLabelFontSize: number | null = null;
-	let rewardRowY: number | null = null;
-	let rewardIconSlots: Array<{ kind: 'img'; url: string } | { kind: 'more'; count: number }> = [];
-
-	if (hasRewards) {
-		rewardLabelText =
-			allPlayersRow!.label?.trim() ||
-			REWARD_ROW_CONFIG[allPlayersRow!.type as keyof typeof REWARD_ROW_CONFIG]?.label ||
-			'ALL PLAYERS GAIN';
-
-		// Horizontal layout: show as many icons as fit in one row
-		const maxIconsInRow = 6; // Limit icons to keep row compact
 		const needsOverflow = iconUrls.length > maxIconsInRow;
 		const visibleIconCount = needsOverflow ? Math.max(0, maxIconsInRow - 1) : iconUrls.length;
 		const remainingCount = needsOverflow ? iconUrls.length - visibleIconCount : 0;
 
-		rewardIconSlots = iconUrls.slice(0, visibleIconCount).map((url) => ({ kind: 'img' as const, url }));
+		type IconSlot = { kind: 'img'; url: string } | { kind: 'more'; count: number };
+		const rewardIconSlots: IconSlot[] = iconUrls.slice(0, visibleIconCount).map((url) => ({ kind: 'img' as const, url }));
 		if (remainingCount > 0) rewardIconSlots.push({ kind: 'more' as const, count: remainingCount });
 
-		// Single row height
-		rewardRowY = rewardBottomY - iconSize;
-
-		// Choose label font size
-		const labelFontSize = 12;
-		ctx.font = `800 ${labelFontSize}px Opsilon, serif`;
-		rewardLabelFontSize = labelFontSize;
-
-		// Divider is above the reward row
-		rewardDividerY = rewardRowY - rewardDividerToRow - 1;
-	}
-
-	if (event.description) {
-		ctx.fillStyle = '#c4b5fd';
-
-		const maxDescWidth = 420;
-
-		const maxDescBottom =
-			rewardDividerY !== null ? rewardDividerY - 12 : completionBoxTopY !== null ? completionBoxTopY - 12 : footerY - 22;
-		const availableHeight = Math.max(0, maxDescBottom - yPos);
-
-		// Best-effort: shrink font to fit the entire description into the available height.
-		let chosenFontSize = 16;
-		let chosenLineHeight = 26;
-		let chosenLines: string[] = [];
-
-		for (let fontSize = 16; fontSize >= 9; fontSize--) {
-			ctx.font = `400 ${fontSize}px Opsilon, serif`;
-			const lines = wrapText(ctx, event.description, maxDescWidth);
-			const leading = fontSize >= 14 ? 1.65 : 1.55;
-			const lineHeight = Math.round(fontSize * leading);
-			const totalHeight = lines.length * lineHeight;
-
-			if (totalHeight <= availableHeight) {
-				chosenFontSize = fontSize;
-				chosenLineHeight = lineHeight;
-				chosenLines = lines;
-				break;
-			}
-
-			// Fallback to smallest font if nothing fits fully.
-			if (fontSize === 9) {
-				chosenFontSize = fontSize;
-				chosenLineHeight = lineHeight;
-				chosenLines = lines;
-			}
-		}
-
-		ctx.save();
-		ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-		ctx.shadowBlur = 8;
-		ctx.shadowOffsetY = 2;
-
-		ctx.font = `400 ${chosenFontSize}px Opsilon, serif`;
-		const maxLines = chosenLineHeight > 0 ? Math.floor(availableHeight / chosenLineHeight) : 0;
-		const willTruncate = chosenLines.length > maxLines && maxLines > 0;
-		const linesToDraw = willTruncate ? chosenLines.slice(0, maxLines) : chosenLines;
-
-		for (let i = 0; i < linesToDraw.length; i++) {
-			const drawY = yPos + i * chosenLineHeight;
-			const line =
-				willTruncate && i === linesToDraw.length - 1
-					? ellipsizeToWidth(ctx, linesToDraw[i], maxDescWidth)
-					: linesToDraw[i];
-			ctx.fillText(line, centerX, drawY);
-		}
-		ctx.restore();
-	}
-
-	// Rewards (anchored low, just above footer) - horizontal layout
-	if (hasRewards && allPlayersRow && rewardDividerY !== null && rewardLabelText && rewardLabelFontSize && rewardRowY !== null) {
-		// Divider
-		const dividerGrad = ctx.createLinearGradient(
-			centerX - rewardDividerW / 2,
-			rewardDividerY,
-			centerX + rewardDividerW / 2,
-			rewardDividerY
-		);
-		dividerGrad.addColorStop(0, 'transparent');
-		dividerGrad.addColorStop(0.5, 'rgba(139, 92, 246, 0.55)');
-		dividerGrad.addColorStop(1, 'transparent');
-		ctx.fillStyle = dividerGrad;
-		ctx.fillRect(centerX - rewardDividerW / 2, rewardDividerY, rewardDividerW, 1);
-
-		// Calculate horizontal layout: label on left, icons on right
-		ctx.font = `800 ${rewardLabelFontSize}px Opsilon, serif`;
-		const labelWidth = ctx.measureText(rewardLabelText.toUpperCase()).width;
-
-		const iconsWidth = rewardIconSlots.length * iconSize + Math.max(0, rewardIconSlots.length - 1) * iconGap;
-		const totalRowWidth = labelWidth + labelToIconsGap + iconsWidth;
-		const rowStartX = centerX - totalRowWidth / 2;
-
-		// Draw label on left, vertically centered with icons
-		const labelX = rowStartX + labelWidth / 2;
-		const labelY = rewardRowY + iconSize / 2;
-		ctx.save();
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.fillStyle = 'rgba(226, 232, 240, 0.88)';
-		ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-		ctx.shadowBlur = 10;
-		ctx.fillText(rewardLabelText.toUpperCase(), labelX, labelY);
-		ctx.restore();
-
-		// Icons on right
-		const urlsToDraw = rewardIconSlots
-			.filter((slot): slot is { kind: 'img'; url: string } => slot.kind === 'img')
-			.map((slot) => slot.url);
-
 		const images = await Promise.all(
-			urlsToDraw.map(async (url) => {
-				try {
-					return await loadImage(url);
-				} catch {
-					return null;
-				}
-			})
+			rewardIconSlots
+				.filter((s): s is { kind: 'img'; url: string } => s.kind === 'img')
+				.map(async (s) => {
+					try { return await loadImage(s.url); } catch { return null; }
+				})
 		);
 
-		let x = rowStartX + labelWidth + labelToIconsGap;
+		ctx.save();
+		const rScale = Math.max(0.05, rewardPlacement.scale);
+		ctx.translate(rewardPlacement.x, rewardPlacement.y);
+		if (rewardPlacement.rotation) ctx.rotate((rewardPlacement.rotation * Math.PI) / 180);
+		if (rScale !== 1) ctx.scale(rScale, rScale);
+
+		// Center the icon row within the reward box
+		const totalIconsW = rewardIconSlots.length * iconSize + Math.max(0, rewardIconSlots.length - 1) * iconGap;
+		let x = -totalIconsW / 2;
+		const iconY = -iconSize / 2;
 		let drawIndex = 0;
 
 		for (const slot of rewardIconSlots) {
@@ -2220,7 +2013,7 @@ export async function generateEventCardPNG(
 				ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
 				ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
 				ctx.shadowBlur = 10;
-				ctx.fillText(`+${slot.count}`, x + iconSize / 2, rewardRowY + iconSize / 2);
+				ctx.fillText(`+${slot.count}`, x + iconSize / 2, 0);
 				ctx.restore();
 			} else {
 				const img = images[drawIndex++];
@@ -2228,88 +2021,24 @@ export async function generateEventCardPNG(
 					ctx.save();
 					ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
 					ctx.shadowBlur = 6;
-					drawImageContain(ctx, img, x, rewardRowY, iconSize, iconSize);
+					drawImageContain(ctx, img, x, iconY, iconSize, iconSize);
 					ctx.restore();
 				} else {
 					ctx.save();
 					ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
-					roundRect(ctx, x, rewardRowY, iconSize, iconSize, 8);
+					roundRect(ctx, x, iconY, iconSize, iconSize, 8);
 					ctx.fill();
 					ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
 					ctx.lineWidth = 1;
-					roundRect(ctx, x + 0.5, rewardRowY + 0.5, iconSize - 1, iconSize - 1, 8);
+					roundRect(ctx, x + 0.5, iconY + 0.5, iconSize - 1, iconSize - 1, 8);
 					ctx.stroke();
 					ctx.restore();
 				}
 			}
 			x += iconSize + iconGap;
 		}
-	}
-
-	// Stage completion (anchored at the bottom, below rewards)
-	if (hasStageCompletion && completionBoxTopY !== null && completionBoxHeight > 0) {
-		const completionBoxX = centerX - completionBoxW / 2;
-
-		ctx.save();
-		ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-		roundRect(ctx, completionBoxX, completionBoxTopY, completionBoxW, completionBoxHeight, 10);
-		ctx.fill();
-		ctx.strokeStyle = 'rgba(139, 92, 246, 0.22)';
-		ctx.lineWidth = 1;
-		roundRect(ctx, completionBoxX, completionBoxTopY, completionBoxW, completionBoxHeight, 10);
-		ctx.stroke();
-
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-
-		let textY = completionBoxTopY + completionPaddingY + completionLabelLineHeight / 2;
-		ctx.font = `800 ${completionLabelFontSize}px Opsilon, serif`;
-		ctx.fillStyle = 'rgba(226, 232, 240, 0.82)';
-		ctx.fillText(completionLabel, centerX, textY);
-
-		textY += completionLabelLineHeight / 2 + 4 + completionTextLineHeight / 2;
-		ctx.font = `600 ${completionTextFontSize}px Opsilon, serif`;
-		ctx.fillStyle = '#ede9fe';
-		ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-		ctx.shadowBlur = 10;
-		for (let i = 0; i < completionLines.length; i++) {
-			ctx.fillText(completionLines[i], centerX, textY + i * completionTextLineHeight);
-		}
-
 		ctx.restore();
 	}
-
-	// Footer diamonds
-	drawDiamond(ctx, centerX - 70, footerY, 5, 'rgba(139, 92, 246, 0.5)');
-	drawDiamond(ctx, centerX + 70, footerY, 5, 'rgba(139, 92, 246, 0.5)');
-
-	// Vignette overlay
-	ctx.fillStyle = 'rgba(8, 6, 16, 0.3)';
-	ctx.shadowColor = 'rgba(8, 6, 16, 1)';
-	ctx.shadowBlur = 100;
-	ctx.shadowOffsetX = 0;
-	ctx.shadowOffsetY = 0;
-
-	ctx.restore();
-
-	// Card border
-	ctx.strokeStyle = '#3b2d5c';
-	ctx.lineWidth = 2;
-	roundRect(ctx, 1, 1, EVENT_CARD_WIDTH - 2, EVENT_CARD_HEIGHT - 2, 4);
-	ctx.stroke();
-
-	// Corner glows
-	const cornerGlow1 = ctx.createRadialGradient(0, 0, 0, 0, 0, 80);
-	cornerGlow1.addColorStop(0, 'rgba(99, 70, 180, 0.15)');
-	cornerGlow1.addColorStop(1, 'transparent');
-	ctx.fillStyle = cornerGlow1;
-	ctx.fillRect(0, 0, 80, 80);
-
-	const cornerGlow2 = ctx.createRadialGradient(EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, 0, EVENT_CARD_WIDTH, EVENT_CARD_HEIGHT, 80);
-	cornerGlow2.addColorStop(0, 'rgba(99, 70, 180, 0.15)');
-	cornerGlow2.addColorStop(1, 'transparent');
-	ctx.fillStyle = cornerGlow2;
-	ctx.fillRect(EVENT_CARD_WIDTH - 80, EVENT_CARD_HEIGHT - 80, 80, 80);
 
 	return canvasToBlob(canvas);
 }
@@ -2689,7 +2418,7 @@ export async function generateEventLocationCardPNG(options: {
 					if (typeof t === 'string') return getIconPoolUrl(t);
 					if (t && typeof t === 'object' && (t as any).kind === 'or') {
 						const ids = Array.isArray((t as any).icon_ids) ? ((t as any).icon_ids as string[]) : [];
-						return { kind: 'or' as const, urls: ids.slice(0, 2).map((id) => getIconPoolUrl(id)) };
+						return { kind: 'or' as const, urls: ids.slice(0, 4).map((id) => getIconPoolUrl(id)) };
 					}
 					return null;
 				})

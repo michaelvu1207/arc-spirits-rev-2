@@ -11,19 +11,20 @@
 		type: 'monster' | 'event';
 		id: string;
 		name: string;
-		card_image_path: string | null;
+		display_image_path: string | null;
 		order_num: number;
 	};
 
 	// Combine and filter cards that have images, sorted by order_num
 	$: cardsWithImages = [
 		...monsters
-			.filter((m) => m.card_image_path)
+			.filter((m) => m.card_image_path || m.card_base_image_path)
 			.map((m) => ({
 				type: 'monster' as const,
 				id: m.id,
 				name: m.name,
-				card_image_path: m.card_image_path,
+				// Prefer "with info" print when present, fallback to base/no-info.
+				display_image_path: m.card_image_path ?? m.card_base_image_path,
 				order_num: m.order_num ?? 999
 			})),
 		...events
@@ -32,15 +33,15 @@
 				type: 'event' as const,
 				id: e.id,
 				name: e.title,
-				card_image_path: e.card_image_path,
+				display_image_path: e.card_image_path,
 				order_num: e.order_num ?? 999
 			}))
 	].sort((a, b) => a.order_num - b.order_num);
 
 	// Get public URL for card image
 	function getCardImageUrl(item: GalleryItem): string | null {
-		if (!item.card_image_path) return null;
-		const { data } = supabase.storage.from('game_assets').getPublicUrl(item.card_image_path);
+		if (!item.display_image_path) return null;
+		const { data } = supabase.storage.from('game_assets').getPublicUrl(item.display_image_path);
 		return data?.publicUrl || null;
 	}
 
@@ -66,7 +67,7 @@
 				{#if cardsWithImages.length === 0}
 					<div class="empty-state">
 						<p>No card images generated yet.</p>
-						<p class="hint">Use "Generate All Cards" to create card images.</p>
+						<p class="hint">Upload base prints and generate with the Layout Placer.</p>
 					</div>
 				{:else}
 					<div class="gallery-grid">

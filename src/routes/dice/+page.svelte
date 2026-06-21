@@ -4,7 +4,6 @@
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import { ImageUploader } from '$lib/components/shared';
 	import { Modal, PageLayout } from '$lib/components/layout';
-	import { DicesListView } from '$lib/components/dice';
 	import { useFormModal, useFileUpload } from '$lib/composables';
 	import { getErrorMessage, publicAssetUrl } from '$lib/utils';
 	import { supabase } from '$lib/api/supabaseClient';
@@ -29,15 +28,12 @@
 
 	const gameAssetsStorage = supabase.storage.from('game_assets');
 
-	// Tab state
-	let activeTab = $state('list');
-
 	// Shared data
 	let diceList = $state<CustomDiceWithSides[]>([]);
 	let error = $state<string | null>(null);
 	let loading = $state(true);
 
-	// Custom Dice tab state
+	// Dice editor modal state
 	const modal = useFormModal<DiceFormData>(createInitialForm());
 	const backgroundUpload = useFileUpload('game_assets', 'dice_backgrounds');
 	let editingDice = $state<CustomDiceWithSides | null>(null);
@@ -46,7 +42,7 @@
 	let isBatchGenerating = $state(false);
 	let batchProgress = $state({ current: 0, total: 0, diceName: '' });
 
-	// Gallery tab state
+	// Selection & gallery state
 	let selectedDiceId = $state<string | null>(null);
 	let exportingDiceFaces = $state(false);
 	let showTemplateEditor = $state(false);
@@ -58,9 +54,10 @@
 	let uploadingTemplate = $state(false);
 	let activeDiceSideImages = $state<Record<number, string>>({});
 
-	// TTS JSON tab state
+	// TTS JSON state
 	let ttsJsonOutput = $state('');
 	let copySuccess = $state(false);
+	let ttsOpen = $state(false);
 
 	// Language state
 	let diceLanguage = $state<TranslationLanguage>(BASE_LANGUAGE);
@@ -70,22 +67,22 @@
 
 	type AttackStats = { mean: number; sd: number } | null;
 
-	const tabs = [
-		{ id: 'list', label: 'List', icon: '📋' },
-		{ id: 'custom-dice', label: 'Custom Dice', icon: '🎲' },
-		{ id: 'gallery', label: 'Dice Gallery', icon: '🖼️' },
-		{ id: 'tts-json', label: 'TTS JSON', icon: '📋' }
-	];
-
-	// Reactive effect for generating gallery images
+	// Reactive effect for generating gallery images when a row is expanded
 	$effect(() => {
-		if (selectedDiceId && activeTab === 'gallery') {
+		if (selectedDiceId) {
 			const dice = currentDice();
 			if (dice?.background_image_path) {
 				void generateActiveDiceSideImages(dice);
 			} else {
 				activeDiceSideImages = {};
 			}
+		}
+	});
+
+	// Generate TTS JSON when details section is opened
+	$effect(() => {
+		if (ttsOpen) {
+			updateTTSJson();
 		}
 	});
 
@@ -99,9 +96,6 @@
 		error = null;
 		try {
 			diceList = await fetchDiceRecords();
-			if (diceList.length && !selectedDiceId) {
-				selectedDiceId = diceList[0].id;
-			}
 		} catch (err) {
 			error = getErrorMessage(err);
 		} finally {
@@ -229,11 +223,12 @@
 		}
 	}
 
-	function handleTabChange(tabId: string) {
-		activeTab = tabId;
+	// Row selection
+	function selectRow(diceId: string) {
+		selectedDiceId = selectedDiceId === diceId ? null : diceId;
 	}
 
-	// Custom Dice functions
+	// Dice CRUD
 	function openCreate() {
 		if (diceLanguage !== BASE_LANGUAGE) {
 			alert('Create dice in Default language first, then add translations.');
@@ -292,10 +287,7 @@
 		const meanSquares = values.reduce((sum, value) => sum + value * value, 0) / values.length;
 		const variance = meanSquares - mean * mean;
 		const sd = Math.sqrt(Math.max(variance, 0));
-		return {
-			mean,
-			sd
-		};
+		return { mean, sd };
 	}
 
 	function formatStat(value: number): string {
@@ -323,7 +315,6 @@
 				const translationName = modal.formData.name ?? '';
 				const translationDescription = modal.formData.description ?? '';
 
-				// Save non-translation fields while preserving base text columns.
 				savedDice = await saveDiceRecord({
 					...modal.formData,
 					id: editingDice!.id,
@@ -357,7 +348,6 @@
 				prefabGenerationError = null;
 
 				try {
-					// Load global template
 					const template = await loadGlobalTemplate();
 					if (!template) {
 						prefabGenerationError = 'No template configured. Please set up a template first.';
@@ -367,7 +357,6 @@
 						return;
 					}
 
-					// Generate prefab with template
 					const result = await generateAndSavePrefab(savedDice, template);
 
 					if (result === null) {
@@ -392,6 +381,7 @@
 		if (!confirm(`Delete custom dice "${getDiceName(dice)}"?`)) return;
 		try {
 			await deleteDiceRecord(dice.id);
+			if (selectedDiceId === dice.id) selectedDiceId = null;
 			await loadDice();
 		} catch (err) {
 			alert(`Failed to delete dice: ${getErrorMessage(err)}`);
@@ -401,7 +391,6 @@
 	async function batchGeneratePrefabs() {
 		if (isBatchGenerating) return;
 
-		// Load global template first
 		const template = await loadGlobalTemplate();
 		if (!template) {
 			alert('No template configured. Please set up a template first.');
@@ -725,7 +714,6 @@
 		const ttsData: Record<string, any> = {};
 
 		for (const dice of diceList) {
-			// Get prefab image URL if available
 			let prefabImageUrl: string | null = null;
 			if (dice.exported_template_path) {
 				const prefabPath = dice.exported_template_path.startsWith('dice_templates/')
@@ -734,9 +722,18 @@
 				prefabImageUrl = publicAssetUrl(prefabPath);
 			}
 
+			let backgroundImageUrl: string | null = null;
+			if (dice.background_image_path) {
+				const bgPath = dice.background_image_path.startsWith('dice_backgrounds/')
+					? dice.background_image_path
+					: `dice_backgrounds/${dice.background_image_path}`;
+				backgroundImageUrl = gameAssetsStorage.getPublicUrl(bgPath).data?.publicUrl ?? null;
+			}
+
 			ttsData[dice.id] = {
 				Name: getDiceName(dice),
 				PrefabImage: prefabImageUrl,
+				BackgroundImage: backgroundImageUrl,
 				Description: getDiceDescription(dice)
 			};
 		}
@@ -776,13 +773,6 @@
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
 	}
-
-	// Update TTS JSON when switching to that tab
-	$effect(() => {
-		if (activeTab === 'tts-json') {
-			updateTTSJson();
-		}
-	});
 
 	async function generateTemplateCanvas(): Promise<HTMLCanvasElement | null> {
 		if (!editingDice || !templateImageUrl) {
@@ -927,7 +917,6 @@
 					const uploadFileName = 'prefab_composite';
 					const folder = `dice_templates/${editingDice!.id}`;
 
-					// IMPORTANT: cropTransparent: false to preserve the full template layout
 					const { data: uploadData, error: uploadError } = await processAndUploadImage(blob, {
 						folder,
 						filename: uploadFileName,
@@ -941,7 +930,6 @@
 
 					const uploadedPath = uploadData?.path ?? '';
 
-					// Update the dice record with the prefab path
 					if (editingDice!.id) {
 						const { error: diceUpdateError } = await supabase
 							.from('custom_dice')
@@ -952,7 +940,6 @@
 							console.warn('Failed to update dice exported template path:', diceUpdateError);
 						} else {
 							await loadDice();
-							// Update editingDice with new path
 							editingDice = { ...editingDice!, exported_template_path: uploadedPath };
 						}
 					}
@@ -994,37 +981,28 @@
 	}
 </script>
 
-<PageLayout
-	title="Dice"
-	subtitle="Custom dice definitions and gallery"
-	{tabs}
-	{activeTab}
-	onTabChange={handleTabChange}
->
+<PageLayout title="Dice" subtitle="Custom dice definitions and gallery">
 	{#snippet headerActions()}
-		{#if activeTab === 'list' || activeTab === 'custom-dice'}
-			<div style="display: flex; gap: 0.5rem;">
-				<Button onclick={openCreate}>Create Dice</Button>
-				<button
-					class="btn"
-					type="button"
-					onclick={batchGeneratePrefabs}
-					disabled={isBatchGenerating || diceList.length === 0}
-					title="Generate prefab templates for all dice with backgrounds"
-				>
-					{isBatchGenerating ? `Generating ${batchProgress.current}/${batchProgress.total}...` : 'Generate All Prefabs'}
-				</button>
-			</div>
-		{:else if activeTab === 'gallery'}
+		<div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+			<Button onclick={openCreate}>Create Dice</Button>
+			<button
+				class="btn"
+				type="button"
+				onclick={batchGeneratePrefabs}
+				disabled={isBatchGenerating || diceList.length === 0}
+				title="Generate prefab templates for all dice with backgrounds"
+			>
+				{isBatchGenerating ? `Generating ${batchProgress.current}/${batchProgress.total}...` : 'Gen All Prefabs'}
+			</button>
 			<button
 				class="btn"
 				type="button"
 				onclick={exportAllDiceFaces}
 				disabled={exportingDiceFaces || diceList.length === 0}
 			>
-				{exportingDiceFaces ? 'Exporting...' : 'Export All Dice Faces'}
+				{exportingDiceFaces ? 'Exporting...' : 'Export Faces'}
 			</button>
-		{/if}
+		</div>
 	{/snippet}
 
 	<div class="language-bar">
@@ -1049,167 +1027,133 @@
 		<div class="card loading">Loading dice…</div>
 	{:else if error}
 		<div class="card error">Error: {error}</div>
-	{:else if activeTab === 'list'}
-		<!-- List View Tab -->
-		<DicesListView
-			dices={diceList}
-			language={diceLanguage}
-			onEdit={openEdit}
-			onDelete={deleteDice}
-		/>
-	{:else if activeTab === 'custom-dice'}
-		<!-- Custom Dice Tab -->
-		<div class="dice-row">
-			{#each diceList as dice}
-				{@const stats = computeAttackStats(dice)}
-				{@const displayName = getDiceName(dice)}
-				{@const displayDescription = getDiceDescription(dice)}
-				<div
-					class="dice-panel"
-					style={`border-color: ${dice.color ?? '#4a9eff'}`}
-				>
-					<div class="dice-panel__icon">{dice.icon ?? '🎲'}</div>
-					<div class="dice-panel__content">
-						<h3>{displayName}</h3>
-						{#if displayDescription}
-							<p>{displayDescription}</p>
-						{/if}
-						<div class="dice-panel__sides">
-							{dice.dice_sides.length} sides
+	{:else if diceList.length === 0}
+		<div class="card empty">Create your first dice to begin.</div>
+	{:else}
+		<table class="t">
+			<thead><tr>
+				<th class="w36"></th>
+				<th>Name</th>
+				<th class="tc w72">Type</th>
+				<th class="tc w48">Sides</th>
+				<th class="tc w96">Stats</th>
+				<th class="tc w60">Prefab</th>
+				<th class="tc w96">Actions</th>
+			</tr></thead>
+			<tbody>
+				{#each diceList as dice (dice.id)}
+					{@const sel = selectedDiceId === dice.id}
+					{@const stats = computeAttackStats(dice)}
+					{@const displayName = getDiceName(dice)}
+					<tr class="row" class:sel onclick={() => selectRow(dice.id)}>
+						<td>
+							<span class="dice-icon">{dice.icon ?? '🎲'}</span>
+						</td>
+						<td>
+							<span class="nm">{displayName}</span>
+						</td>
+						<td class="tc">
+							<span class="type-badge" data-type={dice.dice_type}>
+								{DICE_TYPE_ICONS[dice.dice_type ?? 'attack']}
+								{DICE_TYPE_LABELS[dice.dice_type ?? 'attack']}
+							</span>
+						</td>
+						<td class="tc">{dice.dice_sides.length}</td>
+						<td class="tc mono">
 							{#if stats}
-								<span class="dice-panel__stats">EV {formatStat(stats.mean)} • SD {formatStat(stats.sd)}</span>
+								EV {formatStat(stats.mean)} / SD {formatStat(stats.sd)}
+							{:else}
+								—
 							{/if}
-						</div>
-						<div class="dice-panel__type">{DICE_TYPE_LABELS[dice.dice_type ?? 'attack']}</div>
-					</div>
-					<div class="dice-panel__actions">
-						<button
-							class="icon-btn"
-							type="button"
-							onclick={() => openEdit(dice)}
-							title="Edit dice"
-						>
-							✏️
-						</button>
-						<button
-							class="icon-btn danger"
-							type="button"
-							onclick={() => deleteDice(dice)}
-							title="Delete dice"
-						>
-							🗑️
-						</button>
-					</div>
-				</div>
-			{:else}
-				<div class="card empty">Create your first dice to begin.</div>
-			{/each}
-		</div>
-	{:else if activeTab === 'gallery'}
-		<!-- Gallery Tab -->
-		<div class="dice-row">
-			{#each diceList as dice}
-				<div
-					class={`dice-panel ${selectedDiceId === dice.id ? 'dice-panel--selected' : ''}`}
-					style={`border-color: ${dice.color ?? '#4a9eff'}`}
-					role="button"
-					tabindex="0"
-					onclick={() => (selectedDiceId = dice.id)}
-					onkeydown={(event) => {
-						if (event.key === 'Enter' || event.key === ' ') {
-							event.preventDefault();
-							selectedDiceId = dice.id;
-						}
-					}}
-				>
-					<div class="dice-panel__icon">{dice.icon ?? '🎲'}</div>
-					<div class="dice-panel__content">
-						<h3>{dice.name}</h3>
-						{#if dice.description}
-							<p>{dice.description}</p>
-						{/if}
-						<div class="dice-panel__sides">
-							{dice.dice_sides.length} sides
+						</td>
+						<td class="tc">
 							{#if dice.exported_template_path}
-								<span class="dice-panel__prefab-badge">📐 Prefab</span>
+								<span class="prefab-ok" title="Prefab available">✅</span>
+							{:else}
+								<span class="prefab-warn" title="No prefab">⚠️</span>
 							{/if}
-						</div>
-					</div>
-					<div class="dice-panel__actions">
-						<button
-							class="icon-btn"
-							type="button"
-							onclick={(event) => {
-								event.stopPropagation();
-								openTemplateEditor(dice);
-							}}
-							title="Edit template"
-						>
-							📐
-						</button>
-					</div>
-				</div>
-			{:else}
-				<div class="card empty">No dice available. Create dice first.</div>
-			{/each}
-		</div>
-
-		{#if selectedDiceId}
-			{#key selectedDiceId}
-				{@const activeDice = currentDice()}
-				{#if activeDice}
-					{#if activeDice.exported_template_path}
-						{@const prefabPath = activeDice.exported_template_path.startsWith('dice_templates/')
-							? activeDice.exported_template_path
-							: `dice_templates/${activeDice.exported_template_path}`}
-						{@const prefabUrl = gameAssetsStorage.getPublicUrl(prefabPath).data?.publicUrl}
-						<div class="prefab-section">
-							<h2>Prefab Template Image</h2>
-							<div class="prefab-display">
-								{#if prefabUrl}
-									<img src={prefabUrl} alt="Prefab template for {activeDice.name}" class="prefab-image" />
-								{:else}
-									<div class="prefab-placeholder">
-										<span>Prefab image not available</span>
-									</div>
-								{/if}
-							</div>
-						</div>
-					{/if}
-					<div class="dice-details">
-						<h2>Generated Dice Sides</h2>
-						<div class="sides-display">
-							{#each activeDice.dice_sides
-								.slice()
-								.sort(
-									(a: DiceSideRow, b: DiceSideRow) => a.side_number - b.side_number
-								) as side}
-								<div class="side-card">
-									{#if activeDiceSideImages[side.side_number]}
-										<img class="side-image" src={activeDiceSideImages[side.side_number]} alt={`Side ${side.side_number}`} />
-									{:else}
-										<div class="side-placeholder">
-											<span>No background image</span>
+						</td>
+						<td class="tc actions-cell">
+							<button
+								class="xbtn"
+								title="Edit"
+								onclick={(e) => { e.stopPropagation(); openEdit(dice); }}
+							>✏️</button>
+							<button
+								class="xbtn xbtn--danger"
+								title="Delete"
+								onclick={(e) => { e.stopPropagation(); deleteDice(dice); }}
+							>🗑️</button>
+							<button
+								class="xbtn"
+								title="Template Editor"
+								onclick={(e) => { e.stopPropagation(); openTemplateEditor(dice); }}
+							>📐</button>
+						</td>
+					</tr>
+					{#if sel}
+						<tr class="erow"><td colspan="7">
+							<div class="expanded-detail">
+								{#key selectedDiceId}
+									{@const activeDice = currentDice()}
+									{#if activeDice}
+										{#if activeDice.exported_template_path}
+											{@const prefabPath = activeDice.exported_template_path.startsWith('dice_templates/')
+												? activeDice.exported_template_path
+												: `dice_templates/${activeDice.exported_template_path}`}
+											{@const prefabUrl = gameAssetsStorage.getPublicUrl(prefabPath).data?.publicUrl}
+											<div class="prefab-section">
+												<h3>Prefab Template Image</h3>
+												<div class="prefab-display">
+													{#if prefabUrl}
+														<img src={prefabUrl} alt="Prefab template for {activeDice.name}" class="prefab-image" />
+													{:else}
+														<div class="prefab-placeholder">
+															<span>Prefab image not available</span>
+														</div>
+													{/if}
+												</div>
+											</div>
+										{/if}
+										<div class="dice-details">
+											<h3>Generated Dice Sides</h3>
+											<div class="sides-display">
+												{#each activeDice.dice_sides
+													.slice()
+													.sort(
+														(a: DiceSideRow, b: DiceSideRow) => a.side_number - b.side_number
+													) as side}
+													<div class="side-card">
+														{#if activeDiceSideImages[side.side_number]}
+															<img class="side-image" src={activeDiceSideImages[side.side_number]} alt={`Side ${side.side_number}`} />
+														{:else}
+															<div class="side-placeholder">
+																<span>No background image</span>
+															</div>
+														{/if}
+														<div class="side-content">
+															<strong>Side {side.side_number}</strong>
+															<p>{side.reward_value}</p>
+														</div>
+													</div>
+												{/each}
+											</div>
 										</div>
 									{/if}
-									<div class="side-content">
-										<strong>Side {side.side_number}</strong>
-										<p>{side.reward_value}</p>
-									</div>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			{/key}
-		{:else}
-			<div class="card empty">Select a dice set to preview generated images.</div>
-		{/if}
-	{:else if activeTab === 'tts-json'}
-		<!-- TTS JSON Tab -->
+								{/key}
+							</div>
+						</td></tr>
+					{/if}
+				{/each}
+			</tbody>
+		</table>
+	{/if}
+
+	<!-- TTS JSON collapsible section -->
+	<details class="tts-details" bind:open={ttsOpen}>
+		<summary class="tts-summary">TTS JSON Export</summary>
 		<div class="tts-json-container">
 			<div class="tts-json-header">
-				<h2>Tabletop Simulator JSON Export</h2>
 				<p class="tts-json-subtitle">
 					Export your dice as JSON for importing into Tabletop Simulator.
 					{#if diceList.some((d) => !d.exported_template_path)}
@@ -1250,7 +1194,7 @@
 				</div>
 			</div>
 		</div>
-	{/if}
+	</details>
 </PageLayout>
 
 <!-- Dice Editor Modal -->
@@ -1567,6 +1511,7 @@
 {/if}
 
 <style>
+	/* Language bar */
 	.language-bar {
 		display: flex;
 		flex-wrap: wrap;
@@ -1585,160 +1530,114 @@
 		align-items: center;
 	}
 
-	.dice-row {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 0.5rem;
+	/* Compact table */
+	.t { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+	.t thead { position: sticky; top: 0; z-index: 1; }
+	.t th {
+		padding: 0.3rem 0.5rem; text-align: left;
+		font-size: 0.65rem; font-weight: 600; color: #64748b;
+		text-transform: uppercase; letter-spacing: 0.05em;
+		border-bottom: 1px solid rgba(148,163,184,0.15);
+		background: rgba(15,23,42,0.6);
 	}
 
-	.dice-panel {
-		display: grid;
-		grid-template-columns: auto 1fr auto;
-		gap: 0.5rem;
-		align-items: center;
-		padding: 0.5rem;
-		background: rgba(15, 23, 42, 0.65);
-		border: 2px solid rgba(148, 163, 184, 0.18);
-		border-radius: 10px;
-		transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+	.row { cursor: pointer; transition: background 0.1s; }
+	.row:hover { background: rgba(99,102,241,0.08); }
+	.row.sel { background: rgba(59,130,246,0.12); }
+	.row td {
+		padding: 0.35rem 0.5rem;
+		border-bottom: 1px solid rgba(148,163,184,0.08);
+		color: #cbd5e1;
 	}
+	.row.sel td { border-bottom-color: transparent; }
 
-	.dice-panel:hover {
-		transform: translateY(-2px);
-		box-shadow: 0 10px 16px rgba(15, 23, 42, 0.35);
-	}
+	.erow td { padding: 0; border-bottom: 1px solid rgba(148,163,184,0.08); }
 
-	.dice-panel--selected {
-		border-width: 2px;
-		box-shadow: 0 12px 20px rgba(59, 130, 246, 0.35);
-	}
+	.tc { text-align: center; }
+	.w36 { width: 36px; }
+	.w48 { width: 48px; }
+	.w60 { width: 60px; }
+	.w72 { width: 72px; }
+	.w96 { width: 96px; }
+	.mono { font-family: 'Courier New', monospace; font-size: 0.68rem; }
 
-	.dice-panel__icon {
-		font-size: 1.6rem;
-	}
+	.nm { font-weight: 600; color: #f1f5f9; }
+	.dice-icon { font-size: 1.2rem; }
 
-	.dice-panel__content h3 {
-		margin: 0;
-		color: #f8fafc;
-		font-size: 0.9rem;
-	}
-
-	.dice-panel__content p {
-		margin: 0.2rem 0 0;
-		color: #cbd5f5;
-		font-size: 0.7rem;
-	}
-
-	.dice-panel__sides {
-		margin-top: 0.3rem;
-		font-size: 0.7rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		color: #94a3b8;
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-	}
-
-	.dice-panel__stats {
-		margin-left: 0.4rem;
-		font-weight: 600;
-		text-transform: none;
-		letter-spacing: 0.02em;
-		color: #f8fafc;
-	}
-
-	.dice-panel__type {
-		margin-top: 0.25rem;
-		font-size: 0.65rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		font-weight: 600;
-		color: #fde68a;
-	}
-
-	.dice-panel__prefab-badge {
+	.type-badge {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.25rem;
-		padding: 0.15rem 0.4rem;
-		background: rgba(59, 130, 246, 0.2);
-		border: 1px solid rgba(59, 130, 246, 0.4);
+		gap: 0.2rem;
+		font-size: 0.62rem;
+		font-weight: 500;
+		padding: 0.1rem 0.3rem;
+		border-radius: 3px;
+		white-space: nowrap;
+	}
+
+	.type-badge[data-type='attack'] {
+		background: rgba(239, 68, 68, 0.2);
+		border: 1px solid rgba(239, 68, 68, 0.4);
+		color: #fca5a5;
+	}
+
+	.type-badge[data-type='special'] {
+		background: rgba(139, 92, 246, 0.2);
+		border: 1px solid rgba(139, 92, 246, 0.4);
+		color: #c4b5fd;
+	}
+
+	.prefab-ok { font-size: 0.85rem; }
+	.prefab-warn { font-size: 0.85rem; }
+
+	.actions-cell {
+		display: flex;
+		gap: 0.2rem;
+		justify-content: center;
+		align-items: center;
+	}
+
+	.xbtn {
+		background: none;
+		border: 1px solid rgba(148,163,184,0.2);
 		border-radius: 4px;
-		font-size: 0.65rem;
-		color: #60a5fa;
-		text-transform: none;
-		letter-spacing: normal;
-	}
-
-	.dice-panel__actions {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-	}
-
-	.icon-btn {
-		background: rgba(30, 41, 59, 0.7);
-		border: 1px solid rgba(148, 163, 184, 0.25);
-		border-radius: 6px;
-		color: inherit;
 		cursor: pointer;
-		padding: 0.25rem 0.4rem;
-		transition: background 0.15s ease;
+		padding: 0.15rem 0.3rem;
+		font-size: 0.75rem;
+		color: #cbd5e1;
+		transition: background 0.1s;
+		line-height: 1;
 	}
 
-	.icon-btn:hover {
-		background: rgba(59, 130, 246, 0.2);
+	.xbtn:hover {
+		background: rgba(59,130,246,0.15);
+		border-color: rgba(59,130,246,0.4);
 	}
 
-	.icon-btn.danger:hover {
-		background: rgba(248, 113, 113, 0.2);
+	.xbtn--danger:hover {
+		background: rgba(248,113,113,0.15);
+		border-color: rgba(248,113,113,0.4);
 	}
 
-	.dice-editor {
+	/* Expanded detail row */
+	.expanded-detail {
+		padding: 0.75rem;
+		background: rgba(30,41,59,0.25);
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.dice-editor__grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.sides-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.side-editor {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		padding: 0.5rem;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 8px;
-		background: rgba(30, 41, 59, 0.55);
-	}
-
-	.side-editor strong {
-		color: #cbd5f5;
-		font-size: 0.7rem;
+		gap: 0.75rem;
 	}
 
 	.prefab-section {
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		margin-bottom: 1rem;
 	}
 
-	.prefab-section h2 {
+	.prefab-section h3 {
 		margin: 0;
 		color: #f8fafc;
-		font-size: 0.9rem;
+		font-size: 0.8rem;
 	}
 
 	.prefab-display {
@@ -1772,10 +1671,10 @@
 		gap: 0.5rem;
 	}
 
-	.dice-details h2 {
+	.dice-details h3 {
 		margin: 0;
 		color: #f8fafc;
-		font-size: 0.9rem;
+		font-size: 0.8rem;
 	}
 
 	.sides-display {
@@ -1833,6 +1732,186 @@
 		color: #94a3b8;
 	}
 
+	/* Dice editor modal */
+	.dice-editor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.dice-editor__grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 0.5rem;
+	}
+
+	.sides-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 0.5rem;
+	}
+
+	.side-editor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		padding: 0.5rem;
+		border: 1px solid rgba(148, 163, 184, 0.2);
+		border-radius: 8px;
+		background: rgba(30, 41, 59, 0.55);
+	}
+
+	.side-editor strong {
+		color: #cbd5f5;
+		font-size: 0.7rem;
+	}
+
+	/* TTS JSON collapsible */
+	.tts-details {
+		margin-top: 1rem;
+		border: 1px solid rgba(148, 163, 184, 0.15);
+		border-radius: 10px;
+		background: rgba(15, 23, 42, 0.4);
+	}
+
+	.tts-summary {
+		padding: 0.75rem 1rem;
+		cursor: pointer;
+		color: #94a3b8;
+		font-size: 0.8rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		user-select: none;
+	}
+
+	.tts-summary:hover {
+		color: #cbd5e1;
+	}
+
+	.tts-json-container {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 0 1rem 1rem;
+	}
+
+	.tts-json-header {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.tts-json-subtitle {
+		margin: 0;
+		color: #cbd5f5;
+		font-size: 0.75rem;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.warning-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.2rem 0.5rem;
+		background: rgba(251, 146, 60, 0.2);
+		border: 1px solid rgba(251, 146, 60, 0.4);
+		border-radius: 4px;
+		font-size: 0.7rem;
+		color: #fb923c;
+	}
+
+	.tts-json-actions {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.tts-json-output {
+		background: rgba(15, 23, 42, 0.65);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		border-radius: 8px;
+		padding: 1rem;
+		overflow-x: auto;
+		max-height: 500px;
+		overflow-y: auto;
+	}
+
+	.tts-json-output pre {
+		margin: 0;
+		color: #f8fafc;
+		font-family: 'Courier New', monospace;
+		font-size: 0.7rem;
+		line-height: 1.5;
+	}
+
+	.tts-json-output code {
+		color: #cbd5f5;
+	}
+
+	.tts-json-info {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.tts-json-info h3 {
+		margin: 0;
+		color: #f8fafc;
+		font-size: 0.9rem;
+	}
+
+	.dice-status-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		gap: 0.5rem;
+	}
+
+	.dice-status-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		padding: 0.75rem;
+		background: rgba(30, 41, 59, 0.55);
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		border-radius: 8px;
+	}
+
+	.dice-status-card.has-missing {
+		border-color: rgba(251, 146, 60, 0.4);
+		background: rgba(30, 41, 59, 0.7);
+	}
+
+	.dice-status-header {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.dice-status-icon {
+		font-size: 1.2rem;
+	}
+
+	.dice-status-name {
+		color: #f8fafc;
+		font-size: 0.8rem;
+		font-weight: 600;
+	}
+
+	.dice-status-warning {
+		color: #fb923c;
+		font-size: 0.7rem;
+	}
+
+	.dice-status-success {
+		color: #4ade80;
+		font-size: 0.7rem;
+	}
+
+	/* Template editor modal */
 	.btn--primary {
 		background: linear-gradient(135deg, #3b82f6, #8b5cf6);
 		border: none;
@@ -1894,6 +1973,20 @@
 		margin: 0;
 		color: #f8fafc;
 		font-size: 0.9rem;
+	}
+
+	.icon-btn {
+		background: rgba(30, 41, 59, 0.7);
+		border: 1px solid rgba(148, 163, 184, 0.25);
+		border-radius: 6px;
+		color: inherit;
+		cursor: pointer;
+		padding: 0.25rem 0.4rem;
+		transition: background 0.15s ease;
+	}
+
+	.icon-btn:hover {
+		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.template-editor {
@@ -2042,141 +2135,5 @@
 		padding-top: 0.75rem;
 		border-top: 1px solid rgba(148, 163, 184, 0.18);
 		flex-wrap: wrap;
-	}
-
-	/* TTS JSON Tab Styles */
-	.tts-json-container {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.tts-json-header {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.tts-json-header h2 {
-		margin: 0;
-		color: #f8fafc;
-		font-size: 1.1rem;
-	}
-
-	.tts-json-subtitle {
-		margin: 0;
-		color: #cbd5f5;
-		font-size: 0.75rem;
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.warning-badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		padding: 0.2rem 0.5rem;
-		background: rgba(251, 146, 60, 0.2);
-		border: 1px solid rgba(251, 146, 60, 0.4);
-		border-radius: 4px;
-		font-size: 0.7rem;
-		color: #fb923c;
-	}
-
-	.tts-json-actions {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.tts-json-output {
-		background: rgba(15, 23, 42, 0.65);
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		border-radius: 8px;
-		padding: 1rem;
-		overflow-x: auto;
-		max-height: 500px;
-		overflow-y: auto;
-	}
-
-	.tts-json-output pre {
-		margin: 0;
-		color: #f8fafc;
-		font-family: 'Courier New', monospace;
-		font-size: 0.7rem;
-		line-height: 1.5;
-	}
-
-	.tts-json-output code {
-		color: #cbd5f5;
-	}
-
-	.tts-json-info {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.tts-json-info h3 {
-		margin: 0;
-		color: #f8fafc;
-		font-size: 0.9rem;
-	}
-
-	.dice-status-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.dice-status-card {
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-		padding: 0.75rem;
-		background: rgba(30, 41, 59, 0.55);
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		border-radius: 8px;
-	}
-
-	.dice-status-card.has-missing {
-		border-color: rgba(251, 146, 60, 0.4);
-		background: rgba(30, 41, 59, 0.7);
-	}
-
-	.dice-status-header {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-
-	.dice-status-icon {
-		font-size: 1.2rem;
-	}
-
-	.dice-status-name {
-		color: #f8fafc;
-		font-size: 0.8rem;
-		font-weight: 600;
-	}
-
-	.dice-status-warning {
-		color: #fb923c;
-		font-size: 0.7rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-	}
-
-	.missing-sides-list {
-		color: #94a3b8;
-		font-size: 0.65rem;
-	}
-
-	.dice-status-success {
-		color: #4ade80;
-		font-size: 0.7rem;
 	}
 </style>

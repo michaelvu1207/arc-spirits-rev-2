@@ -1,19 +1,30 @@
 	<script lang="ts">
 		import { onMount } from 'svelte';
 		import { supabase } from '$lib/api/supabaseClient';
-		import type { OriginRow, RuneRow, HexSpiritRow, ClassRow } from '$lib/types/gameData';
-		import { publicAssetUrl } from '$lib/utils';
-		import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
-		import { generateDiceSide } from '$lib/generators/dice';
-		import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
-		import { Button } from '$lib/components/ui';
-		import { PageLayout, type Tab } from '$lib/components/layout';
+	import type {
+		OriginRow,
+		MatItemRow,
+		HexSpiritRow,
+		GameLocationRewardRow,
+		GameLocationRowCompositionRow,
+		RewardRowAssignment
+	} from '$lib/types/gameData';
+	import { configToRewardRow } from '$lib/types/gameData';
+	import { publicAssetUrl } from '$lib/utils';
+	import { generateRuneIcon } from '$lib/utils/runeIconGenerator';
+	import { generateDiceSide } from '$lib/generators/dice';
+	import { renderLocationRewardRowPngBlob } from '$lib/generators/game-locations/locationCardIconPlacer';
+	import { fetchDiceRecords, type CustomDiceWithSides } from '$lib/features/dice/dice';
+	import { fetchOriginRecords } from '$lib/features/origins/origins';
+	import { fetchHexSpiritRecords } from '$lib/features/hex-spirits/hexSpirits';
+	import { rewardIconTokensHaveAnyIcons } from '$lib/utils/rewardIconTokens';
+	import { Button } from '$lib/components/ui';
+	import { PageLayout, type Tab } from '$lib/components/layout';
 	import { AssetsListView, AssetsGridView, type AssetImage } from '$lib/components/assets';
 	import JSZip from 'jszip';
 
 		let origins: OriginRow[] = [];
-		let classes: ClassRow[] = [];
-		let runes: RuneRow[] = [];
+		let mats: MatItemRow[] = [];
 		let hexSpirits: HexSpiritRow[] = [];
 		let dice: CustomDiceWithSides[] = [];
 		let loading = $state(true);
@@ -37,56 +48,38 @@
 		let activeTab = $state('list');
 
 		onMount(async () => {
-			await Promise.all([loadOrigins(), loadClasses(), loadRunes(), loadHexSpirits(), loadDice(), loadRuneBackground()]);
+			await Promise.all([loadOrigins(), loadMats(), loadHexSpirits(), loadDice(), loadRuneBackground()]);
 			await loadAssets();
 		});
 
 	async function loadOrigins() {
-		const { data, error: fetchError } = await supabase
-			.from('origins')
-			.select('*')
-			.order('position', { ascending: true });
-		if (fetchError) {
-			error = fetchError.message;
-			return;
+		try {
+			const records = await fetchOriginRecords();
+			origins = records.filter((origin) => origin.is_enabled !== false);
+		} catch (fetchError: unknown) {
+			error = fetchError instanceof Error ? fetchError.message : String(fetchError);
 		}
-			origins = data ?? [];
 		}
 
-		async function loadClasses() {
+		async function loadMats() {
 			const { data, error: fetchError } = await supabase
-				.from('classes')
-				.select('*')
-				.order('position', { ascending: true });
-			if (fetchError) {
-				error = fetchError.message;
-				return;
-			}
-			classes = data ?? [];
-		}
-
-		async function loadRunes() {
-			const { data, error: fetchError } = await supabase
-				.from('runes')
+				.from('mat_items')
 				.select('*')
 			.order('name', { ascending: true });
 		if (fetchError) {
 			error = fetchError.message;
 			return;
 		}
-		runes = data ?? [];
+		mats = data ?? [];
 	}
 
 	async function loadHexSpirits() {
-		const { data, error: fetchError } = await supabase
-			.from('hex_spirits')
-			.select('*')
-			.order('name', { ascending: true });
-		if (fetchError) {
-			error = fetchError.message;
-			return;
+		try {
+			const records = await fetchHexSpiritRecords();
+			hexSpirits = records;
+		} catch (fetchError: unknown) {
+			error = fetchError instanceof Error ? fetchError.message : String(fetchError);
 		}
-		hexSpirits = data ?? [];
 	}
 
 	async function loadDice() {
@@ -107,13 +100,6 @@
 			return publicAssetUrl(fullPath, { updatedAt: updatedAt ?? Date.now() });
 		}
 
-		function getClassIconUrl(icon: string | null | undefined, updatedAt?: string | null): string | null {
-			if (!icon) return null;
-			if (!icon.includes('/')) return null;
-			const fullPath = icon.startsWith('class_icons/') ? icon : `class_icons/${icon}`;
-			return publicAssetUrl(fullPath, { updatedAt: updatedAt ?? Date.now() });
-		}
-
 	function getHexSpiritImageUrl(path: string | null | undefined): string | null {
 		if (!path) return null;
 		const fullPath = path.startsWith('hex_spirits/') ? path : `hex_spirits/${path}`;
@@ -128,6 +114,18 @@
 			.replace(/[^a-z0-9]+/g, '_')
 			.replace(/^_+|_+$/g, '')
 			.slice(0, 50);
+	}
+
+	function hasRewardContent(row: GameLocationRewardRow | null | undefined): boolean {
+		if (!row) return false;
+		if (row.type === 'text') return row.text.trim().length > 0;
+		if (row.type === 'trade') {
+			return (
+				rewardIconTokensHaveAnyIcons(row.cost_icon_ids ?? []) ||
+				rewardIconTokensHaveAnyIcons(row.gain_icon_ids ?? [])
+			);
+		}
+		return rewardIconTokensHaveAnyIcons(row.gain_icon_ids ?? []);
 	}
 
 	async function loadRuneBackground() {
@@ -165,61 +163,56 @@
 			}
 		}
 
-			// Generate rune icons
-			for (const rune of runes) {
-				const storedIconUrl = publicAssetUrl(rune.icon_path, { updatedAt: rune.updated_at ?? Date.now() });
+			// Generate mat icons (origin runes + relics)
+			for (const mat of mats) {
+				const storedIconUrl = publicAssetUrl(mat.icon_path, { updatedAt: mat.updated_at ?? Date.now() });
 				if (storedIconUrl) {
 					runeImages.push({
-						name: rune.name,
+						name: mat.name,
 						url: storedIconUrl,
 						type: 'rune',
-						filename: `runes/${sanitizeFileName(rune.name)}_icon.png`
+						filename: `runes/${sanitizeFileName(mat.name)}_icon.png`
 					});
 					continue;
 				}
 
-					const isClassRune = Boolean(rune.class_id);
-					const backgroundUrl = isClassRune
-						? null
-						: publicAssetUrl(rune.icon_background_path, { updatedAt: rune.updated_at ?? Date.now() }) ??
-							runeBackgroundUrl;
-					const backgroundColor = isClassRune ? '#ffffff' : null;
+					const backgroundUrl =
+						publicAssetUrl(mat.icon_background_path, { updatedAt: mat.updated_at ?? Date.now() }) ??
+						runeBackgroundUrl;
+					const backgroundColor = null;
 					const outerRingColor = null;
 
 				let originIconUrl: string | null = null;
 				let originIconEmoji: string | null = null;
-				if (rune.origin_id) {
-					const origin = origins.find((o) => o.id === rune.origin_id);
+				if (mat.origin_id) {
+					const origin = origins.find((o) => o.id === mat.origin_id);
 					if (!origin) continue;
 					originIconUrl = getOriginIconUrl(origin.icon_png, origin.updated_at);
 					originIconEmoji = originIconUrl ? null : (origin.icon_emoji || origin.icon_png || null);
-				} else if (rune.class_id) {
-					const cls = classes.find((c) => c.id === rune.class_id);
-					if (!cls) continue;
-					originIconUrl = getClassIconUrl(cls.icon_png, cls.updated_at);
-					originIconEmoji = originIconUrl ? null : (cls.icon_emoji || null);
+				} else if (mat.emoji) {
+					// Relic: rendered from its emoji.
+					originIconEmoji = mat.emoji;
 				} else {
 					continue;
 				}
 
 				try {
-						const runeIconUrl = await generateRuneIcon({
+						const matIconUrl = await generateRuneIcon({
 							originIconUrl,
 							originIconEmoji,
 							backgroundUrl,
 							backgroundColor,
 							outerRingColor,
-							disableIconOutline: isClassRune,
 							size: 800
 						});
 					runeImages.push({
-						name: rune.name,
-					url: runeIconUrl,
+						name: mat.name,
+					url: matIconUrl,
 					type: 'rune',
-					filename: `runes/${sanitizeFileName(rune.name)}_icon.png`
+					filename: `runes/${sanitizeFileName(mat.name)}_icon.png`
 				});
 			} catch (err) {
-				console.warn(`Failed to generate icon for rune ${rune.name}:`, err);
+				console.warn(`Failed to generate icon for mat ${mat.name}:`, err);
 			}
 		}
 
@@ -460,6 +453,61 @@
 					if (blob) {
 						const filename = asset.filename.replace('misc_assets/', '');
 						miscFolder?.file(filename, blob);
+					}
+				}
+			}
+
+			// Add reward-row renders for TTS export. Reward rows come from the
+			// normalized model (game_location_rows + reward_row_assignments) — the
+			// single source of truth shared with the game.
+			const [locationsRes, rowRecordsRes, assignmentsRes] = await Promise.all([
+				supabase.from('game_locations').select('id, name').order('name', { ascending: true }),
+				supabase.from('game_location_rows').select('id, name, type, config'),
+				supabase.from('reward_row_assignments').select('location_id, row_id, row_index')
+			]);
+			if (locationsRes.error) throw locationsRes.error;
+			if (rowRecordsRes.error) throw rowRecordsRes.error;
+			if (assignmentsRes.error) throw assignmentsRes.error;
+
+			const rowConfigById = new Map<string, GameLocationRowCompositionRow>(
+				((rowRecordsRes.data as GameLocationRowCompositionRow[] | null) ?? []).map((r) => [r.id, r])
+			);
+			const assignmentsByLocation = new Map<string, RewardRowAssignment[]>();
+			for (const a of (assignmentsRes.data as RewardRowAssignment[] | null) ?? []) {
+				const list = assignmentsByLocation.get(a.location_id) ?? [];
+				list.push(a);
+				assignmentsByLocation.set(a.location_id, list);
+			}
+			const rewardRowsForLocation = (locationId: string): GameLocationRewardRow[] =>
+				(assignmentsByLocation.get(locationId) ?? [])
+					.slice()
+					.sort((a, b) => a.row_index - b.row_index)
+					.map((a) => {
+						const row = rowConfigById.get(a.row_id);
+						return row
+							? configToRewardRow(row.type, row.config)
+							: ({ type: 'gain', gain_icon_ids: [] } satisfies GameLocationRewardRow);
+					});
+
+			const rewardRowsFolder = zip.folder('tts')?.folder('reward_rows');
+			for (const location of locationsRes.data ?? []) {
+				const locationName = typeof location.name === 'string' ? location.name : 'location';
+				const locationId = typeof location.id === 'string' ? location.id : 'unknown';
+				const rows = rewardRowsForLocation(location.id);
+
+				for (let i = 0; i < rows.length; i++) {
+					const row = rows[i];
+					if (!hasRewardContent(row)) continue;
+
+					try {
+						const rowBlob = await renderLocationRewardRowPngBlob(row);
+						const typeTag = row.type === 'trade' ? 'trade' : row.type === 'text' ? 'text' : 'gain';
+						rewardRowsFolder?.file(
+							`${locationId}_${sanitizeFileName(locationName)}_row_${i + 1}_${typeTag}.png`,
+							rowBlob
+						);
+					} catch (err) {
+						console.warn(`Failed to render reward row ${locationId}#${i + 1}:`, err);
 					}
 				}
 			}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { RewardRow, SpecialEffectRow, TradeRow, GainRow } from '$lib/types/gameData';
+	import type { RewardRow, SpecialEffectRow } from '$lib/types/gameData';
 	import { DEFAULT_EVENT_TYPE, EVENT_TYPE_OPTIONS, type EventType } from '$lib/types/eventTypes';
 	import {
 		DEFAULT_STAGE_EVENT_RENDER_STYLE,
@@ -9,14 +9,12 @@
 	} from '$lib/types/stageCardStyles';
 	import { getErrorMessage } from '$lib/utils';
 	import { getIconPoolUrl } from '$lib/utils/iconPool';
-		import { MonsterCardPreview } from '$lib/components/monsters';
+	import { MonsterCardPreview } from '$lib/components/monsters';
 	import { RewardRowsEditor } from '$lib/components/monsters';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
 	import LazyMount from '$lib/components/shared/LazyMount.svelte';
 	import Modal from '../layout/Modal.svelte';
 	import { ConfirmDialog, IconPicker, ImageUploader, SpecialEffectPicker } from '$lib/components/shared';
-	import GainRowsEditor from '$lib/components/shared/GainRowsEditor.svelte';
-	import TradeRowsEditor from '$lib/components/shared/TradeRowsEditor.svelte';
 	import EventCardPreview from './EventCardPreview.svelte';
 	import type { Event, Monster } from './types';
 
@@ -26,27 +24,28 @@
 	};
 
 	export type MonsterFormData = {
+		/** Internal: indicates where this save originated so parents can react accordingly. */
+		__save_source?: 'editor' | 'inline';
 		name: string;
 		subtext: string | null;
 		description: string | null;
 		damage: number;
 		barrier: number;
 		card_image_path: string | null;
-		/** Unified reward-track slots (slot0 participation, slotN killed). */
-		reward_track: string[][];
-		/** When true, show tutorial callout on card; when false, show Participation rewards instead. */
-		show_tutorial: boolean;
+		/** Flat array of up to 6 icon IDs awarded on kill. */
+		reward_track: string[];
 		stage: 'stage_1' | 'stage_2' | 'stage_3' | 'final_stage' | 'inactive';
 		monster_classification: 'monster' | 'abyss_guardian' | 'boss' | 'final_boss';
 		icon: string | null;
 		image_path: string | null;
 		invade_location_id: string | null;
 		order_num: number;
-		reward_rows: any[];
-		trade_rows: TradeRow[];
-		gain_rows: GainRow[];
 		special_effect_ids: string[];
+		dice_pool: string[];
+		attack_type: 'damage' | 'dice_pool';
+		stage_num: number;
 		quantity: number;
+		choose_amount: number;
 	};
 
 	export type EventFormData = {
@@ -54,7 +53,6 @@
 		render_style: StageEventRenderStyle;
 		title: string;
 		description: string | null;
-		stage_completion: string | null;
 		image_path: string | null;
 		reward_rows: RewardRow[];
 		order_num: number;
@@ -98,13 +96,13 @@
 		cardImageUploadAspectRatio?: string;
 		cardImageUploadCropTransparent?: boolean;
 		cardImageUploadMaxSizeMB?: number;
-		showGainRows?: boolean;
 		showStats?: boolean;
 		showInvadeLocation?: boolean;
 		showSpecialEffects?: boolean;
 		showRewardRows?: boolean;
 		showEventRewardRows?: boolean;
-		showTradeRow?: boolean;
+		showAttackTypeToggle?: boolean;
+		showStageAsInteger?: boolean;
 	}
 
 	let {
@@ -147,13 +145,13 @@
 		cardImageUploadAspectRatio = '600 / 437',
 		cardImageUploadCropTransparent = false,
 		cardImageUploadMaxSizeMB = 12,
-		showGainRows = false,
 		showStats = true,
 		showInvadeLocation = true,
 		showSpecialEffects = true,
 		showRewardRows = true,
 		showEventRewardRows = false,
-		showTradeRow = false
+		showAttackTypeToggle = false,
+		showStageAsInteger = false
 	}: Props = $props();
 
 	const monsterLabelLower = $derived.by(() => monsterLabel.toLowerCase());
@@ -164,15 +162,14 @@
 	let inlineStatsSaving = $state<Record<string, boolean>>({});
 	let inlineStatsError = $state<Record<string, string | null>>({});
 
-	const INLINE_SPECIAL_EFFECT_MAX = 4;
+	const INLINE_SPECIAL_EFFECT_MAX = 6;
 	let inlineEffectEdits = $state<Record<string, string[]>>({});
 	let inlineEffectOpenId = $state<string | null>(null);
 	let inlineStageEdits = $state<Record<string, MonsterStage>>({});
 	const inlineAutosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-		let rewardSlotPickerOpen = $state(false);
-		let rewardSlotPickerIndex = $state<number | null>(null);
-		let rewardSlotPickerSelection = $state<string[]>([]);
+	let rewardTrackPickerOpen = $state(false);
+	let dicePoolPickerOpen = $state(false);
 
 	const specialEffectById = $derived.by(() => new Map(specialEffects.map((effect) => [effect.id, effect])));
 	const sortedSpecialEffects = $derived.by(() => [...specialEffects].sort((a, b) => a.name.localeCompare(b.name)));
@@ -299,170 +296,38 @@
 	let dragOverIndex = $state<number | null>(null);
 
 	// Forms
-	function normalizeIconGroups(
-		groups: string[][] | null | undefined,
-		fallback?: string[] | null
-	): string[][] {
-		if (Array.isArray(groups) && groups.length > 0) {
-			return groups.map((group) => (Array.isArray(group) ? group : []));
-		}
-		if (Array.isArray(fallback) && fallback.length > 0) {
-			return [fallback];
-		}
-		return [[]];
-	}
-
-	function flattenIconGroups(groups: string[][]): string[] {
-		return groups.flatMap((group) => group.filter((id): id is string => typeof id === 'string'));
-	}
-
-	function createEmptyTradeRow(): TradeRow {
-		return {
-			left_icon_ids: [],
-			right_icon_ids: [],
-			left_icon_groups: [[]],
-			right_icon_groups: [[]]
-		};
-	}
-
-	function normalizeTradeRows(
-		rows: TradeRow[] | null | undefined,
-		fallbackLeft?: string[] | null,
-		fallbackRight?: string[] | null
-	): TradeRow[] {
-		const safeRows = Array.isArray(rows)
-			? rows.map((row) => {
-					const leftGroups = normalizeIconGroups(row.left_icon_groups, row.left_icon_ids);
-					const rightGroups = normalizeIconGroups(row.right_icon_groups, row.right_icon_ids);
-					return {
-						left_icon_ids: flattenIconGroups(leftGroups),
-						right_icon_ids: flattenIconGroups(rightGroups),
-						left_icon_groups: leftGroups,
-						right_icon_groups: rightGroups
-					};
-				})
-			: [];
-
-		if (safeRows.length > 0) return safeRows;
-
-		const left = Array.isArray(fallbackLeft) ? fallbackLeft : [];
-		const right = Array.isArray(fallbackRight) ? fallbackRight : [];
-		if (left.length > 0 || right.length > 0) {
-			const leftGroups = normalizeIconGroups(null, left);
-			const rightGroups = normalizeIconGroups(null, right);
-			return [
-				{
-					left_icon_ids: flattenIconGroups(leftGroups),
-					right_icon_ids: flattenIconGroups(rightGroups),
-					left_icon_groups: leftGroups,
-					right_icon_groups: rightGroups
-				}
-			];
-		}
-
-		return [createEmptyTradeRow()];
-	}
-
-	function createEmptyGainRow(): GainRow {
-		return { icon_ids: [], icon_groups: [[]] };
-	}
-
-	function normalizeGainRows(rows: GainRow[] | null | undefined): GainRow[] {
-		const safeRows = Array.isArray(rows)
-			? rows.map((row) => {
-					const groups = normalizeIconGroups(row.icon_groups, row.icon_ids);
-					return {
-						icon_ids: flattenIconGroups(groups),
-						icon_groups: groups
-					};
-				})
-			: [];
-
-		return safeRows.length > 0 ? safeRows : [createEmptyGainRow()];
+	function normalizeRewardTrack(raw: unknown): string[] {
+		if (!Array.isArray(raw)) return [];
+		return raw
+			.filter((id): id is string => typeof id === 'string')
+			.map((id) => id.trim())
+			.filter(Boolean)
+			.slice(0, 6);
 	}
 
 		function monsterToFormData(monster: Monster): MonsterFormData {
-			const barrier = monster.barrier ?? 0;
-			const rewardTrack = normalizeRewardTrack(
-				barrier,
-				(monster as { reward_track?: string[][] | null }).reward_track
-			);
 			return {
 				name: monster.name,
-				subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
-				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
+				subtext: null,
+				description: monster.special_conditions ?? null,
 				damage: monster.damage ?? 0,
-				barrier,
-				card_image_path: (monster as { card_image_path?: string | null }).card_image_path ?? null,
-				reward_track: rewardTrack,
-				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
-				stage: monster.stage,
-				monster_classification: monster.monster_classification ?? 'monster',
-				icon: monster.icon,
+			barrier: monster.barrier ?? 0,
+			card_image_path: (monster as { card_image_path?: string | null }).card_image_path ?? null,
+			reward_track: normalizeRewardTrack((monster as { reward_track?: unknown }).reward_track),
+			stage: monster.stage,
+			monster_classification: monster.monster_classification ?? 'monster',
+			icon: monster.icon,
 				image_path: monster.image_path,
-			invade_location_id: monster.invade_location_id ?? null,
-			order_num: monster.order_num,
-			reward_rows: monster.reward_rows ?? [],
-			trade_rows: normalizeTradeRows(
-				(monster as { trade_rows?: TradeRow[] }).trade_rows,
-				(monster as { trade_left_icon_ids?: string[] }).trade_left_icon_ids,
-				(monster as { trade_right_icon_ids?: string[] }).trade_right_icon_ids
-			),
-			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
+				invade_location_id: monster.invade_location_id ?? null,
+				order_num: monster.order_num,
 				special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-				quantity: enableQuantities ? (monster.quantity ?? 1) : 1
-			};
-		}
-
-		function normalizeRewardTrack(barrierValue: number, track: unknown): string[][] {
-			const barrier = Math.max(0, Math.round(barrierValue));
-			const killedIndex = Math.max(1, barrier);
-			const targetLen = killedIndex + 1; // includes slot0 participation
-
-			const safe: string[][] = Array.isArray(track)
-				? track.map((slot) =>
-						Array.isArray(slot)
-							? slot
-									.filter((id): id is string => typeof id === 'string')
-									.map((id) => id.trim())
-									.filter(Boolean)
-							: []
-					)
-				: [];
-
-			while (safe.length < targetLen) safe.push([]);
-			return safe.slice(0, targetLen);
-		}
-
-		function openRewardSlotPicker(slotIndex: number) {
-			const slots = monsterFormData.reward_track ?? [];
-			if (slotIndex < 0 || slotIndex >= slots.length) return;
-			rewardSlotPickerIndex = slotIndex;
-			rewardSlotPickerSelection = [...(slots[slotIndex] ?? [])];
-			rewardSlotPickerOpen = true;
-		}
-
-		function closeRewardSlotPicker() {
-			rewardSlotPickerOpen = false;
-			rewardSlotPickerIndex = null;
-			rewardSlotPickerSelection = [];
-		}
-
-		function applyRewardSlotSelection(ids: string[]) {
-			if (rewardSlotPickerIndex === null) return;
-			const next = monsterFormData.reward_track.map((slot, idx) => (idx === rewardSlotPickerIndex ? ids : slot));
-			monsterFormData.reward_track = next;
-		}
-
-		function clearRewardSlot(slotIndex: number) {
-			const slots = monsterFormData.reward_track ?? [];
-			if (slotIndex < 0 || slotIndex >= slots.length) return;
-			const next = slots.map((slot, idx) => (idx === slotIndex ? [] : slot));
-			monsterFormData.reward_track = next;
-			if (rewardSlotPickerIndex === slotIndex) {
-				rewardSlotPickerSelection = [];
-			}
-		}
+			dice_pool: Array.isArray((monster as unknown as { dice_pool?: unknown }).dice_pool) ? ((monster as unknown as { dice_pool?: string[] }).dice_pool ?? []) : [],
+			attack_type: ((monster as unknown as { attack_type?: string }).attack_type === 'dice_pool') ? 'dice_pool' : 'damage',
+			stage_num: Number((monster as unknown as { stage_num?: number }).stage_num) || 1,
+			quantity: enableQuantities ? (monster.quantity ?? 1) : 1,
+		choose_amount: Number((monster as unknown as { choose_amount?: number }).choose_amount) || 1
+		};
+	}
 
 	function parseNonNegativeInt(value: string, fallback: number): number {
 		const parsed = Number(value);
@@ -480,6 +345,39 @@
 			return parseNonNegativeInt(trimmed, fallback);
 		}
 		return fallback;
+	}
+
+	function setRewardTrack(ids: string[]) {
+		monsterFormData.reward_track = ids.slice(0, 6);
+	}
+
+	function setRewardTrackCell(cellIndex: number, iconId: string) {
+		const track = [...(monsterFormData.reward_track ?? [])];
+		if (cellIndex >= 0 && cellIndex < 6) {
+			track[cellIndex] = iconId;
+			monsterFormData.reward_track = track.slice(0, 6);
+		}
+	}
+
+	function moveRewardTrackIcon(fromIndex: number, toIndex: number) {
+		const track = [...(monsterFormData.reward_track ?? [])];
+		if (fromIndex < 0 || fromIndex >= track.length) return;
+		if (toIndex < 0 || toIndex >= track.length) return;
+		if (fromIndex === toIndex) return;
+		const [moved] = track.splice(fromIndex, 1);
+		track.splice(toIndex, 0, moved);
+		monsterFormData.reward_track = track;
+	}
+
+	function removeRewardTrackIcon(index: number) {
+		const track = [...(monsterFormData.reward_track ?? [])];
+		if (index < 0 || index >= track.length) return;
+		track.splice(index, 1);
+		monsterFormData.reward_track = track;
+	}
+
+	function clearRewardTrack() {
+		monsterFormData.reward_track = [];
 	}
 
 	function getInlineStats(monster: Monster): InlineStats {
@@ -615,7 +513,7 @@
 		}
 	}
 
-		async function saveInlineEdits(monsterId: string) {
+	async function saveInlineEdits(monsterId: string) {
 			if (inlineStatsSaving[monsterId]) return;
 			const monster = monsterById.get(monsterId);
 			if (!monster) return;
@@ -627,18 +525,18 @@
 
 		inlineStatsSaving = { ...inlineStatsSaving, [monsterId]: true };
 		inlineStatsError = { ...inlineStatsError, [monsterId]: null };
-		try {
-			const formData = monsterToFormData(monster);
-			const nextBarrier = statsEdit?.barrier ?? formData.barrier;
-				const merged: MonsterFormData = {
-					...formData,
-					damage: statsEdit?.damage ?? formData.damage,
-					barrier: nextBarrier,
-					reward_track: normalizeRewardTrack(nextBarrier, formData.reward_track),
-					stage: stageEdit ?? formData.stage,
-					special_effect_ids: effectsEdit ?? formData.special_effect_ids
-				};
-				await onMonsterSave(merged, monsterId);
+			try {
+				const formData = monsterToFormData(monster);
+				const nextBarrier = statsEdit?.barrier ?? formData.barrier;
+					const merged: MonsterFormData = {
+						...formData,
+						__save_source: 'inline',
+						damage: statsEdit?.damage ?? formData.damage,
+						barrier: nextBarrier,
+						stage: stageEdit ?? formData.stage,
+						special_effect_ids: effectsEdit ?? formData.special_effect_ids
+					};
+					await onMonsterSave(merged, monsterId);
 
 			const nextStats = { ...inlineStatsEdits };
 			delete nextStats[monsterId];
@@ -658,26 +556,26 @@
 		}
 	}
 
-	let monsterFormData = $state<MonsterFormData>({
-			name: '',
-			subtext: null,
-			description: null,
-			damage: 0,
-			barrier: 0,
-			card_image_path: null,
-			reward_track: [[], []],
-			show_tutorial: true,
-			stage: 'stage_1',
-			monster_classification: 'monster',
-		icon: null,
-		image_path: null,
-		invade_location_id: null,
-		order_num: 0,
-		reward_rows: [],
-		trade_rows: [createEmptyTradeRow()],
-		gain_rows: [createEmptyGainRow()],
-		special_effect_ids: [],
-		quantity: 1
+		let monsterFormData = $state<MonsterFormData>({
+				name: '',
+				subtext: null,
+				description: null,
+				damage: 0,
+				barrier: 0,
+				card_image_path: null,
+				reward_track: [],
+				stage: 'stage_1',
+				monster_classification: 'monster',
+			icon: null,
+			image_path: null,
+			invade_location_id: null,
+			order_num: 0,
+			special_effect_ids: [],
+		dice_pool: [],
+		attack_type: 'damage',
+		stage_num: 1,
+		quantity: 1,
+		choose_amount: 1
 	});
 
 	let eventFormData = $state<EventFormData>({
@@ -685,7 +583,6 @@
 		render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE,
 		title: '',
 		description: null,
-		stage_completion: null,
 		image_path: null,
 		reward_rows: [{ type: 'all_players', icon_ids: [] }],
 		order_num: 0
@@ -705,26 +602,26 @@
 			if (!showMonsters) return;
 			editorType = 'monster';
 			editingId = null;
-				monsterFormData = {
-					name: '',
-					subtext: null,
-					description: null,
-					damage: 0,
-					barrier: 0,
-					card_image_path: null,
-					reward_track: [[], []],
-					show_tutorial: true,
-					stage: 'stage_1',
-					monster_classification: 'monster',
-				icon: null,
-				image_path: null,
-			invade_location_id: null,
-			order_num: deckOrder.length,
-			reward_rows: [],
-			trade_rows: [createEmptyTradeRow()],
-			gain_rows: [createEmptyGainRow()],
-			special_effect_ids: [],
-			quantity: 1
+					monsterFormData = {
+						name: '',
+						subtext: null,
+						description: null,
+						damage: 0,
+						barrier: 0,
+						card_image_path: null,
+						reward_track: [],
+						stage: 'stage_1',
+						monster_classification: 'monster',
+					icon: null,
+					image_path: null,
+				invade_location_id: null,
+				order_num: deckOrder.length,
+				special_effect_ids: [],
+			dice_pool: [],
+			attack_type: 'damage',
+			stage_num: 1,
+			quantity: 1,
+			choose_amount: 1
 		};
 		onSelectMonster?.(null);
 		editorOpen = true;
@@ -739,7 +636,6 @@
 				render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE,
 				title: '',
 				description: null,
-				stage_completion: null,
 				image_path: null,
 				reward_rows: [{ type: 'all_players', icon_ids: [] }],
 				order_num: deckOrder.length
@@ -766,18 +662,17 @@
 			editorType = type;
 			editingId = id;
 				const baseForm = monsterToFormData(monster);
-				const statsEdit = inlineStatsEdits[id];
-				const effectsEdit = inlineEffectEdits[id];
-				const stageEdit = inlineStageEdits[id];
-				const nextBarrier = statsEdit?.barrier ?? baseForm.barrier;
-				monsterFormData = {
-					...baseForm,
-					damage: statsEdit?.damage ?? baseForm.damage,
-					barrier: nextBarrier,
-					reward_track: normalizeRewardTrack(nextBarrier, baseForm.reward_track),
-					stage: stageEdit ?? baseForm.stage,
-					special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
-				};
+					const statsEdit = inlineStatsEdits[id];
+					const effectsEdit = inlineEffectEdits[id];
+					const stageEdit = inlineStageEdits[id];
+					const nextBarrier = statsEdit?.barrier ?? baseForm.barrier;
+					monsterFormData = {
+						...baseForm,
+						damage: statsEdit?.damage ?? baseForm.damage,
+						barrier: nextBarrier,
+						stage: stageEdit ?? baseForm.stage,
+						special_effect_ids: effectsEdit ?? baseForm.special_effect_ids
+					};
 				onSelectMonster?.(monster);
 				editorOpen = true;
 			} else {
@@ -790,18 +685,13 @@
 					}
 					return;
 				}
-				if (event.card_kind === 'traveler') {
-					alert('Traveler cards are edited in the Travelers page.');
-					return;
-				}
-					editorType = type;
+						editorType = type;
 					editingId = id;
 					eventFormData = {
 						event_type: event.stage ?? DEFAULT_EVENT_TYPE,
 						render_style: getStageCardRenderStyle('event', (event as unknown as { data?: unknown }).data) as StageEventRenderStyle,
 						title: event.title,
 						description: event.description,
-						stage_completion: (event as { stage_completion?: string | null }).stage_completion ?? null,
 						image_path: event.image_path,
 						reward_rows:
 							(event.reward_rows as RewardRow[] | null | undefined) ?? [{ type: 'all_players', icon_ids: [] }],
@@ -831,34 +721,12 @@
 			const monster = monsterById.get(id);
 			if (!monster) return;
 
-			const barrierValue = monster.barrier ?? 0;
 			duplicatingId = id;
-			const rewardTrack = normalizeRewardTrack(barrierValue, (monster as { reward_track?: string[][] | null }).reward_track);
 			const copyForm: MonsterFormData = {
-				name: monster.name,
-				subtext: (monster as { traveler_subtext?: string | null }).traveler_subtext ?? null,
-				description: (monster as { traveler_description?: string | null }).traveler_description ?? null,
-				damage: monster.damage,
-				barrier: barrierValue,
+				...monsterToFormData(monster),
 				card_image_path: null,
-				reward_track: rewardTrack,
-				show_tutorial: (monster as { show_tutorial?: boolean | null }).show_tutorial ?? true,
-				stage: monster.stage,
-				monster_classification: monster.monster_classification ?? 'monster',
-				icon: monster.icon,
-				image_path: monster.image_path,
-			invade_location_id: monster.invade_location_id ?? null,
-			order_num: monster.order_num ?? deckOrder.length,
-			reward_rows: monster.reward_rows ?? [],
-			trade_rows: normalizeTradeRows(
-				(monster as { trade_rows?: TradeRow[] }).trade_rows,
-				(monster as { trade_left_icon_ids?: string[] }).trade_left_icon_ids,
-				(monster as { trade_right_icon_ids?: string[] }).trade_right_icon_ids
-			),
-			gain_rows: normalizeGainRows((monster as { gain_rows?: GainRow[] }).gain_rows),
-			special_effect_ids: monsterSpecialEffects[monster.id] ?? [],
-			quantity: enableQuantities ? (monster.quantity ?? 1) : 1
-		};
+				order_num: monster.order_num ?? deckOrder.length
+			};
 
 		try {
 			const newId = await onMonsterSave(copyForm, null);
@@ -1043,14 +911,15 @@
 			return;
 		}
 
-		try {
-			const barrierValue = coerceNonNegativeInt(monsterFormData.barrier, 0);
-				const sanitized: MonsterFormData = {
-					...monsterFormData,
-					damage: coerceNonNegativeInt(monsterFormData.damage, 0),
-					barrier: barrierValue,
-					reward_track: normalizeRewardTrack(barrierValue, monsterFormData.reward_track)
-				};
+			try {
+				const barrierValue = coerceNonNegativeInt(monsterFormData.barrier, 0);
+					const sanitized: MonsterFormData = {
+						...monsterFormData,
+						__save_source: 'editor',
+						damage: coerceNonNegativeInt(monsterFormData.damage, 0),
+						barrier: barrierValue,
+						reward_track: normalizeRewardTrack(monsterFormData.reward_track)
+					};
 				const id = await onMonsterSave(sanitized, editingId);
 				if (!editingId && !deckOrder.some((k) => k.type === 'monster' && k.id === id)) {
 					deckOrder = [...deckOrder, { type: 'monster', id }];
@@ -1230,38 +1099,6 @@
 		}
 	});
 
-		$effect(() => {
-			if (!editorOpen || editorType !== 'monster') return;
-			const barrierValue = coerceNonNegativeInt(monsterFormData.barrier, 0);
-
-			const normalizedTrack = normalizeRewardTrack(barrierValue, monsterFormData.reward_track);
-			const currentTrack = monsterFormData.reward_track;
-			let trackChanged = normalizedTrack.length !== currentTrack.length;
-			if (!trackChanged) {
-				for (let i = 0; i < normalizedTrack.length; i++) {
-					const a = normalizedTrack[i] ?? [];
-					const b = currentTrack[i] ?? [];
-					if (a.length !== b.length) {
-						trackChanged = true;
-						break;
-					}
-					for (let j = 0; j < a.length; j++) {
-						if (a[j] !== b[j]) {
-							trackChanged = true;
-							break;
-						}
-					}
-					if (trackChanged) break;
-				}
-			}
-			if (trackChanged) {
-				monsterFormData.reward_track = normalizedTrack;
-			}
-			if (rewardSlotPickerIndex !== null && rewardSlotPickerIndex >= normalizedTrack.length) {
-				closeRewardSlotPicker();
-			}
-		});
-
 	$effect(() => {
 		if (!showEvents && editorType === 'event') {
 			closeEditor();
@@ -1291,6 +1128,11 @@
 	);
 	const listPreviewVariant = $derived.by(() => previewVariants[0]);
 	const MonsterPreviewComponent = $derived.by(() => monsterPreviewComponent);
+
+	const MONSTER_PRINT_PREVIEW_W = 360;
+	const MONSTER_PRINT_PREVIEW_H = 466; // 2550×3300 aspect ratio
+	const LEGACY_CARD_PREVIEW_W = 600;
+	const LEGACY_CARD_PREVIEW_H = 437;
 	const editorTitle = $derived.by(() => {
 		if (editorType === 'monster') {
 			return editingId ? `Edit ${monsterLabel}` : `New ${monsterLabel}`;
@@ -1439,23 +1281,23 @@
 															onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
 														/>
 													</label>
-													<label class="inline-stat">
-														<span>BAR</span>
-														<input
-															type="number"
-															min="0"
-															step="1"
-															value={inlineStats.barrier}
-															disabled={isSaving}
-															aria-label="Barrier"
-															oninput={(e) =>
-																setInlineStatValue(monster, 'barrier', (e.target as HTMLInputElement).value)}
-															onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
-														/>
-													</label>
-													{#if isSaving}
-														<span class="inline-stat-status">Saving…</span>
-													{/if}
+														<label class="inline-stat">
+															<span>BAR</span>
+															<input
+																type="number"
+																min="0"
+																step="1"
+																value={inlineStats.barrier}
+																disabled={isSaving}
+																aria-label="Barrier"
+																oninput={(e) =>
+																	setInlineStatValue(monster, 'barrier', (e.target as HTMLInputElement).value)}
+																onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void saveInlineEdits(monster.id))}
+															/>
+														</label>
+														{#if isSaving}
+															<span class="inline-stat-status">Saving…</span>
+														{/if}
 													{#if saveError}
 														<span class="inline-stat-error">!</span>
 													{/if}
@@ -1566,10 +1408,12 @@
 										<div class="group-copies">
 											{#if item.type === 'monster' && monster}
 												{#each Array.from({ length: copies }, (_, i) => i) as idx (idx)}
+													{@const previewW = MONSTER_PRINT_PREVIEW_W}
+													{@const previewH = MONSTER_PRINT_PREVIEW_H}
 													<div
 														class="copy"
 														class:selected={isSelected}
-														style="--scale: {scale}; width: {600 * scale}px; height: {437 * scale}px;"
+														style="--scale: {scale}; width: {previewW * scale}px; height: {previewH * scale}px;"
 														role="button"
 														tabindex="0"
 														onclick={() => openEdit('monster', item.id)}
@@ -1597,10 +1441,12 @@
 													</div>
 												{/each}
 												{:else if item.type === 'event' && event}
+													{@const previewW = LEGACY_CARD_PREVIEW_W}
+													{@const previewH = LEGACY_CARD_PREVIEW_H}
 													<div
 														class="copy"
 														class:selected={isSelected}
-														style="--scale: {scale}; width: {600 * scale}px; height: {437 * scale}px;"
+														style="--scale: {scale}; width: {previewW * scale}px; height: {previewH * scale}px;"
 														role="button"
 														tabindex="0"
 														onclick={() => openEdit('event', item.id)}
@@ -1609,12 +1455,6 @@
 														<LazyMount style="width: 100%; height: 100%; display: block;" rootMargin="1200px 0px">
 															<div class="copy-inner">
 																{#if event.card_kind === 'stage_location'}
-																	{#if event.art_url}
-																		<img src={event.art_url} alt={event.title} style="width: 100%; height: 100%; object-fit: cover;" />
-																	{:else}
-																		<div class="missing">Missing image</div>
-																	{/if}
-																{:else if event.card_kind === 'traveler'}
 																	{#if event.art_url}
 																		<img src={event.art_url} alt={event.title} style="width: 100%; height: 100%; object-fit: cover;" />
 																	{:else}
@@ -1670,31 +1510,63 @@
 						</FormField>
 					{/if}
 
-					{#if showDescription}
-						<FormField label="Description">
-							<Textarea rows={3} bind:value={monsterFormData.description} placeholder="Longer traveler detail..." />
-						</FormField>
-					{/if}
+						{#if showDescription}
+							<FormField label="Description">
+								<Textarea rows={3} bind:value={monsterFormData.description} placeholder="Longer detail..." />
+							</FormField>
+						{/if}
 
 					{#if showStats}
-						<div class="grid-2">
-							<FormField label="Damage">
-								<Input type="number" min={0} bind:value={monsterFormData.damage} />
+						{#if showAttackTypeToggle}
+							<FormField label="Attack Type">
+								<div class="attack-type-toggle">
+									<label class="attack-type-option">
+										<input
+											type="radio"
+											name="attack_type"
+											value="damage"
+											checked={monsterFormData.attack_type === 'damage'}
+											onchange={() => {
+												monsterFormData.attack_type = 'damage';
+												monsterFormData.dice_pool = [];
+											}}
+										/>
+										Direct Damage
+									</label>
+									<label class="attack-type-option">
+										<input
+											type="radio"
+											name="attack_type"
+											value="dice_pool"
+											checked={monsterFormData.attack_type === 'dice_pool'}
+											onchange={() => {
+												monsterFormData.attack_type = 'dice_pool';
+												monsterFormData.damage = 0;
+											}}
+										/>
+										Dice Pool
+									</label>
+								</div>
 							</FormField>
+						{/if}
+
+						<div class="grid-2">
+							{#if !showAttackTypeToggle || monsterFormData.attack_type === 'damage'}
+								<FormField label="Damage">
+									<Input type="number" min={0} bind:value={monsterFormData.damage} />
+								</FormField>
+							{/if}
 							<FormField label="Barrier">
 								<Input type="number" min={0} bind:value={monsterFormData.barrier} />
 							</FormField>
 						</div>
-
-						<FormField label="Tutorial" helperText="If off, the card shows Participation rewards (reward track slot 0) instead.">
-							<label class="checkbox-field">
-								<input type="checkbox" bind:checked={monsterFormData.show_tutorial} />
-								<span>Show tutorial callout</span>
-							</label>
-						</FormField>
 					{/if}
 
-					{#if enableQuantities}
+					{#if showStageAsInteger}
+						<FormField label="Stage">
+							<Input type="number" min={1} bind:value={monsterFormData.stage_num} />
+						</FormField>
+					{:else if enableQuantities}
 						<div class="grid-2">
 							<FormField label="Quantity" helperText="Copies in deck">
 								<Input type="number" min={1} bind:value={monsterFormData.quantity} />
@@ -1789,82 +1661,188 @@
 
 					{#if showSpecialEffects}
 						<FormField label="Special Effects">
-							<SpecialEffectPicker bind:selected={monsterFormData.special_effect_ids} maxSelection={4} />
+							<SpecialEffectPicker bind:selected={monsterFormData.special_effect_ids} maxSelection={6} />
 						</FormField>
 					{/if}
 
-					{#if showGainRows}
-						<div class="full-width">
-							<GainRowsEditor bind:gainRows={monsterFormData.gain_rows} />
+					{#if !showAttackTypeToggle || monsterFormData.attack_type === 'dice_pool'}
+					<div class="full-width dice-pool-editor">
+							<div class="reward-track-editor__header">
+								<div class="reward-track-editor__title">Dice Pool</div>
+								<div class="reward-track-editor__hint">{monsterFormData.dice_pool.length} icons</div>
+							</div>
+
+							<div class="reward-track-editor__slots">
+								{#each monsterFormData.dice_pool as iconId, idx (`dice:${iconId}:${idx}`)}
+									{@const url = getIconPoolUrl(iconId)}
+									<div class="reward-track-slot reward-track-slot--inline">
+										<div class="reward-track-slot__icons">
+											{#if url}
+												<img src={url} alt="" loading="lazy" decoding="async" />
+											{:else}
+												<span class="reward-track-slot__placeholder">?</span>
+											{/if}
+										</div>
+										<div class="reward-track-slot__actions">
+											<button
+												type="button"
+												class="mini-btn"
+												onclick={() => {
+													const ids = [...monsterFormData.dice_pool];
+													if (idx > 0) { [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]]; monsterFormData.dice_pool = ids; }
+												}}
+												disabled={idx === 0}
+											>
+												↑
+											</button>
+											<button
+												type="button"
+												class="mini-btn"
+												onclick={() => {
+													const ids = [...monsterFormData.dice_pool];
+													if (idx < ids.length - 1) { [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]]; monsterFormData.dice_pool = ids; }
+												}}
+												disabled={idx === monsterFormData.dice_pool.length - 1}
+											>
+												↓
+											</button>
+											<button
+												type="button"
+												class="mini-btn mini-btn--danger"
+												onclick={() => { monsterFormData.dice_pool = monsterFormData.dice_pool.filter((_, i) => i !== idx); }}
+											>
+												✕
+											</button>
+										</div>
+									</div>
+								{/each}
+								{#if monsterFormData.dice_pool.length === 0}
+									<div class="reward-track-editor__empty">No dice pool icons.</div>
+								{/if}
+							</div>
+
+							<div class="reward-track-editor__picker">
+								<div class="reward-track-editor__picker-header">
+									<span>Edit Dice Pool</span>
+									<div class="reward-track-editor__picker-actions">
+										<Button
+											variant="secondary"
+											size="sm"
+											onclick={() => (dicePoolPickerOpen = !dicePoolPickerOpen)}
+										>
+											{dicePoolPickerOpen ? 'Hide picker' : 'Show picker'}
+										</Button>
+										<Button
+											variant="danger"
+											size="sm"
+											onclick={() => { monsterFormData.dice_pool = []; }}
+											disabled={monsterFormData.dice_pool.length === 0}
+										>
+											Clear all
+										</Button>
+									</div>
+								</div>
+
+								{#if dicePoolPickerOpen}
+									<IconPicker
+										selected={monsterFormData.dice_pool}
+										onselect={(ids) => { monsterFormData.dice_pool = ids; }}
+										multiple={true}
+										allowDuplicates={true}
+									/>
+								{/if}
+							</div>
 						</div>
 					{/if}
 
-					{#if showTradeRow}
-						<div class="full-width">
-							<TradeRowsEditor bind:tradeRows={monsterFormData.trade_rows} />
-						</div>
-					{/if}
-
-						{#if showRewardRows}
-							{@const killedIndex = Math.max(1, coerceNonNegativeInt(monsterFormData.barrier, 0))}
+					{#if showRewardRows}
+							{@const rewardIcons = monsterFormData.reward_track ?? []}
 							<div class="full-width reward-track-editor">
 								<div class="reward-track-editor__header">
-									<div class="reward-track-editor__title">Reward Track</div>
-									<div class="reward-track-editor__hint">
-										Slot 0 is Participation (shown when Tutorial is off). Slot {killedIndex} is KILLED.
-									</div>
+									<div class="reward-track-editor__title">On-Kill Rewards</div>
+									<div class="reward-track-editor__hint">{rewardIcons.length}/6 slots</div>
 								</div>
 
 								<div class="reward-track-editor__slots">
-									{#each monsterFormData.reward_track as iconIds, idx (idx)}
-										{@const label =
-											idx === 0 ? 'Participation (Reserved)' : idx === killedIndex ? 'KILLED' : `Damage ${idx}`}
-										{@const urls = iconIds.map((id) => getIconPoolUrl(id)).filter(Boolean) as string[]}
-										<button type="button" class="reward-track-slot" onclick={() => openRewardSlotPicker(idx)}>
-											<div class="reward-track-slot__label">{label}</div>
+									{#each rewardIcons as iconId, idx (`kill:${iconId}:${idx}`)}
+										{@const url = getIconPoolUrl(iconId)}
+										<div class="reward-track-slot reward-track-slot--inline">
 											<div class="reward-track-slot__icons">
-												{#if urls.length === 0}
-													<span class="reward-track-slot__placeholder">+</span>
+												{#if url}
+													<img src={url} alt="" loading="lazy" decoding="async" />
 												{:else}
-													{#each urls.slice(0, 8) as url, urlIdx (`${url}:${urlIdx}`)}
-														<img src={url} alt="" loading="lazy" decoding="async" />
-													{/each}
-													{#if urls.length > 8}
-														<span class="reward-track-slot__more">+{urls.length - 8}</span>
-													{/if}
+													<span class="reward-track-slot__placeholder">?</span>
 												{/if}
 											</div>
-										</button>
-									{/each}
-								</div>
-
-								{#if rewardSlotPickerOpen && rewardSlotPickerIndex !== null}
-									<div class="reward-track-editor__picker">
-										<div class="reward-track-editor__picker-header">
-											<span>Editing slot #{rewardSlotPickerIndex}</span>
-											<div class="reward-track-editor__picker-actions">
-												<Button variant="secondary" size="sm" onclick={closeRewardSlotPicker}>
-													Done
-												</Button>
-												<Button
-													variant="danger"
-													size="sm"
-													onclick={() => clearRewardSlot(rewardSlotPickerIndex!)}
+											<div class="reward-track-slot__actions">
+												<button
+													type="button"
+													class="mini-btn"
+													onclick={() => moveRewardTrackIcon(idx, idx - 1)}
+													disabled={idx === 0}
 												>
-													Clear
-												</Button>
+													↑
+												</button>
+												<button
+													type="button"
+													class="mini-btn"
+													onclick={() => moveRewardTrackIcon(idx, idx + 1)}
+													disabled={idx === rewardIcons.length - 1}
+												>
+													↓
+												</button>
+												<button
+													type="button"
+													class="mini-btn mini-btn--danger"
+													onclick={() => removeRewardTrackIcon(idx)}
+												>
+													✕
+												</button>
 											</div>
 										</div>
+									{/each}
+									{#if rewardIcons.length === 0}
+										<div class="reward-track-editor__empty">No on-kill rewards.</div>
+									{/if}
+								</div>
+
+								<div class="reward-track-editor__picker">
+									<div class="reward-track-editor__picker-header">
+										<span>Edit On-Kill Rewards</span>
+										<div class="reward-track-editor__picker-actions">
+											<Button
+												variant="secondary"
+												size="sm"
+												onclick={() => (rewardTrackPickerOpen = !rewardTrackPickerOpen)}
+											>
+												{rewardTrackPickerOpen ? 'Hide picker' : 'Show picker'}
+											</Button>
+											<Button
+												variant="danger"
+												size="sm"
+												onclick={clearRewardTrack}
+												disabled={rewardIcons.length === 0}
+											>
+												Clear all
+											</Button>
+										</div>
+									</div>
+
+									{#if rewardTrackPickerOpen}
 										<IconPicker
-											bind:selected={rewardSlotPickerSelection}
-											onselect={applyRewardSlotSelection}
+											selected={rewardIcons}
+											onselect={(ids) => setRewardTrack(ids)}
 											multiple={true}
-											maxSelection={12}
+											maxSelection={6}
 											allowDuplicates={true}
 										/>
-									</div>
-								{/if}
+									{/if}
+								</div>
 							</div>
+
+							<FormField label="Choose Amount" helperText="0 = hidden on card">
+								<Input type="number" min={0} bind:value={monsterFormData.choose_amount} />
+							</FormField>
 						{/if}
 
 					<div class="editor-actions">
@@ -1891,15 +1869,7 @@
 					<FormField label="Description">
 						<Textarea rows={4} bind:value={eventFormData.description} />
 					</FormField>
-					<FormField label="Stage completion" helperText="When should this stage end? Shown at the bottom of the card.">
-						<Textarea
-							rows={2}
-							bind:value={eventFormData.stage_completion}
-							placeholder="e.g. Ends after the Stage Boss is defeated"
-						/>
-					</FormField>
-
-					{#if showEventRewardRows}
+						{#if showEventRewardRows}
 						<div class="full-width">
 							<RewardRowsEditor bind:rewardRows={eventFormData.reward_rows} defaultType="all_players" />
 						</div>
@@ -1932,6 +1902,17 @@
 />
 
 <style>
+	.attack-type-toggle {
+		display: flex;
+		gap: 1rem;
+	}
+	.attack-type-option {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		cursor: pointer;
+		font-size: 0.875rem;
+	}
 	.workspace {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
@@ -2627,6 +2608,11 @@
 			background: rgba(168, 85, 247, 0.1);
 		}
 
+		.reward-track-slot--active {
+			border-color: rgba(168, 85, 247, 0.75);
+			background: rgba(168, 85, 247, 0.12);
+		}
+
 		.reward-track-slot__label {
 			font-size: 0.7rem;
 			font-weight: 800;
@@ -2672,6 +2658,47 @@
 			padding: 0 0.25rem;
 		}
 
+		.reward-track-slot--inline {
+			cursor: default;
+			flex-direction: row;
+			align-items: center;
+			justify-content: space-between;
+		}
+
+		.reward-track-slot--inline:hover {
+			transform: none;
+			border-color: rgba(148, 163, 184, 0.18);
+			background: rgba(2, 6, 23, 0.35);
+		}
+
+		.reward-track-slot__actions {
+			display: flex;
+			gap: 0.25rem;
+			align-items: center;
+			margin-left: auto;
+		}
+
+		.mini-btn {
+			border: 1px solid rgba(148, 163, 184, 0.25);
+			background: rgba(30, 41, 59, 0.4);
+			color: rgba(226, 232, 240, 0.9);
+			border-radius: 8px;
+			padding: 0.25rem 0.45rem;
+			font-size: 0.8rem;
+			line-height: 1;
+			cursor: pointer;
+		}
+
+		.mini-btn:disabled {
+			opacity: 0.4;
+			cursor: not-allowed;
+		}
+
+		.mini-btn--danger {
+			border-color: rgba(248, 113, 113, 0.35);
+			color: rgba(248, 113, 113, 0.95);
+		}
+
 		.reward-track-editor__picker {
 			display: flex;
 			flex-direction: column;
@@ -2693,6 +2720,37 @@
 			display: flex;
 			gap: 0.4rem;
 			flex-wrap: wrap;
+		}
+
+		.reward-track-editor__empty {
+			font-size: 0.75rem;
+			color: rgba(148, 163, 184, 0.9);
+			padding: 0.25rem 0;
+		}
+
+		.dice-pool-editor {
+			display: flex;
+			flex-direction: column;
+			gap: 0.4rem;
+		}
+
+		.dice-pool-name {
+			font-size: 0.8rem;
+			color: #e2e8f0;
+			flex: 1;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.dice-pool-select {
+			padding: 0.35rem 0.5rem;
+			border-radius: 8px;
+			border: 1px solid rgba(148, 163, 184, 0.2);
+			background: rgba(2, 6, 23, 0.35);
+			color: #e2e8f0;
+			font-size: 0.8rem;
 		}
 
 		.editor-actions {

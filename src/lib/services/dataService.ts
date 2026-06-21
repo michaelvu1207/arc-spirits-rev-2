@@ -37,33 +37,6 @@ export function publicUrl(bucket: string, path: string | null | undefined): stri
 	return data?.publicUrl ?? null;
 }
 
-/**
- * Upload a file with transparent area cropping (for images)
- * @deprecated Use processAndUploadImage directly for new code
- */
-export async function uploadFile(
-	bucket: string,
-	path: string,
-	file: Blob | File,
-	options?: { contentType?: string; upsert?: boolean; cacheControl?: string }
-): Promise<string> {
-	// Parse path into folder and filename
-	const lastSlash = path.lastIndexOf('/');
-	const folder = lastSlash > 0 ? path.substring(0, lastSlash) : '';
-	const fullFilename = lastSlash > 0 ? path.substring(lastSlash + 1) : path;
-	// Remove extension from filename
-	const filename = fullFilename.replace(/\.[^.]+$/, '');
-
-	const { data, error } = await processAndUploadImage(file, {
-		bucket,
-		folder,
-		filename,
-		cropTransparent: options?.contentType?.startsWith('image/') ?? true,
-		upsert: options?.upsert ?? true
-	});
-	if (error) throw error;
-	return data?.path ?? '';
-}
 
 export async function removeFiles(bucket: string, paths: string[]): Promise<void> {
 	const { error } = await supabase.storage.from(bucket).remove(paths);

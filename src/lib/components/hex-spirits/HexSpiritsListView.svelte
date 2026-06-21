@@ -1,22 +1,20 @@
 <script lang="ts">
-	import type { HexSpiritRow, RuneRow } from '$lib/types/gameData';
+	import type { HexSpiritRow, MatItemRow, LookupService } from '$lib/types/gameData';
+	import { isAwakenOrRuneToken } from '$lib/utils/awakenRuneTokens';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
+	import { useMultiSelect } from '$lib/composables';
 
 	type HexSpirit = HexSpiritRow & {
 		game_print_image_url: string | null;
 		art_raw_image_url: string | null;
 	};
 
-	type LookupService = {
-		getLabel: (id: string | null, defaultValue?: string) => string;
-	};
-
 	type Props = {
 		spirits: HexSpirit[];
 		originLookup: LookupService;
 		classLookup: LookupService;
-		runes: RuneRow[];
+		runes: MatItemRow[];
 		onEdit: (spirit: HexSpirit) => void;
 		onDelete: (spirit: HexSpirit) => void;
 		onDeleteMultiple?: (ids: string[]) => void;
@@ -24,41 +22,21 @@
 
 	let { spirits, originLookup, classLookup, runes, onEdit, onDelete, onDeleteMultiple }: Props = $props();
 
-	// Multi-select state
-	let selectedIds = $state<Set<string>>(new Set());
-
-	function toggleSelect(id: string) {
-		const newSet = new Set(selectedIds);
-		if (newSet.has(id)) {
-			newSet.delete(id);
-		} else {
-			newSet.add(id);
-		}
-		selectedIds = newSet;
-	}
-
-	function selectAll() {
-		selectedIds = new Set(spirits.map(s => s.id));
-	}
-
-	function deselectAll() {
-		selectedIds = new Set();
-	}
+	const selection = useMultiSelect();
 
 	async function deleteSelected() {
-		if (selectedIds.size === 0) return;
-		if (!confirm(`Delete ${selectedIds.size} selected item(s)?`)) return;
+		if (selection.selectedCount === 0) return;
+		if (!confirm(`Delete ${selection.selectedCount} selected item(s)?`)) return;
 
 		if (onDeleteMultiple) {
-			onDeleteMultiple(Array.from(selectedIds));
+			onDeleteMultiple(Array.from(selection.selectedIds));
 		} else {
-			// Fallback: delete one by one
-			for (const id of selectedIds) {
+			for (const id of selection.selectedIds) {
 				const spirit = spirits.find(s => s.id === id);
 				if (spirit) onDelete(spirit);
 			}
 		}
-		selectedIds = new Set();
+		selection.deselectAll();
 	}
 
 	function primaryOriginId(spirit: HexSpirit): string | null {
@@ -95,10 +73,10 @@
 </script>
 
 <MultiSelectBar
-	selectedCount={selectedIds.size}
+	selectedCount={selection.selectedCount}
 	totalCount={spirits.length}
-	onSelectAll={selectAll}
-	onDeselectAll={deselectAll}
+	onSelectAll={() => selection.selectAll(spirits.map(s => s.id))}
+	onDeselectAll={selection.deselectAll}
 	onDeleteSelected={deleteSelected}
 />
 
@@ -108,7 +86,7 @@
 		{@const spiritClassId = primaryClassId(spirit)}
 		{@const originCounts = calculateOriginCounts(spirit)}
 		{@const classCounts = calculateClassCounts(spirit)}
-		{@const isSelected = selectedIds.has(spirit.id)}
+		{@const isSelected = selection.isSelected(spirit.id)}
 
 		<article class="card spirit-card" class:selected={isSelected}>
 			<header>
@@ -116,7 +94,7 @@
 					<input
 						type="checkbox"
 						checked={isSelected}
-						onchange={() => toggleSelect(spirit.id)}
+						onchange={() => selection.toggle(spirit.id)}
 					/>
 				</label>
 				<div class="header-content">
@@ -162,19 +140,29 @@
 					{/if}
 				</div>
 
-				{#if spirit.rune_cost && spirit.rune_cost.length > 0}
+				{#if spirit.awaken_condition}
 					<div class="detail-section">
-						<h3>Rune Cost</h3>
-						<div class="trait-list">
-							{#each spirit.rune_cost as runeId}
-								{@const rune = runes.find((r) => r.id === runeId)}
-								{#if rune}
+						<h3>Awaken Condition</h3>
+						{#if spirit.awaken_condition.type === 'rune_cost'}
+							<div class="trait-list">
+								{#each spirit.awaken_condition.rune_ids as token}
+								{#if typeof token === 'string'}
+									{@const rune = runes.find((r) => r.id === token)}
+									{#if rune}
+										<div class="trait-badge trait-badge--rune">
+											{rune.name}
+										</div>
+									{/if}
+								{:else if isAwakenOrRuneToken(token)}
 									<div class="trait-badge trait-badge--rune">
-										{rune.name}
+										{(token.rune_ids ?? []).map((id) => runes.find((r) => r.id === id)?.name ?? '?').join(' / ')}
 									</div>
 								{/if}
-							{/each}
-						</div>
+								{/each}
+							</div>
+						{:else if spirit.awaken_condition.type === 'text'}
+							<p class="awaken-text">{spirit.awaken_condition.text}</p>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -316,6 +304,13 @@
 		background: rgba(168, 85, 247, 0.2);
 		color: #d8b4fe;
 		border: 1px solid rgba(168, 85, 247, 0.3);
+	}
+
+	.awaken-text {
+		color: #d8b4fe;
+		font-size: 0.75rem;
+		margin: 0;
+		font-style: italic;
 	}
 
 	.empty-text {

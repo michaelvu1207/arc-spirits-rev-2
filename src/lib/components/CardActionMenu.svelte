@@ -4,6 +4,8 @@
 	export let onEdit: () => void;
 	export let onDelete: (() => void) | null = null;
 	export let onGenerate: (() => void) | null = null;
+	export let onToggleEnabled: (() => void) | null = null;
+	export let toggleLabel: string = 'Toggle';
 
 	let isOpen = false;
 	let dropdown: HTMLDivElement | null = null;
@@ -23,6 +25,12 @@ function handleDelete(event: MouseEvent) {
 	event.stopPropagation();
 	isOpen = false;
 	onDelete?.();
+}
+
+function handleToggleEnabled(event: MouseEvent) {
+	event.stopPropagation();
+	isOpen = false;
+	onToggleEnabled?.();
 }
 
 	function handleClickOutside(event: MouseEvent) {
@@ -68,6 +76,11 @@ function handleDelete(event: MouseEvent) {
 			{#if onGenerate}
 				<button class="dropdown-item" type="button" on:click={() => { isOpen = false; onGenerate?.(); }}>
 					Generate PNG
+				</button>
+			{/if}
+			{#if onToggleEnabled}
+				<button class="dropdown-item" type="button" on:click={handleToggleEnabled}>
+					{toggleLabel}
 				</button>
 			{/if}
 			{#if onDelete}

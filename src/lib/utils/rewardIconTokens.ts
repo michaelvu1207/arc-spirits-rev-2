@@ -11,9 +11,9 @@ export function rewardIconTokenSlotCost(token: RewardIconToken): number {
 	if (!token || !isRewardOrIconToken(token)) return 1;
 	const count = token.icon_ids?.length ?? 0;
 	// OR slots are meant to be visually larger by spanning multiple slots.
-	// Default to 2 slots even when empty; allow up to 3 icons/slots.
+	// Default to 2 slots even when empty; allow up to 5 icons/slots.
 	if (count <= 0) return 2;
-	return Math.max(2, Math.min(3, count));
+	return Math.max(2, Math.min(5, count));
 }
 
 export function rewardIconTokensSlotsUsed(tokens: RewardIconToken[]): number {

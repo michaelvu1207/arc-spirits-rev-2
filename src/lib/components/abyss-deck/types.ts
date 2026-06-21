@@ -1,4 +1,4 @@
-import type { MonsterRow, StageCardRow, SpecialEffectRow, RewardRow, TradeRow, GainRow } from '$lib/types/gameData';
+import type { MonsterRow, StageCardRow, SpecialEffectRow, RewardRow } from '$lib/types/gameData';
 
 export type AbyssScenario = {
 	id: string;
@@ -28,12 +28,6 @@ export type Monster = MonsterRow & {
 	icon_url: string | null;
 	art_url: string | null;
 	effects?: SpecialEffectRow[];
-	traveler_subtext?: string | null;
-	traveler_description?: string | null;
-	trade_left_icon_ids?: string[];
-	trade_right_icon_ids?: string[];
-	trade_rows?: TradeRow[];
-	gain_rows?: GainRow[];
 	invade_location_name?: string | null;
 };
 

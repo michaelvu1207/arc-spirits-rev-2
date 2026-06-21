@@ -1,11 +1,10 @@
 <script lang="ts">
-	import type { GuardianRow, ArtifactRow } from '$lib/types/gameData';
+	import type { GuardianRow } from '$lib/types/gameData';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import MultiSelectBar from '$lib/components/shared/MultiSelectBar.svelte';
 	import { Button } from '$lib/components/ui';
 	import { publicAssetUrl } from '$lib/utils';
-
-	type ArtifactSummary = Pick<ArtifactRow, 'id' | 'name' | 'benefit' | 'recipe_box' | 'guardian_id'>;
+	import { normalizeOptionalText, normalizeLanguageCode, getTranslationValue } from '$lib/i18n/translations';
 
 	type GuardianLanguage = 'base' | string;
 	const BASE_LANGUAGE: GuardianLanguage = 'base';
@@ -14,7 +13,6 @@
 		guardians: GuardianRow[];
 		language?: GuardianLanguage;
 		origins: Array<{ id: string; name: string }>;
-		artifactsByGuardian: Record<string, ArtifactSummary[]>;
 		onEdit: (guardian: GuardianRow) => void;
 		onDelete: (guardian: GuardianRow) => void;
 		onDeleteMultiple: (ids: string[]) => void;
@@ -23,32 +21,9 @@
 		uploadingId: string | null;
 	}
 
-	let { guardians, origins, artifactsByGuardian, onEdit, onDelete, onDeleteMultiple, onUploadImage, onRemoveImage, uploadingId, language = BASE_LANGUAGE }: Props = $props();
+	let { guardians, origins, onEdit, onDelete, onDeleteMultiple, onUploadImage, onRemoveImage, uploadingId, language = BASE_LANGUAGE }: Props = $props();
 
 	let selectedIds = $state<Set<string>>(new Set());
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function getTranslationValue(input: unknown, lang: string): string | null {
-		if (!lang || lang === BASE_LANGUAGE) return null;
-		if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-		const record = input as Record<string, unknown>;
-		const direct = record[lang];
-		if (typeof direct === 'string') return normalizeOptionalText(direct);
-		for (const [key, value] of Object.entries(record)) {
-			if (normalizeLanguageCode(key) !== lang) continue;
-			if (typeof value !== 'string') continue;
-			return normalizeOptionalText(value);
-		}
-		return null;
-	}
 
 	function guardianDisplayName(guardian: GuardianRow): string {
 		if (language === BASE_LANGUAGE) return guardian.name;
@@ -57,14 +32,6 @@
 
 	const originName = (originId: string) =>
 		origins.find((o) => o.id === originId)?.name ?? 'Unknown';
-
-	const artifactsFor = (guardianId: string) => artifactsByGuardian[guardianId] ?? [];
-
-	const recipeSummary = (artifact: ArtifactSummary) => {
-		const count = artifact.recipe_box?.length ?? 0;
-		if (!count) return 'No recipe';
-		return `${count} rune${count === 1 ? '' : 's'}`;
-	};
 
 	const getImageUrl = (path: string | null | undefined) =>
 		publicAssetUrl(path, { bucket: 'game_assets' });
@@ -200,24 +167,6 @@
 				{/if}
 			</div>
 
-			<div class="artifact-section">
-				<h3>Artifacts</h3>
-				{#if artifactsFor(guardian.id).length}
-					<ul class="artifact-list">
-						{#each artifactsFor(guardian.id) as artifact (artifact.id)}
-							<li class="artifact-item">
-								<div class="artifact-name">{artifact.name}</div>
-								{#if artifact.benefit}
-									<p class="artifact-benefit">{artifact.benefit}</p>
-								{/if}
-								<small class="artifact-recipe">{recipeSummary(artifact)}</small>
-							</li>
-						{/each}
-					</ul>
-				{:else}
-					<p class="muted">No artifacts linked.</p>
-				{/if}
-			</div>
 		</article>
 	{:else}
 		<div class="empty">No guardians found.</div>
@@ -335,64 +284,6 @@
 	.image-upload {
 		display: flex;
 		justify-content: center;
-	}
-
-	.artifact-section {
-		padding-top: 0.5rem;
-		border-top: 1px solid rgba(148, 163, 184, 0.1);
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.artifact-section h3 {
-		margin: 0;
-		font-size: 0.7rem;
-		color: #cbd5f5;
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
-	}
-
-	.artifact-list {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: grid;
-		gap: 0.5rem;
-	}
-
-	.artifact-item {
-		background: rgba(30, 41, 59, 0.35);
-		border: 1px solid rgba(148, 163, 184, 0.1);
-		border-radius: 6px;
-		padding: 0.35rem 0.5rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-
-	.artifact-name {
-		font-weight: 600;
-		color: #f8fafc;
-		font-size: 0.7rem;
-	}
-
-	.artifact-benefit {
-		margin: 0;
-		color: #cbd5f5;
-		font-size: 0.65rem;
-		white-space: pre-wrap;
-	}
-
-	.artifact-recipe {
-		color: #94a3b8;
-		font-size: 0.6rem;
-	}
-
-	.muted {
-		margin: 0;
-		color: #64748b;
-		font-size: 0.65rem;
 	}
 
 	.empty {

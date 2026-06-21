@@ -1,7 +1,6 @@
 <script lang="ts">
-	import type { GuardianRow, ArtifactRow } from '$lib/types/gameData';
-
-	type ArtifactSummary = Pick<ArtifactRow, 'id' | 'name' | 'benefit' | 'recipe_box' | 'guardian_id'>;
+	import type { GuardianRow } from '$lib/types/gameData';
+	import { normalizeOptionalText, normalizeLanguageCode, getTranslationValue } from '$lib/i18n/translations';
 
 	type GuardianLanguage = 'base' | string;
 	const BASE_LANGUAGE: GuardianLanguage = 'base';
@@ -10,34 +9,10 @@
 		guardians: GuardianRow[];
 		language?: GuardianLanguage;
 		origins: Array<{ id: string; name: string }>;
-		artifactsByGuardian: Record<string, ArtifactSummary[]>;
 		onEdit: (guardian: GuardianRow) => void;
 	}
 
-	let { guardians, origins, artifactsByGuardian, onEdit, language = BASE_LANGUAGE }: Props = $props();
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function getTranslationValue(input: unknown, lang: string): string | null {
-		if (!lang || lang === BASE_LANGUAGE) return null;
-		if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-		const record = input as Record<string, unknown>;
-		const direct = record[lang];
-		if (typeof direct === 'string') return normalizeOptionalText(direct);
-		for (const [key, value] of Object.entries(record)) {
-			if (normalizeLanguageCode(key) !== lang) continue;
-			if (typeof value !== 'string') continue;
-			return normalizeOptionalText(value);
-		}
-		return null;
-	}
+	let { guardians, origins, onEdit, language = BASE_LANGUAGE }: Props = $props();
 
 	function guardianDisplayName(guardian: GuardianRow): string {
 		if (language === BASE_LANGUAGE) return guardian.name;
@@ -46,8 +21,6 @@
 
 	const originName = (originId: string) =>
 		origins.find((o) => o.id === originId)?.name ?? 'Unknown';
-
-	const artifactsFor = (guardianId: string) => artifactsByGuardian[guardianId] ?? [];
 </script>
 
 <div class="table-container">
@@ -56,7 +29,6 @@
 			<tr>
 				<th>Name</th>
 				<th>Origin</th>
-				<th>Artifacts</th>
 				<th>Images</th>
 				<th>Actions</th>
 			</tr>
@@ -67,17 +39,6 @@
 				<tr>
 					<td class="name-cell">{displayName}</td>
 					<td class="origin-cell">{originName(guardian.origin_id)}</td>
-					<td class="artifacts-cell">
-						{#if artifactsFor(guardian.id).length}
-							<ul>
-								{#each artifactsFor(guardian.id) as artifact}
-									<li>{artifact.name}</li>
-								{/each}
-							</ul>
-						{:else}
-							<span class="muted">None</span>
-						{/if}
-					</td>
 					<td class="images-cell">
 						{#if guardian.image_mat_path}✅{:else}⬜{/if}
 						{#if guardian.chibi_image_path}✅{:else}⬜{/if}
@@ -89,7 +50,7 @@
 				</tr>
 			{:else}
 				<tr>
-					<td colspan="5" class="empty">No guardians found.</td>
+					<td colspan="4" class="empty">No guardians found.</td>
 				</tr>
 			{/each}
 		</tbody>
@@ -139,16 +100,6 @@
 
 	.origin-cell {
 		color: #a5b4fc;
-	}
-
-	.artifacts-cell ul {
-		margin: 0;
-		padding: 0 0 0 1rem;
-		font-size: 0.65rem;
-	}
-
-	.artifacts-cell li {
-		margin: 0.1rem 0;
 	}
 
 	.images-cell {

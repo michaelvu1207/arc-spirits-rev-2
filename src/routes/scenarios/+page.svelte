@@ -6,26 +6,27 @@
 		EditionRow,
 		EventCardRow,
 		GameLocationRow,
+		GameLocationRewardRow,
+		GameLocationRowCompositionRow,
+		RewardRowAssignment,
 		MonsterRow,
 		ScenarioDeckEntryKind,
 		ScenarioDeckEntryRow,
 		ScenarioRow,
-		TravelerRow
+		StageCompletionCardRow
 	} from '$lib/types/gameData';
+	import { configToRewardRow } from '$lib/types/gameData';
 	import { DEFAULT_EVENT_TYPE, EVENT_TYPE_OPTIONS, eventTypeLabel, type EventType } from '$lib/types/eventTypes';
 	import {
-		DEFAULT_STAGE_EVENT_RENDER_STYLE,
 		DEFAULT_STAGE_LOCATION_RENDER_STYLE,
-		STAGE_EVENT_RENDER_STYLE_OPTIONS,
 		STAGE_LOCATION_RENDER_STYLE_OPTIONS,
 		setStageCardRenderStyleInData,
 		getStageCardRenderStyle,
-		type StageEventRenderStyle,
 		type StageLocationRenderStyle
 	} from '$lib/types/stageCardStyles';
 	import { getErrorMessage } from '$lib/utils';
 	import { getMonsterStageLabel } from '$lib/utils/monsterStageLabels';
-	import { PageLayout, type Tab } from '$lib/components/layout';
+	import { PageLayout } from '$lib/components/layout';
 	import CardActionMenu from '$lib/components/CardActionMenu.svelte';
 	import ImageUploader from '$lib/components/shared/ImageUploader.svelte';
 	import { Button, FormField, Input, Select, Textarea } from '$lib/components/ui';
@@ -40,34 +41,29 @@
 	type MonsterCatalogEntry = Pick<MonsterRow, 'id' | 'name' | 'stage' | 'card_image_path' | 'updated_at'>;
 	type GameLocationCatalogEntry = Pick<
 		GameLocationRow,
-		'id' | 'name' | 'background_image_path' | 'updated_at' | 'reward_rows'
-	>;
-	type TravelerCatalogEntry = Pick<
-		TravelerRow,
-		'id' | 'name' | 'state' | 'image_path' | 'card_image_path' | 'updated_at' | 'traveler_description'
-	>;
+		'id' | 'name' | 'background_image_path' | 'image_with_icons_path' | 'updated_at'
+	> & { reward_rows: GameLocationRewardRow[] };
 	type EventCatalogEntry = Pick<
 		EventCardRow,
-		'id' | 'internal_name' | 'stage' | 'title' | 'description' | 'stage_completion' | 'reward_rows' | 'image_path' | 'card_image_path' | 'data' | 'updated_at'
+		'id' | 'internal_name' | 'stage' | 'title' | 'description' | 'reward_rows' | 'image_path' | 'card_image_path' | 'data' | 'updated_at'
+	>;
+	type StageCompletionCatalogEntry = Pick<
+		StageCompletionCardRow,
+		'id' | 'title' | 'complete_condition' | 'stage' | 'card_image_path' | 'updated_at'
 	>;
 
 	type DeckItem = {
 		entry: ScenarioDeckEntryRow;
 		monster?: MonsterCatalogEntry | null;
 		location?: GameLocationCatalogEntry | null;
-		traveler?: TravelerCatalogEntry | null;
 		event?: EventCatalogEntry | null;
+		stageCompletion?: StageCompletionCatalogEntry | null;
+		stage: EventType | null;
 		label: string;
 	};
 
-	const tabs: Tab[] = [
-		{ id: 'manage', label: 'Manage', icon: '🎭' },
-		{ id: 'cards', label: 'Cards', icon: '🖼️' }
-	];
-	let activeTab = $state('manage');
-
-	const STORAGE_EDITION_KEY = 'arc-spirits-rev2:selected_scenario_edition_id';
-	const STORAGE_SCENARIO_KEY = 'arc-spirits-rev2:selected_scenario_id';
+	const STORAGE_EDITION_KEY = 'arc_spirits_assets:selected_scenario_edition_id';
+	const STORAGE_SCENARIO_KEY = 'arc_spirits_assets:selected_scenario_id';
 
 	let editions = $state<EditionOption[]>([]);
 	let selectedEditionId = $state('');
@@ -80,28 +76,20 @@
 
 	let monsters = $state<MonsterCatalogEntry[]>([]);
 	let gameLocations = $state<GameLocationCatalogEntry[]>([]);
-	let travelers = $state<TravelerCatalogEntry[]>([]);
 	let events = $state<EventCatalogEntry[]>([]);
+	let stageCompletions = $state<StageCompletionCatalogEntry[]>([]);
 
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// Add controls
 	let monsterToAddId = $state('');
-	let monsterToAddQuantity = $state<number>(1);
 	let addingMonster = $state(false);
 
 	let locationToAddId = $state('');
 	let locationEntryStage = $state<EventType>(DEFAULT_EVENT_TYPE);
 	let locationRenderStyle = $state<StageLocationRenderStyle>(DEFAULT_STAGE_LOCATION_RENDER_STYLE);
 	let addingLocation = $state(false);
-
-	let travelerToAddId = $state('');
-	let travelerEntryStage = $state<EventType>(DEFAULT_EVENT_TYPE);
-	let addingTraveler = $state(false);
-
-	let eventToAddId = $state('');
-	let addingEvent = $state(false);
 
 	// Scenario create/edit modal
 	let scenarioModalOpen = $state(false);
@@ -123,19 +111,13 @@
 	let eventModalEventId = $state<string | null>(null);
 	let eventForm = $state({
 		stage: DEFAULT_EVENT_TYPE as EventType,
-		render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE as StageEventRenderStyle,
 		title: '',
-		description: '',
-		stage_completion: '' as string
+		description: ''
 	});
 
-	// Cards tab filters
+	// Deck filters
 	let deckSearchQuery = $state('');
 	let deckKindFilter = $state<ScenarioDeckEntryKind | 'all'>('all');
-
-	function handleTabChange(tabId: string) {
-		activeTab = tabId;
-	}
 
 	function getStored(key: string): string | null {
 		try {
@@ -160,33 +142,114 @@
 
 	const monstersById = $derived.by(() => new Map(monsters.map((m) => [m.id, m])));
 	const locationsById = $derived.by(() => new Map(gameLocations.map((l) => [l.id, l])));
-	const travelersById = $derived.by(() => new Map(travelers.map((t) => [t.id, t])));
 	const eventsById = $derived.by(() => new Map(events.map((e) => [e.id, e])));
+	const stageCompletionsById = $derived.by(() => new Map(stageCompletions.map((sc) => [sc.id, sc])));
+
+	const stageSortWeight: Record<EventType, number> = {
+		stage_1: 1,
+		stage_2: 2,
+		stage_3: 3,
+		final_stage: 4,
+		endgame: 5
+	};
+
+	function getDeckItemSortWeight(stage: EventType | null): number {
+		return stage ? stageSortWeight[stage] ?? 999 : 999;
+	}
+
+	function getDeckItemKindWeight(kind: ScenarioDeckEntryKind): number {
+		switch (kind) {
+			case 'event':
+				return 1;
+			case 'location':
+			case 'monster':
+				return 2;
+			case 'stage_completion':
+				return 3;
+			default:
+				return 99;
+		}
+	}
+
+	function getDeckEntryStage(entry: ScenarioDeckEntryRow): EventType | null {
+		switch (entry.kind) {
+			case 'monster': {
+				const monster = entry.monster_id ? monstersById.get(entry.monster_id) ?? null : null;
+				const stage = monster?.stage ?? null;
+				return stage === 'inactive' ? null : stage;
+			}
+			case 'location':
+				return entry.entry_stage;
+			case 'event': {
+				const event = entry.event_id ? eventsById.get(entry.event_id) ?? null : null;
+				return event?.stage ?? null;
+			}
+			case 'stage_completion': {
+				const sc = entry.stage_completion_card_id ? stageCompletionsById.get(entry.stage_completion_card_id) ?? null : null;
+				return sc?.stage ?? null;
+			}
+			default:
+				return null;
+		}
+	}
+
+	function sortedDeckEntriesByDisplayOrder(entries: ScenarioDeckEntryRow[]): ScenarioDeckEntryRow[] {
+		return [...entries].sort((a, b) => {
+			const stageA = getDeckItemSortWeight(getDeckEntryStage(a));
+			const stageB = getDeckItemSortWeight(getDeckEntryStage(b));
+			if (stageA !== stageB) return stageA - stageB;
+			const kindA = getDeckItemKindWeight(a.kind);
+			const kindB = getDeckItemKindWeight(b.kind);
+			if (kindA !== kindB) return kindA - kindB;
+			return (a.order_num ?? 0) - (b.order_num ?? 0);
+		});
+	}
 
 	const deckItems = $derived.by<DeckItem[]>(() => {
-		const ordered = [...deckEntries].sort((a, b) => (a.order_num ?? 0) - (b.order_num ?? 0));
-		return ordered.map((entry) => {
+		const mapped = sortedDeckEntriesByDisplayOrder(deckEntries).map((entry) => {
+			const stage = getDeckEntryStage(entry);
 			switch (entry.kind) {
 				case 'monster': {
 					const monster = entry.monster_id ? monstersById.get(entry.monster_id) ?? null : null;
-					return { entry, monster, label: monster?.name ?? 'Unknown Monster' };
+					return {
+						entry,
+						monster,
+						stage,
+						label: monster?.name ?? 'Unknown Monster'
+					};
 				}
 				case 'location': {
 					const location = entry.game_location_id ? locationsById.get(entry.game_location_id) ?? null : null;
-					return { entry, location, label: location?.name ?? 'Unknown Location' };
-				}
-				case 'traveler': {
-					const traveler = entry.traveler_id ? travelersById.get(entry.traveler_id) ?? null : null;
-					return { entry, traveler, label: traveler?.name ?? 'Unknown Traveler' };
+					return {
+						entry,
+						location,
+						stage: entry.entry_stage,
+						label: location?.name ?? 'Unknown Location'
+					};
 				}
 				case 'event': {
 					const event = entry.event_id ? eventsById.get(entry.event_id) ?? null : null;
-					return { entry, event, label: event?.title ?? 'Unknown Event' };
+					return {
+						entry,
+						event,
+						stage: event?.stage ?? null,
+						label: event?.title ?? 'Unknown Event'
+					};
+				}
+				case 'stage_completion': {
+					const sc = entry.stage_completion_card_id ? stageCompletionsById.get(entry.stage_completion_card_id) ?? null : null;
+					return {
+						entry,
+						stageCompletion: sc,
+						stage: sc?.stage ?? null,
+						label: sc?.title ?? 'Unknown Stage Completion'
+					};
 				}
 				default:
-					return { entry, label: 'Unknown' };
+					return { entry, stage: null, label: 'Unknown' };
 			}
 		});
+		return mapped;
 	});
 
 	const filteredDeckItems = $derived.by(() => {
@@ -198,36 +261,16 @@
 		});
 	});
 
-	const includedMonsterIds = $derived.by(() => new Set(deckEntries.filter((e) => e.kind === 'monster').map((e) => e.monster_id ?? '')));
-	const availableMonsterOptions = $derived.by(() =>
-		monsters
-			.filter((m) => !includedMonsterIds.has(m.id))
+	const monsterOptions = $derived.by(() =>
+		[...monsters]
 			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }))
 			.map((m) => ({ value: m.id, label: m.name }))
 	);
 
-	const includedLocationIds = $derived.by(() => new Set(deckEntries.filter((e) => e.kind === 'location').map((e) => e.game_location_id ?? '')));
-	const availableLocationOptions = $derived.by(() =>
-		gameLocations
-			.filter((l) => !includedLocationIds.has(l.id))
+	const locationOptions = $derived.by(() =>
+		[...gameLocations]
 			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }))
 			.map((l) => ({ value: l.id, label: l.name }))
-	);
-
-	const includedTravelerIds = $derived.by(() => new Set(deckEntries.filter((e) => e.kind === 'traveler').map((e) => e.traveler_id ?? '')));
-	const availableTravelerOptions = $derived.by(() =>
-		travelers
-			.filter((t) => !includedTravelerIds.has(t.id))
-			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }))
-			.map((t) => ({ value: t.id, label: t.name }))
-	);
-
-	const includedEventIds = $derived.by(() => new Set(deckEntries.filter((e) => e.kind === 'event').map((e) => e.event_id ?? '')));
-	const availableEventOptions = $derived.by(() =>
-		events
-			.filter((ev) => !includedEventIds.has(ev.id))
-			.sort((a, b) => (a.title ?? '').localeCompare(b.title ?? '', undefined, { sensitivity: 'base' }))
-			.map((ev) => ({ value: ev.id, label: ev.title }))
 	);
 
 	onMount(() => {
@@ -238,41 +281,67 @@
 		loading = true;
 		error = null;
 		try {
-			const [
-				{ data: editionsData, error: editionsErr },
-				{ data: monstersData, error: monstersErr },
-				{ data: locationsData, error: locationsErr },
-				{ data: travelersData, error: travelersErr },
-				{ data: eventsData, error: eventsErr }
-			] = await Promise.all([
+				const [
+					{ data: editionsData, error: editionsErr },
+					{ data: monstersData, error: monstersErr },
+					{ data: locationsData, error: locationsErr },
+					{ data: eventsData, error: eventsErr },
+					{ data: scData, error: scErr }
+				] = await Promise.all([
 				supabase.from('editions').select('id, name, is_default').order('name', { ascending: true }),
-				supabase.from('monsters').select('id, name, stage, card_image_path, updated_at').order('name', { ascending: true }),
+				supabase.from('monsters_v2').select('id, name, stage, card_image_path, updated_at').order('name', { ascending: true }),
+					supabase
+						.from('game_locations')
+						.select('id, name, background_image_path, image_with_icons_path, updated_at')
+						.order('name', { ascending: true }),
+					supabase
+						.from('event_cards')
+					.select('id, internal_name, stage, title, description, reward_rows, image_path, card_image_path, data, updated_at')
+					.order('order_num')
+					.order('title'),
 				supabase
-					.from('game_locations')
-					.select('id, name, background_image_path, updated_at, reward_rows')
-					.order('name', { ascending: true }),
-				supabase
-					.from('travelers')
-					.select('id, name, state, image_path, card_image_path, updated_at, traveler_description')
-					.order('name', { ascending: true }),
-				supabase
-					.from('event_cards')
-					.select('id, internal_name, stage, title, description, stage_completion, reward_rows, image_path, card_image_path, data, updated_at')
+					.from('stage_completion_cards')
+					.select('id, title, complete_condition, stage, card_image_path, updated_at')
 					.order('order_num')
 					.order('title')
 			]);
 
-			if (editionsErr) throw editionsErr;
-			if (monstersErr) throw monstersErr;
-			if (locationsErr) throw locationsErr;
-			if (travelersErr) throw travelersErr;
-			if (eventsErr) throw eventsErr;
+				if (editionsErr) throw editionsErr;
+				if (monstersErr) throw monstersErr;
+				if (locationsErr) throw locationsErr;
+				if (eventsErr) throw eventsErr;
+			if (scErr) throw scErr;
 
-			editions = (editionsData ?? []) as EditionOption[];
-			monsters = (monstersData ?? []) as MonsterCatalogEntry[];
-			gameLocations = (locationsData ?? []) as GameLocationCatalogEntry[];
-			travelers = (travelersData ?? []) as TravelerCatalogEntry[];
-			events = (eventsData ?? []) as EventCatalogEntry[];
+				editions = (editionsData ?? []) as EditionOption[];
+				monsters = (monstersData ?? []) as MonsterCatalogEntry[];
+
+				// Resolve each location's reward rows from the normalized model
+				// (game_location_rows + reward_row_assignments) — the single source of
+				// truth shared with the game; the legacy reward_rows column is gone.
+				const [rowRecordsRes, assignmentsRes] = await Promise.all([
+					supabase.from('game_location_rows').select('id, name, type, config'),
+					supabase.from('reward_row_assignments').select('location_id, row_id, row_index')
+				]);
+				if (rowRecordsRes.error) throw rowRecordsRes.error;
+				if (assignmentsRes.error) throw assignmentsRes.error;
+				const rowConfigById = new Map<string, GameLocationRowCompositionRow>(
+					((rowRecordsRes.data as GameLocationRowCompositionRow[] | null) ?? []).map((r) => [r.id, r])
+				);
+				const rewardRowsByLocation = new Map<string, GameLocationRewardRow[]>();
+				for (const a of ((assignmentsRes.data as RewardRowAssignment[] | null) ?? [])
+					.slice()
+					.sort((x, y) => x.row_index - y.row_index)) {
+					const row = rowConfigById.get(a.row_id);
+					if (!row) continue;
+					const list = rewardRowsByLocation.get(a.location_id) ?? [];
+					list.push(configToRewardRow(row.type, row.config));
+					rewardRowsByLocation.set(a.location_id, list);
+				}
+				gameLocations = (
+					(locationsData ?? []) as Omit<GameLocationCatalogEntry, 'reward_rows'>[]
+				).map((l) => ({ ...l, reward_rows: rewardRowsByLocation.get(l.id) ?? [] }));
+				events = (eventsData ?? []) as EventCatalogEntry[];
+			stageCompletions = (scData ?? []) as StageCompletionCatalogEntry[];
 
 			const storedEditionId = getStored(STORAGE_EDITION_KEY);
 			const defaultEditionId = editions.find((e) => e.is_default)?.id ?? editions[0]?.id ?? '';
@@ -288,27 +357,36 @@
 		}
 	}
 
-	async function loadScenarios() {
-		if (!selectedEditionId) {
-			scenarios = [];
-			selectedScenarioId = '';
-			deckEntries = [];
-			return;
-		}
+		async function loadScenarios() {
+			if (!selectedEditionId) {
+				scenarios = [];
+				selectedScenarioId = '';
+				deckEntries = [];
+				return;
+			}
 
-		const { data, error: scenariosErr } = await supabase
-			.from('scenarios')
-			.select('id, name, display_name, description, game_location_ids, display_image_path, order_num')
-			.eq('edition_id', selectedEditionId)
-			.order('order_num', { ascending: true });
-		if (scenariosErr) throw scenariosErr;
+			const { data, error: scenariosErr } = await supabase
+				.from('edition_scenarios')
+				.select(
+					`order_num,
+           scenario:scenarios (id, name, display_name, description, is_enabled, game_location_ids, display_image_path, order_num)`
+				)
+				.eq('edition_id', selectedEditionId)
+				.order('order_num', { ascending: true });
+			if (scenariosErr) throw scenariosErr;
 
-		scenarios = (data ?? []) as ScenarioOption[];
-		const storedScenarioId = getStored(STORAGE_SCENARIO_KEY);
-		const fallbackScenarioId = scenarios[0]?.id ?? '';
-		selectedScenarioId =
-			storedScenarioId && scenarios.some((s) => s.id === storedScenarioId) ? storedScenarioId : fallbackScenarioId;
-		setStored(STORAGE_SCENARIO_KEY, selectedScenarioId || null);
+			scenarios = (data ?? [])
+				.map((row) => {
+					const scenario = (row as any).scenario as ScenarioOption | null | undefined;
+					if (!scenario) return null;
+					return { ...scenario, order_num: (row as any).order_num ?? scenario.order_num } as ScenarioOption;
+				})
+				.filter(Boolean) as ScenarioOption[];
+			const storedScenarioId = getStored(STORAGE_SCENARIO_KEY);
+			const fallbackScenarioId = scenarios[0]?.id ?? '';
+			selectedScenarioId =
+				storedScenarioId && scenarios.some((s) => s.id === storedScenarioId) ? storedScenarioId : fallbackScenarioId;
+			setStored(STORAGE_SCENARIO_KEY, selectedScenarioId || null);
 
 		await loadScenarioDeck();
 	}
@@ -326,6 +404,11 @@
 			.order('order_num', { ascending: true });
 		if (deckErr) throw deckErr;
 		deckEntries = (data ?? []) as ScenarioDeckEntryRow[];
+	}
+
+	async function loadScenarioDeckAndNormalizeOrder() {
+		await loadScenarioDeck();
+		await normalizeDeckOrder();
 	}
 
 	function requestEditionChange(nextRaw: string) {
@@ -433,11 +516,11 @@
 				new Set(scenarioGameLocationIdsDraft.map((v) => (v ?? '').trim()).filter(Boolean))
 			);
 
-			if (scenarioModalMode === 'create') {
-				const nextOrderNum = scenarios.reduce((max, s) => Math.max(max, s.order_num ?? 0), -1) + 1;
-				const { error: insertErr } = await supabase
-					.from('scenarios')
-					.insert({
+				if (scenarioModalMode === 'create') {
+					const nextOrderNum = scenarios.reduce((max, s) => Math.max(max, s.order_num ?? 0), -1) + 1;
+					const { error: insertErr } = await supabase
+						.from('scenarios')
+						.insert({
 						id,
 						edition_id: selectedEditionId,
 						name,
@@ -445,13 +528,20 @@
 						description,
 						game_location_ids,
 						display_image_path,
+							order_num: nextOrderNum
+						});
+					if (insertErr) throw insertErr;
+
+					const { error: linkErr } = await supabase.from('edition_scenarios').insert({
+						edition_id: selectedEditionId,
+						scenario_id: id,
 						order_num: nextOrderNum
 					});
-				if (insertErr) throw insertErr;
-			} else if (scenarioModalMode === 'edit' && scenarioModalId) {
-				const { error: updateErr } = await supabase
-					.from('scenarios')
-					.update({ name, display_name, description, game_location_ids, display_image_path })
+					if (linkErr) throw linkErr;
+				} else if (scenarioModalMode === 'edit' && scenarioModalId) {
+					const { error: updateErr } = await supabase
+						.from('scenarios')
+						.update({ name, display_name, description, game_location_ids, display_image_path })
 					.eq('id', scenarioModalId);
 				if (updateErr) throw updateErr;
 			}
@@ -485,21 +575,19 @@
 
 		addingMonster = true;
 		try {
-			const quantity = Math.max(1, Math.trunc(Number(monsterToAddQuantity ?? 1)));
 			const order_num = deckEntries.length;
 			const { error: insertErr } = await supabase.from('scenario_deck_entries').insert({
 				scenario_id: selectedScenarioId,
 				kind: 'monster',
 				order_num,
-				quantity,
+				quantity: 1,
 				entry_stage: null,
 				data: {},
 				monster_id: monsterId
 			});
 			if (insertErr) throw insertErr;
 			monsterToAddId = '';
-			monsterToAddQuantity = 1;
-			await loadScenarioDeck();
+			await loadScenarioDeckAndNormalizeOrder();
 		} catch (err) {
 			alert(`Failed to add monster: ${getErrorMessage(err)}`);
 		} finally {
@@ -528,7 +616,7 @@
 			});
 			if (insertErr) throw insertErr;
 			locationToAddId = '';
-			await loadScenarioDeck();
+			await loadScenarioDeckAndNormalizeOrder();
 		} catch (err) {
 			alert(`Failed to add location: ${getErrorMessage(err)}`);
 		} finally {
@@ -536,80 +624,11 @@
 		}
 	}
 
-	async function addTravelerToDeck() {
-		if (!selectedScenarioId) return;
-		if (addingTraveler) return;
-		const travelerId = travelerToAddId.trim();
-		if (!travelerId) return;
-
-		addingTraveler = true;
-		try {
-			const order_num = deckEntries.length;
-			const { error: insertErr } = await supabase.from('scenario_deck_entries').insert({
-				scenario_id: selectedScenarioId,
-				kind: 'traveler',
-				order_num,
-				quantity: 1,
-				entry_stage: travelerEntryStage,
-				data: {},
-				traveler_id: travelerId
-			});
-			if (insertErr) throw insertErr;
-			travelerToAddId = '';
-			await loadScenarioDeck();
-		} catch (err) {
-			alert(`Failed to add traveler: ${getErrorMessage(err)}`);
-		} finally {
-			addingTraveler = false;
-		}
-	}
-
-
-	async function addEventToDeck() {
-		if (!selectedScenarioId) return;
-		if (addingEvent) return;
-		const eventId = eventToAddId.trim();
-		if (!eventId) return;
-
-		addingEvent = true;
-		try {
-			const order_num = deckEntries.length;
-			const { error: insertErr } = await supabase.from('scenario_deck_entries').insert({
-				scenario_id: selectedScenarioId,
-				kind: 'event',
-				order_num,
-				quantity: 1,
-				entry_stage: null,
-				data: {},
-				event_id: eventId
-			});
-			if (insertErr) throw insertErr;
-			eventToAddId = '';
-			await loadScenarioDeck();
-		} catch (err) {
-			alert(`Failed to add event: ${getErrorMessage(err)}`);
-		} finally {
-			addingEvent = false;
-		}
-	}
-
-	async function updateEntryQuantity(entryId: string, nextRaw: string) {
-		const next = Math.max(1, Math.trunc(Number(nextRaw)));
-		if (!Number.isFinite(next)) return;
-		try {
-			const { error: updateErr } = await supabase.from('scenario_deck_entries').update({ quantity: next }).eq('id', entryId);
-			if (updateErr) throw updateErr;
-			await loadScenarioDeck();
-		} catch (err) {
-			alert(`Failed to update quantity: ${getErrorMessage(err)}`);
-		}
-	}
-
 	async function updateEntryStage(entryId: string, stage: EventType) {
 		try {
 			const { error: updateErr } = await supabase.from('scenario_deck_entries').update({ entry_stage: stage }).eq('id', entryId);
 			if (updateErr) throw updateErr;
-			await loadScenarioDeck();
+			await loadScenarioDeckAndNormalizeOrder();
 		} catch (err) {
 			alert(`Failed to update stage: ${getErrorMessage(err)}`);
 		}
@@ -643,12 +662,12 @@
 
 	async function normalizeDeckOrder() {
 		if (!selectedScenarioId) return;
-		const ordered = [...deckEntries].sort((a, b) => (a.order_num ?? 0) - (b.order_num ?? 0));
+		const ordered = sortedDeckEntriesByDisplayOrder(deckEntries);
 		await saveDeckOrder(ordered.map((e) => e.id));
 	}
 
 	async function moveDeckEntry(entryId: string, direction: 'up' | 'down') {
-		const ordered = [...deckEntries].sort((a, b) => (a.order_num ?? 0) - (b.order_num ?? 0));
+		const ordered = sortedDeckEntriesByDisplayOrder(deckEntries);
 		const idx = ordered.findIndex((e) => e.id === entryId);
 		if (idx < 0) return;
 		const nextIdx = direction === 'up' ? idx - 1 : idx + 1;
@@ -695,10 +714,8 @@
 		eventModalEventId = null;
 		eventForm = {
 			stage: DEFAULT_EVENT_TYPE,
-			render_style: DEFAULT_STAGE_EVENT_RENDER_STYLE,
 			title: '',
-			description: '',
-			stage_completion: ''
+			description: ''
 		};
 		eventModalOpen = true;
 	}
@@ -710,10 +727,8 @@
 		eventModalEventId = ev.id;
 		eventForm = {
 			stage: ev.stage ?? DEFAULT_EVENT_TYPE,
-			render_style: getStageCardRenderStyle('event', ev.data) as StageEventRenderStyle,
 			title: ev.title ?? '',
-			description: ev.description ?? '',
-			stage_completion: ev.stage_completion ?? ''
+			description: ev.description ?? ''
 		};
 		eventModalOpen = true;
 	}
@@ -729,7 +744,6 @@
 		eventModalSaving = true;
 		try {
 			const now = new Date().toISOString();
-			const renderStyle = eventForm.render_style ?? DEFAULT_STAGE_EVENT_RENDER_STYLE;
 
 			if (eventModalMode === 'create') {
 				const id = crypto.randomUUID();
@@ -740,11 +754,10 @@
 					stage: eventForm.stage,
 					title,
 					description: (eventForm.description ?? '').trim() || null,
-					stage_completion: (eventForm.stage_completion ?? '').trim() || null,
 					reward_rows: [{ type: 'all_players', icon_ids: [] }],
 					image_path: null,
 					card_image_path: null,
-					data: setStageCardRenderStyleInData({}, renderStyle),
+					data: {},
 					order_num: 0,
 					updated_at: now
 				});
@@ -763,16 +776,12 @@
 				if (linkErr) throw linkErr;
 			} else if (eventModalMode === 'edit' && eventModalEventId) {
 				const id = eventModalEventId;
-				const existing = eventsById.get(id) ?? null;
-				const nextData = setStageCardRenderStyleInData(existing?.data, renderStyle);
 				const { error: updateErr } = await supabase
 					.from('event_cards')
 					.update({
 						stage: eventForm.stage,
 						title,
 						description: (eventForm.description ?? '').trim() || null,
-						stage_completion: (eventForm.stage_completion ?? '').trim() || null,
-						data: nextData,
 						updated_at: now
 					})
 					.eq('id', id);
@@ -785,12 +794,12 @@
 			// Refresh library + deck.
 			const { data: eventsData, error: eventsErr } = await supabase
 				.from('event_cards')
-				.select('id, internal_name, stage, title, description, stage_completion, reward_rows, image_path, card_image_path, data, updated_at')
+				.select('id, internal_name, stage, title, description, reward_rows, image_path, card_image_path, data, updated_at')
 				.order('order_num')
 				.order('title');
 			if (eventsErr) throw eventsErr;
 			events = (eventsData ?? []) as EventCatalogEntry[];
-			await loadScenarioDeck();
+			await loadScenarioDeckAndNormalizeOrder();
 		} catch (err) {
 			alert(`Failed to save event: ${getErrorMessage(err)}`);
 		} finally {
@@ -799,13 +808,10 @@
 	}
 </script>
 
-<PageLayout
-	title="Scenarios"
-	subtitle="Build a single unified scenario deck (monsters, locations, travelers, events)"
-	{tabs}
-	{activeTab}
-	onTabChange={handleTabChange}
->
+	<PageLayout
+		title="Scenarios"
+		subtitle="Build a single unified scenario deck (monsters, locations, events)"
+	>
 	{#snippet headerActions()}
 		<FormField label="Edition">
 			<Select
@@ -824,277 +830,176 @@
 	{:else if error}
 		<div class="error-state">Error: {error}</div>
 	{:else}
-		<div class="layout">
-			<div class="scenario-bar">
-				<div class="scenario-bar__header">
-					<h3>Scenarios</h3>
-					<span class="count">{scenarios.length}</span>
-				</div>
-
-				{#if scenarios.length === 0}
-					<div class="empty">No scenarios yet.</div>
-				{:else}
-					<div class="scenario-bar__list" role="list" aria-label="Scenarios">
-						{#each scenarios as scenario (scenario.id)}
-							<div class="scenario-chip-row" role="listitem">
-								<button
-									class="scenario-chip"
-									class:selected={scenario.id === selectedScenarioId}
-									onclick={() => selectScenario(scenario.id)}
-								>
-									{scenario.display_name ?? scenario.name}
-								</button>
-								<CardActionMenu onEdit={() => openEditScenario(scenario)} onDelete={() => deleteScenario(scenario)} />
-							</div>
-						{/each}
+		<!-- Scenario strip -->
+		{#if scenarios.length === 0}
+			<div class="empty">No scenarios yet. Create one to get started.</div>
+		{:else}
+			<div class="scenario-strip" role="list" aria-label="Scenarios">
+				{#each scenarios as scenario (scenario.id)}
+					<div class="scenario-strip__item" role="listitem">
+						<button
+							class="scenario-strip__chip"
+							class:selected={scenario.id === selectedScenarioId}
+							onclick={() => selectScenario(scenario.id)}
+						>
+							{scenario.display_name ?? scenario.name}
+						</button>
+						<CardActionMenu onEdit={() => openEditScenario(scenario)} onDelete={() => deleteScenario(scenario)} />
 					</div>
-				{/if}
+				{/each}
 			</div>
+		{/if}
 
-			<main class="content">
-				{#if selectedScenario}
-					<div class="scenario-header">
-						<div class="scenario-header__title">
-							<h2>{selectedScenario.display_name ?? selectedScenario.name}</h2>
-							{#if selectedScenario.description}
-								<p class="muted">{selectedScenario.description}</p>
-							{/if}
-						</div>
+		{#if selectedScenario}
+			<div class="columns">
+				<!-- Left column: scenario info + add forms -->
+				<aside class="col-add">
+					<div class="scenario-info">
+						<h3 class="scenario-info__name">{selectedScenario.display_name ?? selectedScenario.name}</h3>
+						{#if selectedScenario.description}
+							<p class="scenario-info__desc">{selectedScenario.description}</p>
+						{/if}
 						<Button variant="secondary" onclick={() => openEditScenario(selectedScenario)}>Edit</Button>
 					</div>
 
-					{#if activeTab === 'manage'}
-						<section class="section">
-							<div class="section-header">
-								<h3>Add Cards</h3>
-								<div class="section-header__actions">
-									<Button variant="secondary" onclick={openCreateGameLocation}>+ Game Location</Button>
-									<Button variant="primary" onclick={openCreateEvent}>+ Event</Button>
-								</div>
-							</div>
+					<div class="add-forms__header">
+						<h4>Add Cards</h4>
+						<div class="add-forms__header-actions">
+							<Button variant="secondary" onclick={openCreateGameLocation}>+ Location</Button>
+							<Button variant="primary" onclick={openCreateEvent}>+ Event</Button>
+						</div>
+					</div>
 
-							<div class="add-grid">
-								<div class="add-row">
-									<FormField label="Monster">
-										<Select
-											bind:value={monsterToAddId}
-											options={availableMonsterOptions}
-											placeholder={availableMonsterOptions.length === 0 ? 'No monsters available' : 'Select monster'}
-											disabled={addingMonster || availableMonsterOptions.length === 0}
-										/>
-									</FormField>
-									<FormField label="Qty">
-										<Input
-											type="number"
-											min={1}
-											step={1}
-											bind:value={monsterToAddQuantity}
-											disabled={addingMonster || monsterToAddId.trim().length === 0}
-										/>
-									</FormField>
-									<Button variant="primary" onclick={addMonsterToDeck} disabled={addingMonster || monsterToAddId.trim().length === 0}>
-										{addingMonster ? 'Adding…' : 'Add'}
-									</Button>
-								</div>
+					<div class="add-forms">
+						<!-- Monster add form -->
+						<div class="add-form">
+							<span class="add-form__label">Monster</span>
+							<Select
+								bind:value={monsterToAddId}
+								options={monsterOptions}
+								placeholder={monsterOptions.length === 0 ? 'No monsters available' : 'Select monster'}
+								disabled={addingMonster || monsterOptions.length === 0}
+							/>
+							<Button variant="primary" onclick={addMonsterToDeck} disabled={addingMonster || monsterToAddId.trim().length === 0}>
+								{addingMonster ? 'Adding…' : 'Add'}
+							</Button>
+						</div>
 
-								<div class="add-row">
-									<FormField label="Location">
-										<Select
-											bind:value={locationToAddId}
-											options={availableLocationOptions}
-											placeholder={availableLocationOptions.length === 0 ? 'No locations available' : 'Select location'}
-											disabled={addingLocation || availableLocationOptions.length === 0}
-										/>
-									</FormField>
-									<FormField label="Stage">
-										<Select
-											bind:value={locationEntryStage}
-											options={EVENT_TYPE_OPTIONS}
-											disabled={addingLocation || locationToAddId.trim().length === 0}
-										/>
-									</FormField>
-									<FormField label="Style">
-										<Select
-											bind:value={locationRenderStyle}
-											options={STAGE_LOCATION_RENDER_STYLE_OPTIONS}
-											disabled={addingLocation || locationToAddId.trim().length === 0}
-										/>
-									</FormField>
-									<Button variant="primary" onclick={addLocationToDeck} disabled={addingLocation || locationToAddId.trim().length === 0}>
-										{addingLocation ? 'Adding…' : 'Add'}
-									</Button>
-								</div>
+						<!-- Location add form -->
+						<div class="add-form">
+							<span class="add-form__label">Location</span>
+							<Select
+								bind:value={locationToAddId}
+								options={locationOptions}
+								placeholder={locationOptions.length === 0 ? 'No locations available' : 'Select location'}
+								disabled={addingLocation || locationOptions.length === 0}
+							/>
+							<Select
+								bind:value={locationEntryStage}
+								options={EVENT_TYPE_OPTIONS}
+								disabled={addingLocation || locationToAddId.trim().length === 0}
+							/>
+							<Select
+								bind:value={locationRenderStyle}
+								options={STAGE_LOCATION_RENDER_STYLE_OPTIONS}
+								disabled={addingLocation || locationToAddId.trim().length === 0}
+							/>
+							<Button variant="primary" onclick={addLocationToDeck} disabled={addingLocation || locationToAddId.trim().length === 0}>
+								{addingLocation ? 'Adding…' : 'Add'}
+							</Button>
+						</div>
 
-								<div class="add-row">
-									<FormField label="Traveler">
-										<Select
-											bind:value={travelerToAddId}
-											options={availableTravelerOptions}
-											placeholder={availableTravelerOptions.length === 0 ? 'No travelers available' : 'Select traveler'}
-											disabled={addingTraveler || availableTravelerOptions.length === 0}
-										/>
-									</FormField>
-									<FormField label="Stage">
-										<Select
-											bind:value={travelerEntryStage}
-											options={EVENT_TYPE_OPTIONS}
-											disabled={addingTraveler || travelerToAddId.trim().length === 0}
-										/>
-									</FormField>
-									<Button variant="primary" onclick={addTravelerToDeck} disabled={addingTraveler || travelerToAddId.trim().length === 0}>
-										{addingTraveler ? 'Adding…' : 'Add'}
-									</Button>
-								</div>
+						</div>
+					</aside>
 
-								<div class="add-row">
-									<FormField label="Event">
-										<Select
-											bind:value={eventToAddId}
-											options={availableEventOptions}
-											placeholder={availableEventOptions.length === 0 ? 'No events available' : 'Select event'}
-											disabled={addingEvent || availableEventOptions.length === 0}
-										/>
-									</FormField>
-									<Button variant="primary" onclick={addEventToDeck} disabled={addingEvent || eventToAddId.trim().length === 0}>
-										{addingEvent ? 'Adding…' : 'Add'}
-									</Button>
-								</div>
-							</div>
-						</section>
+				<!-- Right column: deck -->
+				<section class="col-deck">
+					<div class="deck-header">
+						<div class="deck-header__title">
+							<h3>Scenario Deck</h3>
+							<span class="badge">{filteredDeckItems.length}/{deckEntries.length}</span>
+						</div>
+						<div class="deck-header__controls">
+							<input
+								type="text"
+								class="deck-search"
+								placeholder="Search…"
+								bind:value={deckSearchQuery}
+							/>
+							<select class="deck-filter" bind:value={deckKindFilter}>
+								<option value="all">All Kinds</option>
+								<option value="monster">Monsters</option>
+								<option value="location">Locations</option>
+								<option value="event">Events</option>
+								<option value="stage_completion">Stage Completion</option>
+							</select>
+						</div>
+					</div>
 
-						<section class="section">
-							<div class="section-header">
-								<h3>Scenario Deck</h3>
-								<span class="badge">{deckEntries.length}</span>
-							</div>
-
-							{#if deckItems.length === 0}
-								<div class="empty">No cards in this scenario yet.</div>
-							{:else}
-								<ul class="deck-list">
-									{#each deckItems as item, idx (item.entry.id)}
-										<li class="deck-row">
-											<div class="deck-row__meta">
-												<span class="pos">#{idx + 1}</span>
-												<span class="type">{item.entry.kind}</span>
-												<span class="name">{item.label}</span>
-												{#if item.entry.kind === 'event' && item.event}
-													<span class={`pill pill--${item.event.stage}`}>{eventTypeLabel(item.event.stage)}</span>
-												{:else if (item.entry.kind === 'location' || item.entry.kind === 'traveler') && item.entry.entry_stage}
-													<span class={`pill pill--${item.entry.entry_stage}`}>{eventTypeLabel(item.entry.entry_stage)}</span>
-											{:else if item.entry.kind === 'monster' && item.monster?.stage}
-													<span class={`pill pill--${item.monster.stage}`}>{getMonsterStageLabel(item.monster.stage)}</span>
-												{/if}
-											</div>
-
-											<div class="deck-row__actions">
-												{#if item.entry.kind === 'monster'}
-													<Input
-														type="number"
-														min={1}
-														step={1}
-														value={String(item.entry.quantity ?? 1)}
-														onblur={(e) => updateEntryQuantity(item.entry.id, (e.target as HTMLInputElement).value)}
-													/>
-												{/if}
-
-												{#if item.entry.kind === 'location'}
-													<Select
-														value={item.entry.entry_stage ?? DEFAULT_EVENT_TYPE}
-														options={EVENT_TYPE_OPTIONS}
-														onchange={(e) => updateEntryStage(item.entry.id, (e.target as HTMLSelectElement).value as EventType)}
-													/>
-													<Select
-														value={getStageCardRenderStyle('stage_location', item.entry.data) as any}
-														options={STAGE_LOCATION_RENDER_STYLE_OPTIONS}
-														onchange={(e) => updateEntryLocationStyle(item.entry.id, (e.target as HTMLSelectElement).value as StageLocationRenderStyle)}
-													/>
-												{/if}
-
-												{#if item.entry.kind === 'traveler'}
-													<Select
-														value={item.entry.entry_stage ?? DEFAULT_EVENT_TYPE}
-														options={EVENT_TYPE_OPTIONS}
-														onchange={(e) => updateEntryStage(item.entry.id, (e.target as HTMLSelectElement).value as EventType)}
-													/>
-												{/if}
-
-												{#if item.entry.kind === 'event' && item.event}
-													<Button variant="secondary" onclick={() => openEditEvent(item.event!.id)}>Edit</Button>
-												{/if}
-
-												<button class="btn" onclick={() => moveDeckEntry(item.entry.id, 'up')} disabled={idx === 0}>↑</button>
-												<button class="btn" onclick={() => moveDeckEntry(item.entry.id, 'down')} disabled={idx === deckItems.length - 1}>↓</button>
-												<button class="btn danger" onclick={() => deleteDeckEntry(item.entry.id)}>Remove</button>
-											</div>
-										</li>
-									{/each}
-								</ul>
-							{/if}
-						</section>
-					{:else if activeTab === 'cards'}
-						<section class="section">
-							<div class="section-header">
-								<div class="section-header__title">
-									<h3>Scenario Cards</h3>
-									<span class="badge">{filteredDeckItems.length}/{deckItems.length}</span>
-								</div>
-							</div>
-
-							<div class="gallery-controls">
-								<input
-									type="text"
-									class="gallery-search"
-									placeholder="Search…"
-									bind:value={deckSearchQuery}
-								/>
-								<select class="gallery-select" bind:value={deckKindFilter}>
-									<option value="all">All Kinds</option>
-									<option value="monster">Monsters</option>
-									<option value="location">Locations</option>
-									<option value="traveler">Travelers</option>
-									<option value="event">Events</option>
-								</select>
-							</div>
-
-							<div class="gallery-grid">
-								{#each filteredDeckItems as item (item.entry.id)}
-									<div class="gallery-card">
-										<div class="gallery-preview">
+					{#if filteredDeckItems.length === 0}
+						<div class="empty">
+							{deckEntries.length === 0 ? 'No cards in this scenario yet.' : 'No cards match the current filters.'}
+						</div>
+					{:else}
+						<ul class="deck-list">
+							{#each filteredDeckItems as item, idx (item.entry.id)}
+								<li class="deck-row">
+									<div class="deck-row__thumb">
 											<ScenarioDeckCardPreview
 												entry={item.entry}
 												monster={item.monster ?? null}
 												location={item.location ?? null}
-												traveler={item.traveler ?? null}
 												event={item.event ?? null}
+												stageCompletion={item.stageCompletion ?? null}
 											/>
-										</div>
-										<div class="gallery-info">
-											<div class="gallery-info__header">
-												<h4 class="gallery-name">{item.label}</h4>
-												<span class="gallery-badge">{item.entry.kind}</span>
-											</div>
-											<div class="gallery-meta">
-												<span class="gallery-order">#{(item.entry.order_num ?? 0) + 1}</span>
-												{#if item.entry.kind === 'monster'}
-													<span class="badge">x{item.entry.quantity ?? 1}</span>
-												{/if}
-											</div>
-										</div>
 									</div>
-								{/each}
-							</div>
 
-							{#if filteredDeckItems.length === 0}
-								<div class="empty">No cards match the current filters.</div>
-							{/if}
-						</section>
+									<div class="deck-row__meta">
+										<span class="pos">#{(item.entry.order_num ?? 0) + 1}</span>
+										<span class="type">{item.entry.kind}</span>
+										<span class="name">{item.label}</span>
+											{#if item.entry.kind === 'event' && item.event}
+												<span class={`pill pill--${item.event.stage}`}>{eventTypeLabel(item.event.stage)}</span>
+											{:else if item.entry.kind === 'location' && item.entry.entry_stage}
+												<span class={`pill pill--${item.entry.entry_stage}`}>{eventTypeLabel(item.entry.entry_stage)}</span>
+											{:else if item.entry.kind === 'monster' && item.monster?.stage}
+											<span class={`pill pill--${item.monster.stage}`}>{getMonsterStageLabel(item.monster.stage)}</span>
+										{:else if item.entry.kind === 'stage_completion' && item.stageCompletion?.stage}
+											<span class={`pill pill--${item.stageCompletion.stage}`}>{eventTypeLabel(item.stageCompletion.stage)}</span>
+										{/if}
+									</div>
+
+									<div class="deck-row__actions">
+										{#if item.entry.kind === 'location'}
+											<Select
+												value={item.entry.entry_stage ?? DEFAULT_EVENT_TYPE}
+												options={EVENT_TYPE_OPTIONS}
+												onchange={(e) => updateEntryStage(item.entry.id, (e.target as HTMLSelectElement).value as EventType)}
+											/>
+											<Select
+												value={getStageCardRenderStyle('stage_location', item.entry.data) as any}
+												options={STAGE_LOCATION_RENDER_STYLE_OPTIONS}
+												onchange={(e) => updateEntryLocationStyle(item.entry.id, (e.target as HTMLSelectElement).value as StageLocationRenderStyle)}
+											/>
+										{/if}
+
+										{#if item.entry.kind === 'event' && item.event}
+											<Button variant="secondary" onclick={() => openEditEvent(item.event!.id)}>Edit</Button>
+										{/if}
+
+										<button class="btn" onclick={() => moveDeckEntry(item.entry.id, 'up')} disabled={idx === 0}>↑</button>
+										<button class="btn" onclick={() => moveDeckEntry(item.entry.id, 'down')} disabled={idx === filteredDeckItems.length - 1}>↓</button>
+										<button class="btn danger" onclick={() => deleteDeckEntry(item.entry.id)}>✕</button>
+									</div>
+								</li>
+							{/each}
+						</ul>
 					{/if}
-				{:else}
-					<div class="empty">Select a scenario.</div>
-				{/if}
-			</main>
-		</div>
+				</section>
+			</div>
+		{:else if scenarios.length > 0}
+			<div class="empty">Select a scenario.</div>
+		{/if}
 	{/if}
 </PageLayout>
 
@@ -1200,17 +1105,11 @@
 				<FormField label="Stage">
 					<Select bind:value={eventForm.stage} options={EVENT_TYPE_OPTIONS} />
 				</FormField>
-				<FormField label="Style">
-					<Select bind:value={eventForm.render_style} options={STAGE_EVENT_RENDER_STYLE_OPTIONS} />
-				</FormField>
 				<FormField label="Title" required>
 					<Input type="text" bind:value={eventForm.title} required />
 				</FormField>
 				<FormField label="Description">
 					<Textarea rows={3} bind:value={eventForm.description} />
-				</FormField>
-				<FormField label="Stage completion (optional)">
-					<Input type="text" bind:value={eventForm.stage_completion} />
 				</FormField>
 			</div>
 			<div class="modal-footer">
@@ -1224,98 +1123,172 @@
 {/if}
 
 <style>
-	.layout {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.scenario-bar {
-		background: rgba(15, 23, 42, 0.35);
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		border-radius: 12px;
-		padding: 0.75rem;
-	}
-
-	.scenario-bar__header {
+	/* ── Scenario strip ── */
+	.scenario-strip {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 0.75rem;
-	}
-
-	.count {
-		background: rgba(59, 130, 246, 0.18);
-		border: 1px solid rgba(59, 130, 246, 0.25);
-		color: #93c5fd;
-		padding: 0.2rem 0.5rem;
-		border-radius: 999px;
-		font-weight: 700;
-		font-size: 0.75rem;
-	}
-
-	.scenario-bar__list {
-		display: flex;
-		align-items: center;
-		gap: 0.6rem;
+		gap: 0.5rem;
 		overflow-x: auto;
-		padding-bottom: 0.25rem;
+		padding: 0.4rem 0;
 		scrollbar-width: thin;
 	}
 
-	.scenario-chip-row {
+	.scenario-strip__item {
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: 0.25rem;
+		flex-shrink: 0;
 	}
 
-	.scenario-chip {
+	.scenario-strip__chip {
 		white-space: nowrap;
 		background: rgba(15, 23, 42, 0.5);
 		border: 1px solid rgba(148, 163, 184, 0.18);
 		color: #e2e8f0;
-		padding: 0.45rem 0.75rem;
+		padding: 0.3rem 0.65rem;
 		border-radius: 999px;
 		cursor: pointer;
+		font-size: 0.85rem;
 	}
 
-	.scenario-chip.selected {
+	.scenario-strip__chip.selected {
 		border-color: rgba(59, 130, 246, 0.55);
 		box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
 	}
 
-	.scenario-header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
+	/* ── Two-column layout ── */
+	.columns {
+		display: grid;
+		grid-template-columns: 340px 1fr;
 		gap: 1rem;
-		margin-bottom: 1rem;
+		align-items: start;
 	}
 
-	.muted {
-		color: rgba(226, 232, 240, 0.7);
-		margin: 0.25rem 0 0;
+	/* ── Left column: scenario info + add forms ── */
+	.col-add {
+		position: sticky;
+		top: 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		max-height: calc(100vh - 2rem);
+		overflow-y: auto;
+		scrollbar-width: thin;
 	}
 
-	.section {
+	.scenario-info {
 		background: rgba(15, 23, 42, 0.3);
 		border: 1px solid rgba(148, 163, 184, 0.16);
 		border-radius: 12px;
-		padding: 0.9rem;
-		margin-bottom: 1rem;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
 	}
 
-	.section-header {
+	.scenario-info__name {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 800;
+		color: #e2e8f0;
+	}
+
+	.scenario-info__desc {
+		margin: 0;
+		color: rgba(226, 232, 240, 0.7);
+		font-size: 0.85rem;
+		line-height: 1.35;
+	}
+
+	.add-forms__header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 1rem;
-		margin-bottom: 0.75rem;
+		gap: 0.5rem;
 	}
 
-	.section-header__actions {
+	.add-forms__header h4 {
+		margin: 0;
+		font-size: 0.9rem;
+		font-weight: 700;
+	}
+
+	.add-forms__header-actions {
+		display: flex;
+		gap: 0.35rem;
+	}
+
+	.add-forms {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.add-form {
+		background: rgba(15, 23, 42, 0.3);
+		border: 1px solid rgba(148, 163, 184, 0.16);
+		border-radius: 12px;
+		padding: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+
+	.add-form__label {
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: rgba(148, 163, 184, 0.85);
+	}
+
+	/* ── Right column: deck ── */
+	.col-deck {
+		min-width: 0;
+	}
+
+	.deck-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		margin-bottom: 0.65rem;
+		flex-wrap: wrap;
+	}
+
+	.deck-header__title {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.deck-header__title h3 {
+		margin: 0;
+	}
+
+	.deck-header__controls {
 		display: flex;
 		gap: 0.5rem;
+		align-items: center;
+	}
+
+	.deck-search {
+		width: 160px;
+		padding: 0.4rem 0.55rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		background: rgba(15, 23, 42, 0.45);
+		color: #e2e8f0;
+		font-size: 0.85rem;
+	}
+
+	.deck-filter {
+		padding: 0.4rem 0.55rem;
+		border-radius: 10px;
+		border: 1px solid rgba(148, 163, 184, 0.18);
+		background: rgba(15, 23, 42, 0.45);
+		color: #e2e8f0;
+		font-size: 0.85rem;
 	}
 
 	.badge {
@@ -1328,62 +1301,55 @@
 		font-size: 0.75rem;
 	}
 
-	.add-grid {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.add-row {
-		display: grid;
-		grid-template-columns: 1fr 120px 160px 120px;
-		gap: 0.75rem;
-		align-items: end;
-	}
-
-	.add-row:nth-child(3),
-	.add-row:nth-child(4),
-	.add-row:nth-child(5) {
-		grid-template-columns: 1fr 160px 120px;
-	}
-
+	/* ── Deck list ── */
 	.deck-list {
 		list-style: none;
 		padding: 0;
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 0.4rem;
 	}
 
 	.deck-row {
-		display: flex;
+		display: grid;
+		grid-template-columns: 56px 1fr auto;
+		gap: 0.65rem;
 		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
 		background: rgba(15, 23, 42, 0.45);
 		border: 1px solid rgba(148, 163, 184, 0.16);
 		border-radius: 12px;
-		padding: 0.6rem 0.75rem;
+		padding: 0.45rem 0.65rem;
+	}
+
+	.deck-row__thumb {
+		width: 56px;
+		height: 80px;
+		border-radius: 6px;
+		overflow: hidden;
+		background: rgba(15, 23, 42, 0.35);
+		flex-shrink: 0;
 	}
 
 	.deck-row__meta {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
+		gap: 0.5rem;
 		min-width: 0;
+		flex-wrap: wrap;
 	}
 
 	.pos {
-		width: 2.1rem;
+		width: 2rem;
 		text-align: right;
 		color: rgba(148, 163, 184, 0.9);
 		font-weight: 700;
+		font-size: 0.85rem;
 	}
 
 	.type {
 		text-transform: uppercase;
-		font-size: 0.7rem;
+		font-size: 0.68rem;
 		letter-spacing: 0.06em;
 		color: rgba(148, 163, 184, 0.85);
 	}
@@ -1398,16 +1364,18 @@
 	.deck-row__actions {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.4rem;
+		flex-wrap: wrap;
 	}
 
 	.btn {
 		border: 1px solid rgba(148, 163, 184, 0.22);
 		background: rgba(15, 23, 42, 0.55);
 		color: #e2e8f0;
-		padding: 0.35rem 0.55rem;
+		padding: 0.3rem 0.5rem;
 		border-radius: 10px;
 		cursor: pointer;
+		font-size: 0.85rem;
 	}
 
 	.btn:disabled {
@@ -1430,92 +1398,51 @@
 		background: rgba(148, 163, 184, 0.12);
 	}
 
-	.gallery-controls {
-		display: flex;
-		gap: 0.75rem;
-		align-items: center;
-		margin-bottom: 0.75rem;
+	/* ── Responsive ── */
+	@media (max-width: 1024px) {
+		.columns {
+			grid-template-columns: 1fr;
+		}
+
+		.col-add {
+			position: static;
+			max-height: none;
+			overflow-y: visible;
+		}
 	}
 
-	.gallery-search {
-		flex: 1;
-		padding: 0.55rem 0.65rem;
-		border-radius: 10px;
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		background: rgba(15, 23, 42, 0.45);
-		color: #e2e8f0;
+	@media (max-width: 640px) {
+		.deck-row__thumb {
+			width: 44px;
+			height: 63px;
+		}
+
+		.deck-row {
+			grid-template-columns: 44px 1fr;
+			gap: 0.5rem;
+		}
+
+		.deck-row__actions {
+			grid-column: 1 / -1;
+			justify-content: flex-end;
+		}
+
+		.deck-header {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
+		.deck-header__controls {
+			width: 100%;
+		}
+
+		.deck-search {
+			flex: 1;
+			width: auto;
+		}
 	}
 
-	.gallery-select {
-		padding: 0.55rem 0.65rem;
-		border-radius: 10px;
-		border: 1px solid rgba(148, 163, 184, 0.18);
-		background: rgba(15, 23, 42, 0.45);
-		color: #e2e8f0;
-	}
-
-	.gallery-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-		gap: 0.85rem;
-	}
-
-	.gallery-card {
-		background: rgba(15, 23, 42, 0.45);
-		border: 1px solid rgba(148, 163, 184, 0.16);
-		border-radius: 14px;
-		overflow: hidden;
-		display: grid;
-		grid-template-rows: 175px auto;
-	}
-
-	.gallery-preview {
-		background: rgba(15, 23, 42, 0.35);
-	}
-
-	.gallery-info {
-		padding: 0.65rem 0.75rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.45rem;
-	}
-
-	.gallery-info__header {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.75rem;
-	}
-
-	.gallery-name {
-		margin: 0;
-		font-size: 0.95rem;
-		font-weight: 800;
-		color: #e2e8f0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.gallery-badge {
-		text-transform: uppercase;
-		font-size: 0.7rem;
-		letter-spacing: 0.08em;
-		color: rgba(148, 163, 184, 0.9);
-	}
-
-	.gallery-meta {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-	}
-
-	.gallery-order {
-		color: rgba(148, 163, 184, 0.9);
-		font-weight: 700;
-		font-size: 0.8rem;
-	}
-
+	/* ── Modals (unchanged) ── */
 	.modal-backdrop {
 		position: fixed;
 		inset: 0;

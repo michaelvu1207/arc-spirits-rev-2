@@ -15,6 +15,8 @@
 		aspectRatio?: string;
 		/** Whether to crop transparent areas from images (default: true) */
 		cropTransparent?: boolean;
+		/** Whether to delete the previous file when a replacement uploads to a different path. */
+		deletePreviousOnReplace?: boolean;
 		onupload?: (path: string) => void;
 		onremove?: (previousPath: string) => void;
 		onerror?: (error: string) => void;
@@ -31,6 +33,7 @@
 		maxSizeMB = 5,
 		aspectRatio,
 		cropTransparent = true,
+		deletePreviousOnReplace = true,
 		onupload,
 		onremove,
 		onerror,
@@ -82,7 +85,7 @@
 
 			if (data?.path) {
 				value = data.path;
-				if (previousPath && previousPath !== data.path) {
+				if (deletePreviousOnReplace && previousPath && previousPath !== data.path) {
 					// Best-effort cleanup; don't block the new upload if removal fails.
 					try {
 						await deleteStorageFile(bucket, previousPath);

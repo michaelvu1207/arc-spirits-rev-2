@@ -1,5 +1,17 @@
 {
   "mcpServers": {
+    "convex": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "convex@latest",
+        "mcp",
+        "start",
+        "--project-dir",
+        "/Users/maikyon/Documents/Programming/ArcSpiritsPlan2/arc-spirits-rev-2"
+      ]
+    },
     "svelte": {
       "type": "http",
       "url": "https://mcp.svelte.dev/mcp"

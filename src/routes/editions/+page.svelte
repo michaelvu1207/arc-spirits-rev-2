@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { EditionRow, OriginRow, HexSpiritRow } from '$lib/types/gameData';
-	import { Modal, PageLayout, type Tab } from '$lib/components/layout';
-	import { Button, FormField, Input, Textarea } from '$lib/components/ui';
-	import { NumberControl } from '$lib/components/shared';
-	import { EditionsListView, EditionsTableView, EditionDetails } from '$lib/components/editions';
-	import { useFormModal, useLookup } from '$lib/composables';
-	import { getErrorMessage, publicAssetUrl } from '$lib/utils';
+	import { PageLayout } from '$lib/components/layout';
+	import { Button } from '$lib/components/ui';
+	import { OriginToggleChips, CostDuplicatesEditor } from '$lib/components/editions';
+	import { useLookup } from '$lib/composables';
+	import { getErrorMessage } from '$lib/utils';
 	import {
 		deleteEditionRecord,
 		emptyEditionForm,
@@ -25,72 +24,30 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let selectedEditionId = $state<string | null>(null);
+	let editForm = $state<EditionFormData | null>(null);
+	let saving = $state(false);
 
-	// Tab state
-	const tabs: Tab[] = [
-		{ id: 'list', label: 'Data: List', icon: '📋' },
-		{ id: 'table', label: 'Data: Table', icon: '📊' },
-		{ id: 'details', label: 'Edition Details', icon: '📈' }
-	];
-	let activeTab = $state('list');
-
-	const modal = useFormModal<EditionFormData>(emptyEditionForm());
 	const originLookup = useLookup(() => origins);
-
 	const ALL_COSTS = ['1', '3', '4', '5', '7', '9', '11', '13', '15', '17'];
 
-	const selectedEdition = $derived(editions.find((e) => e.id === selectedEditionId) ?? null);
-
-	const filteredSpirits = $derived(
-		selectedEdition
-			? hexSpirits.filter((spirit) => {
-					if (!spirit.is_enabled) return false;
-					const spiritOriginIds = spirit.traits?.origin_ids ?? [];
-					return spiritOriginIds.some((oid) => selectedEdition.origin_ids.includes(oid));
-				})
-			: []
-	);
-
-	const spiritsByCost = $derived(
-		filteredSpirits.reduce(
-			(acc, spirit) => {
-				const cost = String(spirit.cost);
-				if (!acc[cost]) acc[cost] = [];
-				acc[cost].push(spirit);
-				return acc;
-			},
-			{} as Record<string, HexSpiritRow[]>
-		)
-	);
-
-	// Calculate stats for all editions
 	const editionStats = $derived(
 		new Map(
 			editions.map((edition) => {
 				const spirits = hexSpirits.filter((spirit) => {
-					if (!spirit.is_enabled) return false;
 					const spiritOriginIds = spirit.traits?.origin_ids ?? [];
 					return spiritOriginIds.some((oid) => edition.origin_ids.includes(oid));
 				});
-
 				const costDuplicates = edition.cost_duplicates ?? DEFAULT_COST_DUPLICATES;
 				let totalUnique = spirits.length;
 				let totalWithDuplicates = 0;
-
 				for (const cost of ALL_COSTS) {
 					const uniqueCount = spirits.filter((s) => String(s.cost) === cost).length;
-					const duplicateCount = costDuplicates[cost] ?? 1;
-					totalWithDuplicates += uniqueCount * duplicateCount;
+					totalWithDuplicates += uniqueCount * (costDuplicates[cost] ?? 1);
 				}
-
 				return [edition.id, { totalUnique, totalWithDuplicates }];
 			})
 		)
 	);
-
-	function getOriginIconUrl(origin: OriginRow): string | null {
-		return publicAssetUrl(origin.icon_png, { updatedAt: origin.updated_at ?? undefined });
-	}
 
 	onMount(loadData);
 
@@ -98,17 +55,16 @@
 		try {
 			loading = true;
 			error = null;
-			const [editionsData, originsData, spiritsData] = await Promise.all([
+			const [ed, or, sp] = await Promise.all([
 				fetchEditionRecords(),
 				fetchOriginRecords(),
 				fetchHexSpiritRecords()
 			]);
-			editions = editionsData;
-			origins = originsData;
-			hexSpirits = spiritsData;
-
+			editions = ed;
+			origins = or;
+			hexSpirits = sp;
 			if (editions.length > 0 && !selectedEditionId) {
-				selectedEditionId = editions[0].id;
+				selectEdition(editions[0]);
 			}
 		} catch (err) {
 			error = getErrorMessage(err);
@@ -117,276 +73,250 @@
 		}
 	}
 
-	function openEditionForm(edition?: EditionRow) {
-		if (edition) {
-			modal.open(editionRowToForm(edition));
+	function selectEdition(edition: EditionRow) {
+		if (selectedEditionId === edition.id) {
+			selectedEditionId = null;
+			editForm = null;
+			return;
+		}
+		selectedEditionId = edition.id;
+		editForm = editionRowToForm(edition);
+	}
+
+	function startCreate() {
+		selectedEditionId = null;
+		editForm = emptyEditionForm();
+	}
+
+	function cancelEdit() {
+		if (selectedEditionId) {
+			const edition = editions.find((e) => e.id === selectedEditionId);
+			if (edition) editForm = editionRowToForm(edition);
+			else { selectedEditionId = null; editForm = null; }
 		} else {
-			modal.open();
+			editForm = null;
 		}
 	}
 
-	async function saveEdition() {
-		if (!modal.formData.name.trim()) {
-			alert('Edition name is required.');
-			return;
-		}
-
+	async function saveEdit() {
+		if (!editForm || !editForm.name.trim()) return;
 		try {
-			const saved = await saveEditionRecord(modal.formData);
+			saving = true;
+			const saved = await saveEditionRecord(editForm);
 			await loadData();
 			selectedEditionId = saved.id;
-			modal.close();
+			const updated = editions.find((e) => e.id === saved.id);
+			if (updated) editForm = editionRowToForm(updated);
 		} catch (err) {
-			alert(`Failed to save edition: ${getErrorMessage(err)}`);
+			alert(`Failed to save: ${getErrorMessage(err)}`);
+		} finally {
+			saving = false;
 		}
 	}
 
 	async function deleteEdition(edition: EditionRow) {
-		if (!confirm(`Delete edition "${edition.name}"? This cannot be undone.`)) return;
+		if (!confirm(`Delete "${edition.name}"?`)) return;
 		try {
 			await deleteEditionRecord(edition.id);
 			if (selectedEditionId === edition.id) {
 				selectedEditionId = null;
+				editForm = null;
 			}
 			await loadData();
 		} catch (err) {
-			alert(`Failed to delete edition: ${getErrorMessage(err)}`);
+			alert(`Failed to delete: ${getErrorMessage(err)}`);
 		}
 	}
 
-	async function deleteMultipleEditions(ids: string[]) {
-		if (!confirm(`Delete ${ids.length} editions? This cannot be undone.`)) return;
-		try {
-			await Promise.all(ids.map((id) => deleteEditionRecord(id)));
-			if (selectedEditionId && ids.includes(selectedEditionId)) {
-				selectedEditionId = null;
-			}
-			await loadData();
-		} catch (err) {
-			alert(`Failed to delete editions: ${getErrorMessage(err)}`);
-		}
-	}
-
-	function submitEditionForm(event: Event) {
-		event.preventDefault();
-		void saveEdition();
-	}
-
-	function toggleOriginInForm(originId: string) {
-		if (modal.formData.origin_ids.includes(originId)) {
-			modal.formData.origin_ids = modal.formData.origin_ids.filter((id) => id !== originId);
+	function toggleOrigin(originId: string) {
+		if (!editForm) return;
+		if (editForm.origin_ids.includes(originId)) {
+			editForm.origin_ids = editForm.origin_ids.filter((id) => id !== originId);
 		} else {
-			modal.formData.origin_ids = [...modal.formData.origin_ids, originId];
+			editForm.origin_ids = [...editForm.origin_ids, originId];
 		}
-	}
-
-	function handleTabChange(tabId: string) {
-		activeTab = tabId;
 	}
 </script>
 
-<PageLayout
-	title="Editions"
-	subtitle="Create custom sets of hex spirits by selecting origins and configuring duplicates per cost"
-	{tabs}
-	{activeTab}
-	onTabChange={handleTabChange}
->
+<PageLayout title="Editions" subtitle="Manage edition origin sets and cost duplicates">
 	{#snippet headerActions()}
-		<Button variant="primary" onclick={() => openEditionForm()}>Create Edition</Button>
-	{/snippet}
-
-	{#snippet tabActions()}
-		<span class="edition-count">{editions.length} editions</span>
+		<Button variant="primary" onclick={startCreate}>+ New</Button>
 	{/snippet}
 
 	{#if loading}
-		<div class="loading-state">Loading editions...</div>
+		<div class="state-msg">Loading...</div>
 	{:else if error}
-		<div class="error-state">Error: {error}</div>
-	{:else if activeTab === 'list'}
-		<EditionsListView
-			{editions}
-			{originLookup}
-			stats={editionStats}
-			onEdit={(edition) => openEditionForm(edition)}
-			onDelete={(edition) => deleteEdition(edition)}
-			onDeleteMultiple={deleteMultipleEditions}
-			onSelect={(edition) => (selectedEditionId = edition.id)}
-			{selectedEditionId}
-		/>
-	{:else if activeTab === 'table'}
-		<EditionsTableView
-			{editions}
-			{originLookup}
-			stats={editionStats}
-			onEdit={(edition) => openEditionForm(edition)}
-			onSelect={(edition) => (selectedEditionId = edition.id)}
-			{selectedEditionId}
-		/>
-	{:else if activeTab === 'details'}
-		<EditionDetails
-			edition={selectedEdition}
-			spirits={filteredSpirits}
-			{originLookup}
-		/>
+		<div class="state-msg state-msg--err">{error}</div>
+	{:else}
+		<table class="t">
+			<thead><tr>
+				<th>Name</th>
+				<th class="tc w60">Origins</th>
+				<th class="tc w60">Unique</th>
+				<th class="tc w60">Total</th>
+				<th class="w36"></th>
+			</tr></thead>
+			<tbody>
+				{#each editions as edition (edition.id)}
+					{@const s = editionStats.get(edition.id)}
+					{@const sel = selectedEditionId === edition.id}
+					<tr class="row" class:sel onclick={() => selectEdition(edition)}>
+						<td>
+							<span class="nm">{edition.name}</span>
+							{#if edition.is_default}<span class="bg bg--d">D</span>{/if}
+							{#if edition.is_enabled === false}<span class="bg bg--off">off</span>{/if}
+						</td>
+						<td class="tc">{edition.origin_ids.length}</td>
+						<td class="tc">{s?.totalUnique ?? '—'}</td>
+						<td class="tc">{s?.totalWithDuplicates ?? '—'}</td>
+						<td class="tc">
+							<button class="xbtn" title="Delete" onclick={(e) => { e.stopPropagation(); deleteEdition(edition); }}>&#10005;</button>
+						</td>
+					</tr>
+					{#if sel && editForm}
+						<tr class="erow"><td colspan="5">
+							{@render inlineEditor()}
+						</td></tr>
+					{/if}
+				{/each}
+
+				{#if editForm && !selectedEditionId}
+					<tr class="row sel">
+						<td colspan="5"><span class="nm">New Edition</span></td>
+					</tr>
+					<tr class="erow"><td colspan="5">
+						{@render inlineEditor()}
+					</td></tr>
+				{/if}
+			</tbody>
+		</table>
+
+		{#if editions.length === 0 && !editForm}
+			<div class="state-msg">No editions. Click <strong>+ New</strong> to create one.</div>
+		{/if}
 	{/if}
 </PageLayout>
 
-	<Modal bind:open={modal.isOpen} title={modal.isEditing ? 'Edit Edition' : 'Create Edition'} size="lg">
-		<form id="edition-editor-form" class="edition-form" onsubmit={submitEditionForm}>
-			<div class="form-row">
-				<FormField label="Name" required>
-					<Input bind:value={modal.formData.name} />
-				</FormField>
-				<label class="checkbox-field">
-					<input type="checkbox" bind:checked={modal.formData.is_default} />
-					<span>Set as Default</span>
-				</label>
+{#snippet inlineEditor()}
+	{#if editForm}
+		<div class="ed">
+			<div class="ed-top">
+				<input class="ed-name" bind:value={editForm.name} placeholder="Name" />
+				<input class="ed-desc" bind:value={editForm.description} placeholder="Description (optional)" />
+				<label class="ed-ck"><input type="checkbox" bind:checked={editForm.is_default} /><span>Default</span></label>
+				<label class="ed-ck"><input type="checkbox" bind:checked={editForm.is_enabled} /><span>Enabled</span></label>
 			</div>
-
-			<FormField label="Description">
-				<Textarea bind:value={modal.formData.description} rows={2} />
-			</FormField>
-
-			<fieldset class="origins-fieldset">
-				<legend>Select Origins</legend>
-				<div class="origins-grid">
-					{#each origins as origin}
-						<label class="origin-checkbox">
-							<input
-								type="checkbox"
-								checked={modal.formData.origin_ids.includes(origin.id)}
-								onchange={() => toggleOriginInForm(origin.id)}
-							/>
-							<span class="origin-label" style="border-color: {origin.color}">
-								{#if getOriginIconUrl(origin)}
-									<img src={getOriginIconUrl(origin)} alt="" class="origin-label__icon" />
-								{:else if origin.icon_emoji}
-									<span>{origin.icon_emoji}</span>
-								{/if}
-								{origin.name}
-							</span>
-						</label>
-					{/each}
-				</div>
-			</fieldset>
-
-			<fieldset class="duplicates-fieldset">
-				<legend>Duplicates per Cost</legend>
-				<div class="duplicates-grid">
-					{#each ALL_COSTS as cost}
-						<NumberControl
-							label="Cost {cost}"
-							bind:value={modal.formData.cost_duplicates[cost]}
-							min={0}
-							max={10}
-						/>
-					{/each}
-				</div>
-			</fieldset>
-		</form>
-
-		{#snippet footer()}
-			<Button type="submit" form="edition-editor-form" variant="primary">Save</Button>
-			<Button onclick={() => modal.close()}>Cancel</Button>
-		{/snippet}
-	</Modal>
+			<OriginToggleChips {origins} selectedIds={editForm.origin_ids} onToggle={toggleOrigin} />
+			<CostDuplicatesEditor bind:costDuplicates={editForm.cost_duplicates} />
+			<div class="ed-foot">
+				<button class="btn-save" onclick={saveEdit} disabled={saving || !editForm.name.trim()}>
+					{saving ? 'Saving...' : 'Save'}
+				</button>
+				<button class="btn-cancel" onclick={cancelEdit}>Cancel</button>
+			</div>
+		</div>
+	{/if}
+{/snippet}
 
 <style>
-	.edition-count {
-		font-size: 0.7rem;
-		color: #64748b;
-	}
+	.state-msg { padding: 1rem; text-align: center; color: #64748b; font-size: 0.75rem; }
+	.state-msg--err { color: #f87171; }
 
-	.loading-state,
-	.error-state {
-		padding: 1rem;
-		text-align: center;
-		color: #64748b;
-		font-size: 0.75rem;
+	/* Table */
+	.t { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+	.t thead { position: sticky; top: 0; z-index: 1; }
+	.t th {
+		padding: 0.3rem 0.5rem; text-align: left;
+		font-size: 0.65rem; font-weight: 600; color: #64748b;
+		text-transform: uppercase; letter-spacing: 0.05em;
+		border-bottom: 1px solid rgba(148,163,184,0.15);
+		background: rgba(15,23,42,0.6);
 	}
+	.tc { text-align: center !important; }
+	.w60 { width: 60px; }
+	.w36 { width: 36px; }
 
-	.error-state {
-		color: #f87171;
+	/* Rows */
+	.row { cursor: pointer; transition: background 0.1s; }
+	.row:hover { background: rgba(99,102,241,0.08); }
+	.row.sel { background: rgba(59,130,246,0.12); }
+	.row td {
+		padding: 0.35rem 0.5rem;
+		border-bottom: 1px solid rgba(148,163,184,0.08);
+		color: #cbd5e1;
 	}
+	.row.sel td { border-bottom-color: transparent; }
 
-	.edition-form {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
+	.nm { font-weight: 600; color: #f1f5f9; }
+	.bg {
+		display: inline-block; margin-left: 0.3rem;
+		font-size: 0.55rem; padding: 0.05rem 0.25rem;
+		border-radius: 2px; font-weight: 700;
+		vertical-align: middle; line-height: 1.3;
 	}
+	.bg--d { background: rgba(34,197,94,0.2); border: 1px solid rgba(34,197,94,0.4); color: #86efac; }
+	.bg--off { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: #f87171; }
 
-	.form-row {
-		display: flex;
-		gap: 1rem;
-		align-items: end;
+	.xbtn {
+		background: none; border: none; color: #475569;
+		cursor: pointer; padding: 0.15rem 0.3rem;
+		font-size: 0.7rem; line-height: 1; border-radius: 3px;
 	}
+	.xbtn:hover { background: rgba(239,68,68,0.15); color: #f87171; }
 
-	.checkbox-field {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+	/* Editor row */
+	.erow td { padding: 0; border-bottom: 1px solid rgba(148,163,184,0.08); }
+
+	.ed {
 		padding: 0.5rem;
-		cursor: pointer;
+		background: rgba(30,41,59,0.25);
+		display: flex; flex-direction: column; gap: 0.5rem;
 	}
 
-	.checkbox-field input {
-		margin: 0;
+	.ed-top {
+		display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
 	}
 
-	.origins-fieldset,
-	.duplicates-fieldset {
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		border-radius: 8px;
-		padding: 1rem;
-	}
-
-	.origins-fieldset legend,
-	.duplicates-fieldset legend {
-		padding: 0 0.5rem;
-		font-weight: 500;
-		color: #e2e8f0;
-	}
-
-	.origins-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.origin-checkbox {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		cursor: pointer;
-	}
-
-	.origin-checkbox input {
-		margin: 0;
-	}
-
-	.origin-label {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
+	.ed-name, .ed-desc {
 		padding: 0.3rem 0.5rem;
-		background: rgba(51, 65, 85, 0.4);
-		border: 1px solid;
-		border-radius: 5px;
-		font-size: 0.85rem;
+		background: rgba(15,23,42,0.6);
+		border: 1px solid rgba(148,163,184,0.2);
+		border-radius: 4px; color: #e2e8f0;
+		font-size: 0.78rem; outline: none;
+	}
+	.ed-name { width: 160px; font-weight: 600; }
+	.ed-desc { flex: 1; min-width: 120px; }
+	.ed-name:focus, .ed-desc:focus {
+		border-color: rgba(59,130,246,0.5);
 	}
 
-	.origin-label__icon {
-		width: 16px;
-		height: 16px;
-		object-fit: contain;
+	.ed-ck {
+		display: flex; align-items: center; gap: 0.3rem;
+		font-size: 0.7rem; color: #94a3b8; cursor: pointer;
+		white-space: nowrap;
+	}
+	.ed-ck input { margin: 0; }
+
+	.ed-foot {
+		display: flex; gap: 0.35rem; justify-content: flex-end;
 	}
 
-	.duplicates-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-		gap: 0.75rem;
+	.btn-save, .btn-cancel {
+		padding: 0.25rem 0.6rem; border-radius: 4px;
+		font-size: 0.7rem; font-weight: 600; cursor: pointer;
+		border: 1px solid transparent;
 	}
-
+	.btn-save {
+		background: rgba(59,130,246,0.25); color: #93c5fd;
+		border-color: rgba(59,130,246,0.4);
+	}
+	.btn-save:hover:not(:disabled) {
+		background: rgba(59,130,246,0.35);
+	}
+	.btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
+	.btn-cancel {
+		background: rgba(51,65,85,0.3); color: #94a3b8;
+		border-color: rgba(148,163,184,0.2);
+	}
+	.btn-cancel:hover { background: rgba(51,65,85,0.5); }
 </style>

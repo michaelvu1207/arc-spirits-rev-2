@@ -5,8 +5,8 @@
 	interface Props {
 		title: string;
 		subtitle?: string;
-		tabs: Tab[];
-		activeTab: string;
+		tabs?: Tab[];
+		activeTab?: string;
 		onTabChange?: (tabId: string) => void;
 		headerActions?: Snippet;
 		tabActions?: Snippet;
@@ -16,8 +16,8 @@
 	let {
 		title,
 		subtitle,
-		tabs,
-		activeTab,
+		tabs = [],
+		activeTab = '',
 		onTabChange,
 		headerActions,
 		tabActions,
@@ -40,7 +40,9 @@
 		{/if}
 	</header>
 
-	<TabBar {tabs} {activeTab} {onTabChange} actions={tabActions} />
+	{#if tabs.length > 0}
+		<TabBar {tabs} {activeTab} {onTabChange} actions={tabActions} />
+	{/if}
 
 	<main class="page-layout__content">
 		{@render children()}

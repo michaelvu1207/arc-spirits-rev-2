@@ -1,25 +1,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/api/supabaseClient';
-	import { cropEmptySpace } from '$lib/utils/imageCrop';
+	import { cropTransparentArea } from '$lib/utils/imageCrop';
 	import { useFormModal } from '$lib/composables';
 	import { getErrorMessage, sanitizeFilename } from '$lib/utils';
 	import { processAndUploadImage } from '$lib/utils/storage';
+	import { fetchOriginRecords } from '$lib/features/origins/origins';
 	import { Button, FormField, Input, Select } from '$lib/components/ui';
 	import { Modal, PageLayout, type Tab } from '$lib/components/layout';
 	import { GuardiansListView, GuardiansTableView } from '$lib/components/guardians';
-	import type { ArtifactRow, GuardianRow, OriginRow } from '$lib/types/gameData';
+	import type { GuardianRow, OriginRow } from '$lib/types/gameData';
+	import { normalizeOptionalText, normalizeLanguageCode, getTranslationValue } from '$lib/i18n/translations';
 
 	type Guardian = GuardianRow;
 	type OriginOption = Pick<OriginRow, 'id' | 'name'>;
-	type Artifact = Pick<ArtifactRow, 'id' | 'name' | 'benefit' | 'recipe_box' | 'guardian_id'>;
 
 	type GuardianLanguage = 'base' | string;
 	const BASE_LANGUAGE: GuardianLanguage = 'base';
 
 	let guardians: Guardian[] = $state([]);
 	let origins: OriginOption[] = $state([]);
-	let artifactsByGuardian: Record<string, Artifact[]> = $state({});
 	let loading = $state(true);
 	let error: string | null = $state(null);
 
@@ -50,29 +50,6 @@
 	let iconUploadInput: HTMLInputElement | null = $state(null);
 	let uploadTarget: Guardian | null = $state(null);
 	let uploadType: 'image_mat' | 'chibi' | 'icon' = $state('image_mat');
-
-	function normalizeOptionalText(value: string | null | undefined): string | null {
-		const trimmed = (value ?? '').trim();
-		return trimmed.length > 0 ? trimmed : null;
-	}
-
-	function normalizeLanguageCode(value: string): string {
-		return value.trim().replace(/_/g, '-').toLowerCase();
-	}
-
-	function getTranslationValue(input: unknown, lang: string): string | null {
-		if (!lang || lang === BASE_LANGUAGE) return null;
-		if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-		const record = input as Record<string, unknown>;
-		const direct = record[lang];
-		if (typeof direct === 'string') return normalizeOptionalText(direct);
-		for (const [key, value] of Object.entries(record)) {
-			if (normalizeLanguageCode(key) !== lang) continue;
-			if (typeof value !== 'string') continue;
-			return normalizeOptionalText(value);
-		}
-		return null;
-	}
 
 	function ensureTranslationRecord(input: unknown): Record<string, string> {
 		if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
@@ -218,7 +195,7 @@
 				await gameAssetsStorage.remove([oldPath]);
 			}
 
-			const croppedBlob = await cropEmptySpace(file);
+			const croppedBlob = await cropTransparentArea(file);
 
 			let finalBlob: Blob;
 			let extension: string;
@@ -332,46 +309,29 @@
 	});
 
 	async function loadOrigins() {
-		const { data, error: fetchError } = await supabase
-			.from('origins')
-			.select('id, name')
-			.order('position', { ascending: true });
-		if (fetchError) {
-			error = fetchError.message;
-			return;
+		try {
+			const records = await fetchOriginRecords();
+			origins = records
+				.filter((origin) => origin.is_enabled !== false)
+				.map((origin) => ({ id: origin.id, name: origin.name }))
+				.sort((a, b) => a.name.localeCompare(b.name));
+		} catch (fetchError: unknown) {
+			error = fetchError instanceof Error ? fetchError.message : String(fetchError);
 		}
-		origins = data ?? [];
 	}
 
 	async function loadGuardians() {
 		loading = true;
 		error = null;
 		try {
-			const [guardianResult, artifactResult] = await Promise.all([
-				supabase.from('guardians').select('*').order('created_at', { ascending: true }),
-				supabase
-					.from('artifacts')
-					.select('id, name, benefit, recipe_box, guardian_id')
-					.order('name', { ascending: true })
-			]);
+			const guardianResult = await supabase
+				.from('guardians')
+				.select('*')
+				.order('created_at', { ascending: true });
 			if (guardianResult.error) throw guardianResult.error;
-			if (artifactResult.error) throw artifactResult.error;
 			guardians = guardianResult.data ?? [];
-			const artifactList =
-				(artifactResult.data ?? []).map((artifact) => ({
-					...artifact,
-					recipe_box: Array.isArray(artifact.recipe_box) ? artifact.recipe_box : []
-				})) as Artifact[];
-			const grouped: Record<string, Artifact[]> = {};
-			for (const artifact of artifactList) {
-				if (!artifact.guardian_id) continue;
-				if (!grouped[artifact.guardian_id]) grouped[artifact.guardian_id] = [];
-				grouped[artifact.guardian_id].push(artifact);
-			}
-			artifactsByGuardian = grouped;
 		} catch (err) {
 			error = getErrorMessage(err);
-			artifactsByGuardian = {};
 		} finally {
 			loading = false;
 		}
@@ -573,7 +533,6 @@
 			guardians={filteredGuardians}
 			language={guardianLanguage}
 			{origins}
-			{artifactsByGuardian}
 			onEdit={openEditGuardian}
 			onDelete={deleteGuardian}
 			onDeleteMultiple={deleteGuardians}
@@ -586,7 +545,6 @@
 			guardians={filteredGuardians}
 			language={guardianLanguage}
 			{origins}
-			{artifactsByGuardian}
 			onEdit={openEditGuardian}
 		/>
 	{/if}

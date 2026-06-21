@@ -5,9 +5,10 @@
 	type Props = {
 		origins: OriginRow[];
 		onEdit: (origin: OriginRow) => void;
+		onToggleEnabled?: (origin: OriginRow, enabled: boolean) => void;
 	};
 
-	let { origins, onEdit }: Props = $props();
+	let { origins, onEdit, onToggleEnabled }: Props = $props();
 
 	type SortKey = 'name' | 'position' | 'color';
 	type SortDirection = 'asc' | 'desc';
@@ -97,6 +98,18 @@
 						<button class="edit-btn" onclick={(e) => { e.stopPropagation(); onEdit(origin); }}>
 							Edit
 						</button>
+						{#if onToggleEnabled}
+							<button
+								class="toggle-btn"
+								type="button"
+								onclick={(e) => {
+									e.stopPropagation();
+									onToggleEnabled(origin, origin.is_enabled === false);
+								}}
+							>
+								{origin.is_enabled === false ? 'Enable' : 'Disable'}
+							</button>
+						{/if}
 					</td>
 				</tr>
 			{:else}
@@ -220,8 +233,12 @@
 	}
 
 	.actions-col {
-		width: 80px;
+		width: 130px;
 		text-align: center;
+		display: flex;
+		gap: 0.3rem;
+		justify-content: center;
+		align-items: center;
 	}
 
 	.edit-btn {
@@ -238,6 +255,22 @@
 	.edit-btn:hover {
 		background: rgba(59, 130, 246, 0.4);
 		border-color: rgba(59, 130, 246, 0.7);
+	}
+
+	.toggle-btn {
+		padding: 0.2rem 0.4rem;
+		background: rgba(100, 116, 139, 0.25);
+		border: 1px solid rgba(148, 163, 184, 0.5);
+		border-radius: 4px;
+		color: #cbd5e1;
+		font-size: 0.7rem;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.toggle-btn:hover {
+		background: rgba(100, 116, 139, 0.35);
+		border-color: rgba(148, 163, 184, 0.75);
 	}
 
 	.empty {
