@@ -30,6 +30,15 @@
 		type HexSpiritFormData
 	} from '$lib/features/hex-spirits/hexSpirits';
 	import {
+		createHexSpiritGalleryTag,
+		deleteHexSpiritGalleryTag,
+		fetchHexSpiritGalleryTagAssignments,
+		fetchHexSpiritGalleryTags,
+		setHexSpiritGalleryTagAssignment,
+		type HexSpiritGalleryTag,
+		type HexSpiritGalleryTagAssignment
+	} from '$lib/features/hex-spirits/galleryTags';
+	import {
 		buildHexSpiritVariationCandidates,
 		getSelectedVariationBySpiritId,
 		type HexSpiritVariationCandidate
@@ -50,6 +59,7 @@
 	import IconPlacementConfigurator from '$lib/components/spirits/IconPlacementConfigurator.svelte';
 	import BackIconPlacementConfigurator from '$lib/components/spirits/BackIconPlacementConfigurator.svelte';
 	import AwakenConditionEditor from '$lib/components/spirits/AwakenConditionEditor.svelte';
+	import GallerySpiritCards from '$lib/components/hex-spirits/GallerySpiritCards.svelte';
 	import {
 		FRAME_TIERS,
 		type FrameTier,
@@ -130,7 +140,13 @@
 	let classFilter = $state('all');
 
 	// Gallery state
-	let selectedOriginsForGrid: Set<string | null> = $state(new Set());
+	let galleryTags: HexSpiritGalleryTag[] = $state([]);
+	let galleryTagAssignments: HexSpiritGalleryTagAssignment[] = $state([]);
+	let newGalleryTagName = $state('');
+	let newGalleryTagColor = $state('#f97316');
+	let galleryTagError: string | null = $state(null);
+	let creatingGalleryTag = $state(false);
+	let busyGalleryTagAssignments: Set<string> = $state(new Set());
 	const TTS_INDEPENDENT_EXPORT_WIDTH = 825;
 	const TTS_INDEPENDENT_EXPORT_HEIGHT = 750;
 	const TTS_MEMBER_EXPORT_QUANTITY = 2;
@@ -222,10 +238,72 @@
 	);
 
 	onMount(async () => {
-		await Promise.all([loadOrigins(), loadClasses(), loadRunes()]);
-		selectedOriginsForGrid = new Set([...origins.map((o) => o.id), null]);
+		await Promise.all([loadOrigins(), loadClasses(), loadRunes(), loadGalleryTagData()]);
 		await loadSpirits();
 	});
+
+	async function loadGalleryTagData() {
+		try {
+			[galleryTags, galleryTagAssignments] = await Promise.all([
+				fetchHexSpiritGalleryTags(),
+				fetchHexSpiritGalleryTagAssignments()
+			]);
+			galleryTagError = null;
+		} catch (err) {
+			galleryTagError = `Could not load gallery tags: ${getErrorMessage(err)}`;
+		}
+	}
+
+	async function createGalleryTag() {
+		const name = newGalleryTagName.trim();
+		if (!name || creatingGalleryTag) return;
+		creatingGalleryTag = true;
+		galleryTagError = null;
+		try {
+			const tag = await createHexSpiritGalleryTag(name, newGalleryTagColor, galleryTags.length);
+			galleryTags = [...galleryTags, tag];
+			newGalleryTagName = '';
+		} catch (err) {
+			galleryTagError = getErrorMessage(err);
+		} finally {
+			creatingGalleryTag = false;
+		}
+	}
+
+	async function removeGalleryTag(tag: HexSpiritGalleryTag) {
+		if (!confirm(`Delete tag "${tag.name}"? Spirit assignments to this tag will also be removed.`)) return;
+		galleryTagError = null;
+		try {
+			await deleteHexSpiritGalleryTag(tag.id);
+			galleryTags = galleryTags.filter((candidate) => candidate.id !== tag.id);
+			galleryTagAssignments = galleryTagAssignments.filter((assignment) => assignment.tag_id !== tag.id);
+		} catch (err) {
+			galleryTagError = getErrorMessage(err);
+		}
+	}
+
+	async function toggleGalleryTagAssignment(spiritId: string, tagId: string, assigned: boolean) {
+		const key = `${spiritId}:${tagId}`;
+		if (busyGalleryTagAssignments.has(key)) return;
+		busyGalleryTagAssignments = new Set(busyGalleryTagAssignments).add(key);
+		galleryTagError = null;
+		const previous = galleryTagAssignments;
+		galleryTagAssignments = assigned
+			? [...galleryTagAssignments, { tag_id: tagId, hex_spirit_id: spiritId, created_at: new Date().toISOString() }]
+			: galleryTagAssignments.filter(
+					(assignment) => !(assignment.tag_id === tagId && assignment.hex_spirit_id === spiritId)
+				);
+		try {
+			await setHexSpiritGalleryTagAssignment(tagId, spiritId, assigned);
+		} catch (err) {
+			galleryTagAssignments = previous;
+			galleryTagError = getErrorMessage(err);
+		} finally {
+			const next = new Set(busyGalleryTagAssignments);
+			next.delete(key);
+			busyGalleryTagAssignments = next;
+		}
+	}
 
 	function getPublicImage(path: string | null | undefined, updatedAt?: string | null): string | null {
 		if (!path) return null;
@@ -752,16 +830,6 @@
 		return path.startsWith('hex_spirits/') ? path : `hex_spirits/${path}`;
 	}
 
-	function getCombatPower(cost: number): number {
-		if (cost >= 1 && cost <= 3) return 1;
-		if (cost >= 4 && cost <= 5) return 1;
-		if (cost === 7) return 2;
-		if (cost === 9) return 3;
-		if (cost === 6) return 2;
-		if (cost === 8) return 3;
-		return 3;
-	}
-
 	const originName = (originId: string | null) =>
 		origins.find((origin) => origin.id === originId)?.name ?? 'Unassigned';
 
@@ -782,6 +850,10 @@
 	// Origins that always populate SpecialClassName (using primary class if no is_special class is present).
 	const ALWAYS_SPECIAL_ORIGIN_IDS = new Set([HUMAN_ENCLAVE_ORIGIN_ID, ROYAL_FAMILY_ORIGIN_ID]);
 	const ORIGIN_TO_SUBFOLDER: Record<string, string> = {
+		'Water': 'tidal',
+		'Forest': 'forest',
+		'Fire': 'lantern',
+		'Mountain': 'cyber',
 		'Moon Tide': 'tidal',
 		'Floral Patch': 'forest',
 		'Lantern Lights': 'lantern',
@@ -818,7 +890,7 @@
 			const primaryOId = primaryOriginId(spirit);
 			const name = originName(primaryOId);
 			// Arcane tier in frames_final.psd uses "florest" (typo) for Floral Patch
-			const subfolder = name === 'Floral Patch' ? 'florest' : originToSubfolder(primaryOId);
+			const subfolder = name === 'Forest' || name === 'Floral Patch' ? 'florest' : originToSubfolder(primaryOId);
 			return subfolder ? { tier: 'arcane', subfolder } : null;
 		}
 
@@ -892,16 +964,6 @@
 		}
 
 		return spirit.game_print_image_url;
-	}
-
-	async function toggleOriginForGrid(originId: string | null) {
-		const newSet = new Set(selectedOriginsForGrid);
-		if (newSet.has(originId)) {
-			newSet.delete(originId);
-		} else {
-			newSet.add(originId);
-		}
-		selectedOriginsForGrid = newSet;
 	}
 
 	function handleBatchUploadInput(event: Event) {
@@ -1292,11 +1354,11 @@
 		}
 	}
 
-	async function exportGridAsPng() {
+	async function exportGalleryCardsAsPng() {
 		if (typeof window === 'undefined') return;
-		const table = document.querySelector('.spirit-matrix') as HTMLElement | null;
+		const table = document.querySelector('.gallery-tables') as HTMLElement | null;
 		if (!table) {
-			alert('Grid view must be visible to export.');
+			alert('Gallery cards must be visible to export.');
 			return;
 		}
 		exportingGridImage = true;
@@ -1311,7 +1373,7 @@
 			const dataUrl = canvas.toDataURL('image/png');
 			const link = document.createElement('a');
 			link.href = dataUrl;
-			link.download = `hex_spirits_game_prints_grid_${new Date().toISOString().slice(0, 10)}.png`;
+			link.download = `hex_spirits_gallery_cards_${new Date().toISOString().slice(0, 10)}.png`;
 			link.click();
 		} catch (err) {
 			console.error(err);
@@ -2166,84 +2228,66 @@
 		}
 	}
 
-	const gridViewData = $derived.by(() => {
-		const classSet = new Set<string | null>();
-		const originSet = new Set<string | null>();
-
-		filteredSpirits.forEach((spirit) => {
-			const spiritOriginId = primaryOriginId(spirit);
-			const spiritClassId = primaryClassId(spirit);
-			classSet.add(spiritClassId);
-			originSet.add(spiritOriginId);
+	const galleryCardData = $derived.by(() => {
+		const humanEnclaveOriginId = origins.find(
+			(origin) => origin.name.trim().toLowerCase() === 'human enclave'
+		)?.id;
+		const humanEnclaveSpirits = humanEnclaveOriginId
+			? filteredSpirits.filter((spirit) => spirit.traits?.origin_ids?.includes(humanEnclaveOriginId))
+			: [];
+		const regionDefinitions = ['Forest', 'Water', 'Fire', 'Mountain'];
+		const regionGroups = regionDefinitions.map((name) => {
+			const originId = origins.find(
+				(origin) => origin.name.trim().toLowerCase() === name.toLowerCase()
+			)?.id;
+			return {
+				name,
+				spirits: originId
+					? filteredSpirits.filter((spirit) => spirit.traits?.origin_ids?.includes(originId))
+					: []
+			};
 		});
-
-		const specialClass = classes.find((c) => c.name === 'Special');
-		if (specialClass) {
-			classSet.add(specialClass.id);
-		}
-
-		const classList = Array.from(classSet)
-			.map((classId) => {
-				const classSpirits = filteredSpirits.filter((s) => primaryClassId(s) === classId);
-				const count = classSpirits.length;
-				const combatPower = classSpirits.reduce((sum, s) => sum + getCombatPower(s.cost), 0);
-				const cls = classId ? classes.find((c) => c.id === classId) : null;
-				return {
-					classId,
-					className: className(classId),
-					position: cls?.position ?? 9999,
-					count,
-					combatPower,
-					powerRatio: count > 0 ? (combatPower / count).toFixed(2) : '0.00'
-				};
-			})
-			.sort((a, b) => a.position - b.position);
-
-		const originList = Array.from(originSet)
-			.filter((originId) => selectedOriginsForGrid.has(originId))
-			.map((originId) => {
-				const originSpirits = filteredSpirits.filter((s) => primaryOriginId(s) === originId);
-				const count = originSpirits.length;
-				const combatPower = originSpirits.reduce((sum, s) => sum + getCombatPower(s.cost), 0);
-				const origin = originId ? origins.find((o) => o.id === originId) : null;
-				return {
-					originId,
-					originName: originName(originId),
-					position: origin?.position ?? 9999,
-					count,
-					combatPower,
-					powerRatio: count > 0 ? (combatPower / count).toFixed(2) : '0.00'
-				};
-			})
-			.sort((a, b) => a.position - b.position);
-
-		const grid: Map<string | null, Map<string | null, HexSpirit[]>> = new Map();
-
-		classList.forEach(({ classId }) => {
-			grid.set(classId, new Map());
-			originList.forEach(({ originId }) => {
-				grid.get(classId)!.set(originId, []);
-			});
-		});
-
-		filteredSpirits.forEach((spirit) => {
-			const spiritOriginId = primaryOriginId(spirit);
-			const spiritClassId = primaryClassId(spirit);
-			const classMap = grid.get(spiritClassId);
-			if (classMap) {
-				const cell = classMap.get(spiritOriginId);
-				if (cell) {
-					cell.push(spirit);
-				}
-			}
-		});
-
+		const regionOriginIds = new Set(
+			regionDefinitions
+				.map((name) => origins.find((origin) => origin.name.trim().toLowerCase() === name.toLowerCase())?.id)
+				.filter((id): id is string => Boolean(id))
+		);
+		const regionSpirits = filteredSpirits.filter((spirit) =>
+			spirit.traits?.origin_ids?.some((id) => regionOriginIds.has(id))
+		);
+		const arcaneAbyssSpirits = filteredSpirits.filter((spirit) => spirit.cost >= 7);
 		return {
-			classList,
-			originList,
-			grid
+			humanEnclaveSpirits,
+			regionSpirits,
+			regionGroups,
+			arcaneAbyssSpirits
 		};
 	});
+
+	const assignedGalleryTagIdsBySpirit = $derived.by(() => {
+		const currentTagIds = new Set(galleryTags.map((tag) => tag.id));
+		const assigned: Record<string, string[]> = {};
+		for (const assignment of galleryTagAssignments) {
+			if (!currentTagIds.has(assignment.tag_id)) continue;
+			(assigned[assignment.hex_spirit_id] ??= []).push(assignment.tag_id);
+		}
+		return assigned;
+	});
+
+	const arcaneAbyssTagGroups = $derived(
+		galleryTags.map((tag) => ({
+			tag,
+			spirits: galleryCardData.arcaneAbyssSpirits.filter((spirit) =>
+				assignedGalleryTagIdsBySpirit[spirit.id]?.includes(tag.id)
+			)
+		}))
+	);
+
+	const unassignedArcaneAbyssSpirits = $derived(
+		galleryCardData.arcaneAbyssSpirits.filter(
+			(spirit) => !(assignedGalleryTagIdsBySpirit[spirit.id]?.length > 0)
+		)
+	);
 </script>
 
 <PageLayout
@@ -2448,10 +2492,10 @@
 					</div>
 					<Button
 						variant="secondary"
-						onclick={exportGridAsPng}
+						onclick={exportGalleryCardsAsPng}
 						disabled={exportingGridImage}
 					>
-						{exportingGridImage ? 'Exporting…' : 'Export Grid as PNG'}
+						{exportingGridImage ? 'Exporting…' : 'Export Cards as PNG'}
 					</Button>
 					<Button
 						variant="secondary"
@@ -2577,134 +2621,169 @@
 						{/if}
 					</section>
 				{:else}
-				<div class="grid-origin-selector">
-				<h3>Select Origins to Display</h3>
-				<div class="origin-checkboxes">
-					<label class="origin-checkbox">
-						<input
-							type="checkbox"
-							checked={selectedOriginsForGrid.has(null)}
-							onchange={() => toggleOriginForGrid(null)}
-						/>
-						<span>Unassigned</span>
-					</label>
-					{#each origins as origin}
-						<label class="origin-checkbox">
-							<input
-								type="checkbox"
-								checked={selectedOriginsForGrid.has(origin.id)}
-								onchange={() => toggleOriginForGrid(origin.id)}
-							/>
-							<span>{origin.name}</span>
-						</label>
-					{/each}
+			<div class="gallery-tables">
+				<div class="standalone-origin-tables">
+				<section class="standalone-origin-table region-spirit-table" aria-label="Region Spirits gallery">
+					<table>
+						<thead>
+							<tr>
+								<th>
+									Region Spirits ({galleryCardData.regionSpirits.length})
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>
+									{#if galleryCardData.regionSpirits.length > 0}
+										<div class="region-groups">
+											{#each galleryCardData.regionGroups as group (group.name)}
+												<section class="region-group">
+													<h3>{group.name} ({group.spirits.length})</h3>
+													{#if group.spirits.length > 0}
+														<GallerySpiritCards
+															spirits={group.spirits}
+															imageSide={galleryImageSide}
+															{classes}
+															{runes}
+															onOpen={openSpiritForm}
+														/>
+													{:else}
+														<div class="cell-empty">No spirits</div>
+													{/if}
+												</section>
+											{/each}
+										</div>
+									{:else}
+										<div class="cell-empty">No Region Spirits</div>
+									{/if}
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section class="standalone-origin-table human-enclave-spirit-table" aria-label="Human Enclave gallery">
+					<table>
+						<thead>
+							<tr>
+								<th>
+									Human Enclave ({galleryCardData.humanEnclaveSpirits.length})
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>
+									{#if galleryCardData.humanEnclaveSpirits.length > 0}
+										<GallerySpiritCards
+											spirits={galleryCardData.humanEnclaveSpirits}
+											imageSide={galleryImageSide}
+											{classes}
+											{runes}
+											onOpen={openSpiritForm}
+										/>
+									{:else}
+										<div class="cell-empty">No Human Enclave spirits</div>
+									{/if}
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section class="standalone-origin-table arcane-abyss-spirit-table" aria-label="Arcane Abyss gallery">
+					<table>
+						<thead>
+							<tr>
+								<th>
+									Arcane Abyss ({galleryCardData.arcaneAbyssSpirits.length})
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>
+									{#if galleryCardData.arcaneAbyssSpirits.length > 0}
+										<div class="arcane-tag-manager">
+											<form class="arcane-tag-create" onsubmit={(event) => { event.preventDefault(); createGalleryTag(); }}>
+												<label>
+													<span>New group</span>
+													<input bind:value={newGalleryTagName} placeholder="e.g. Titans" maxlength="48" />
+												</label>
+												<label class="arcane-tag-color">
+													<span>Color</span>
+													<input type="color" bind:value={newGalleryTagColor} aria-label="Tag color" />
+												</label>
+												<button type="submit" disabled={!newGalleryTagName.trim() || creatingGalleryTag}>
+													{creatingGalleryTag ? 'Adding…' : 'Add tag'}
+												</button>
+											</form>
+											{#if galleryTags.length > 0}
+												<div class="arcane-tag-list" aria-label="Arcane Abyss tags">
+													{#each arcaneAbyssTagGroups as group (group.tag.id)}
+														<span class="arcane-tag-chip">
+															<span class="arcane-tag-chip__dot" style:background={group.tag.color}></span>
+															{group.tag.name} ({group.spirits.length})
+															<button type="button" onclick={() => removeGalleryTag(group.tag)} aria-label={`Delete ${group.tag.name} tag`}>×</button>
+														</span>
+													{/each}
+												</div>
+											{/if}
+											{#if galleryTagError}<p class="arcane-tag-error">{galleryTagError}</p>{/if}
+										</div>
+
+										<div class="arcane-tag-groups">
+											{#each arcaneAbyssTagGroups as group (group.tag.id)}
+												<section class="arcane-tag-group" style:border-color={`${group.tag.color}66`}>
+													<h3><span style:background={group.tag.color}></span>{group.tag.name} ({group.spirits.length})</h3>
+													{#if group.spirits.length > 0}
+														<GallerySpiritCards
+															spirits={group.spirits}
+															imageSide={galleryImageSide}
+															{classes}
+															{runes}
+															onOpen={openSpiritForm}
+															tags={galleryTags}
+															assignedTagIdsBySpirit={assignedGalleryTagIdsBySpirit}
+															busyAssignmentKeys={busyGalleryTagAssignments}
+															onToggleTag={toggleGalleryTagAssignment}
+														/>
+													{:else}
+														<div class="cell-empty">No spirits assigned yet</div>
+													{/if}
+												</section>
+											{/each}
+
+											<section class="arcane-tag-group arcane-tag-group--unassigned">
+												<h3>Unassigned ({unassignedArcaneAbyssSpirits.length})</h3>
+												{#if unassignedArcaneAbyssSpirits.length > 0}
+													<GallerySpiritCards
+														spirits={unassignedArcaneAbyssSpirits}
+														imageSide={galleryImageSide}
+														{classes}
+														{runes}
+														onOpen={openSpiritForm}
+														tags={galleryTags}
+														assignedTagIdsBySpirit={assignedGalleryTagIdsBySpirit}
+														busyAssignmentKeys={busyGalleryTagAssignments}
+														onToggleTag={toggleGalleryTagAssignment}
+													/>
+												{:else}
+													<div class="cell-empty">Every Arcane Abyss spirit has a tag</div>
+												{/if}
+											</section>
+										</div>
+									{:else}
+										<div class="cell-empty">No Arcane Abyss spirits</div>
+									{/if}
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
 				</div>
 			</div>
-
-			<section class="class-origin-table">
-				<table class="spirit-matrix">
-					<thead>
-						<tr>
-							<th class="row-header">Class / Origin</th>
-							{#each gridViewData.originList as origin (origin.originId ?? 'none')}
-								<th class="column-header">
-									{origin.originName} ({origin.count}, {origin.combatPower} power, {origin.powerRatio})
-								</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody>
-						{#each gridViewData.classList as classItem (classItem.classId ?? 'none')}
-							<tr>
-								<td class="row-header">
-									{classItem.className} ({classItem.count}, {classItem.combatPower} power, {classItem.powerRatio})
-								</td>
-								{#each gridViewData.originList as origin (origin.originId ?? 'none')}
-									{@const cellSpirits = gridViewData.grid.get(classItem.classId)?.get(origin.originId) ?? []}
-									<td class="cell">
-										{#if cellSpirits.length > 0}
-											<div class="cell-prints">
-												{#each cellSpirits as spirit (spirit.id)}
-													{#if galleryImageSide === 'data'}
-														<div
-															class="cell-data-card cell-print--clickable"
-															role="button"
-															tabindex="0"
-															onclick={() => openSpiritForm(spirit)}
-															onkeydown={(e) => e.key === 'Enter' && openSpiritForm(spirit)}
-														>
-															<div class="data-card__name">{spirit.name}</div>
-															<div class="data-card__cost">Cost: {spirit.cost}</div>
-															{#if spirit.traits?.class_ids?.length}
-																<div class="data-card__classes">
-																	{#each Object.entries(spirit.traits.class_ids.reduce((acc, id) => { acc[id] = (acc[id] || 0) + 1; return acc; }, {} as Record<string, number>)) as [classId, count]}
-																		{@const cls = classLookup.get(classId)}
-																		{#if cls}
-																			<span class="data-card__class-chip">
-																				{#if cls.icon_emoji}{cls.icon_emoji}{/if}
-																				{count > 1 ? `${count}× ` : ''}{cls.name}
-																			</span>
-																		{/if}
-																	{/each}
-																</div>
-															{/if}
-															{#if spirit.awaken_condition?.type === 'rune_cost'}
-																<div class="data-card__runes">
-																	{#each spirit.awaken_condition.rune_ids as token}
-																		{#if typeof token === 'string'}
-																			{@const rune = runes.find((r) => r.id === token)}
-																			{#if rune}<span class="data-card__rune-chip">{rune.name}</span>{/if}
-																		{:else if token.kind === 'or'}
-																			<span class="data-card__rune-chip">
-																				{token.rune_ids.map((id) => runes.find((r) => r.id === id)?.name ?? '?').join(' / ')}
-																			</span>
-																		{/if}
-																	{/each}
-																</div>
-															{:else if spirit.awaken_condition?.type === 'text'}
-																<div class="data-card__runes">
-																	<span class="data-card__rune-chip">{spirit.awaken_condition.text}</span>
-																</div>
-															{/if}
-														</div>
-													{:else}
-														{@const cardImageUrl = getGalleryImageUrl(spirit)}
-														<div
-															class="cell-print cell-print--clickable"
-															role="button"
-															tabindex="0"
-															onclick={() => openSpiritForm(spirit)}
-															onkeydown={(e) => e.key === 'Enter' && openSpiritForm(spirit)}
-														>
-															{#if cardImageUrl}
-																<img
-																	src={cardImageUrl}
-																	alt={
-																		galleryImageSide === 'front'
-																			? `Front print for ${spirit.name}`
-																			: `Back print for ${spirit.name}`
-																	}
-																	loading="lazy"
-																/>
-															{:else}
-																<div class="cell-print__placeholder">
-																	{galleryImageSide === 'front' ? 'No Front Print' : 'No Back Print'}
-																</div>
-															{/if}
-														</div>
-													{/if}
-												{/each}
-											</div>
-										{:else}
-											<div class="cell-empty">—</div>
-										{/if}
-									</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-				</section>
 				{/if}
 			</div>
 
@@ -3479,114 +3558,180 @@
 		border: 0;
 	}
 
-	.grid-origin-selector {
-		padding: 1rem;
-		background: rgba(30, 41, 59, 0.4);
-		border-radius: 8px;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-	}
-
-	.grid-origin-selector h3 {
-		margin: 0 0 0.75rem 0;
-		color: #f8fafc;
-		font-size: 1rem;
-		font-weight: 600;
-	}
-
-	.origin-checkboxes {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-	}
-
-	.origin-checkbox {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		cursor: pointer;
-		user-select: none;
-		color: #e2e8f0;
-		font-size: 0.9rem;
-		padding: 0.4rem 0.75rem;
-		background: rgba(15, 23, 42, 0.6);
-		border-radius: 6px;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		transition: all 0.2s ease;
-	}
-
-	.origin-checkbox:hover {
-		background: rgba(15, 23, 42, 0.8);
-		border-color: rgba(148, 163, 184, 0.4);
-	}
-
-	.origin-checkbox input[type='checkbox'] {
-		cursor: pointer;
-		width: 18px;
-		height: 18px;
-		accent-color: rgba(99, 102, 241, 0.8);
-	}
-
-	.origin-checkbox:has(input:checked) {
-		background: rgba(99, 102, 241, 0.2);
-		border-color: rgba(99, 102, 241, 0.5);
-		color: #f8fafc;
-	}
-
-	.class-origin-table {
-		overflow-x: auto;
-		position: relative;
+	.gallery-tables {
 		width: 100%;
 	}
 
-	.spirit-matrix {
+	.standalone-origin-tables {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+		gap: 1rem;
+		align-items: start;
+		min-width: 0;
+	}
+
+	.standalone-origin-table table {
 		width: 100%;
 		border-collapse: collapse;
-		background: rgba(15, 23, 42, 0.4);
 		border-radius: 8px;
 		overflow: hidden;
 	}
 
-	.spirit-matrix th,
-	.spirit-matrix td {
+	.standalone-origin-table th,
+	.standalone-origin-table td {
 		padding: 0.75rem;
-		border: 1px solid rgba(148, 163, 184, 0.2);
 		vertical-align: top;
 	}
 
-	.row-header {
-		background: rgba(30, 41, 59, 0.8);
+	.standalone-origin-table th {
 		font-weight: 700;
-		color: #f8fafc;
-		text-align: left;
-		position: sticky;
-		left: 0;
-		z-index: 10;
-		min-width: 150px;
-		max-width: 200px;
-	}
-
-	.column-header {
-		background: rgba(30, 41, 59, 0.8);
-		font-weight: 700;
-		color: #f8fafc;
 		text-align: center;
-		position: sticky;
-		top: 0;
-		z-index: 10;
-		min-width: 200px;
 	}
 
-	.spirit-matrix th.row-header {
-		position: sticky;
-		left: 0;
-		top: 0;
-		z-index: 20;
+	.arcane-abyss-spirit-table table {
+		background: rgba(127, 29, 29, 0.14);
+		border: 1px solid rgba(251, 146, 60, 0.42);
 	}
 
-	.cell {
-		background: rgba(15, 23, 42, 0.65);
-		min-width: 200px;
-		min-height: 100px;
+	.arcane-abyss-spirit-table th,
+	.arcane-abyss-spirit-table td {
+		border: 1px solid rgba(251, 146, 60, 0.32);
+	}
+
+	.arcane-abyss-spirit-table th {
+		background: rgba(154, 52, 18, 0.68);
+		color: #fff7ed;
+	}
+
+	.arcane-abyss-spirit-table td {
+		background: rgba(69, 10, 10, 0.38);
+	}
+
+	.arcane-tag-manager {
+		display: grid;
+		gap: 0.65rem;
+		margin-bottom: 0.9rem;
+		padding: 0.65rem;
+		border-radius: 8px;
+		background: rgba(30, 8, 8, 0.55);
+		border: 1px solid rgba(251, 146, 60, 0.24);
+	}
+
+	.arcane-tag-create {
+		display: flex;
+		align-items: end;
+		gap: 0.45rem;
+		flex-wrap: wrap;
+	}
+
+	.arcane-tag-create label {
+		display: grid;
+		gap: 0.2rem;
+		color: #fed7aa;
+		font-size: 0.65rem;
+		font-weight: 700;
+	}
+
+	.arcane-tag-create input:not([type='color']) {
+		width: 150px;
+		padding: 0.4rem 0.5rem;
+		border-radius: 6px;
+		border: 1px solid rgba(251, 146, 60, 0.35);
+		background: rgba(15, 23, 42, 0.8);
+		color: #f8fafc;
+	}
+
+	.arcane-tag-color input {
+		width: 2.5rem;
+		height: 2rem;
+		padding: 0.1rem;
+		border: 1px solid rgba(251, 146, 60, 0.35);
+		border-radius: 6px;
+		background: transparent;
+	}
+
+	.arcane-tag-create button {
+		padding: 0.45rem 0.7rem;
+		border: 1px solid rgba(251, 146, 60, 0.45);
+		border-radius: 6px;
+		background: rgba(194, 65, 12, 0.65);
+		color: #fff7ed;
+		font-size: 0.72rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.arcane-tag-create button:disabled { opacity: 0.45; cursor: default; }
+	.arcane-tag-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+	.arcane-tag-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.4rem; border-radius: 999px; color: #ffedd5; background: rgba(124, 45, 18, 0.55); border: 1px solid rgba(251, 146, 60, 0.25); font-size: 0.67rem; }
+	.arcane-tag-chip__dot { width: 0.55rem; height: 0.55rem; border-radius: 999px; }
+	.arcane-tag-chip button { border: 0; padding: 0 0.1rem; color: #fdba74; background: transparent; cursor: pointer; font-size: 0.9rem; line-height: 1; }
+	.arcane-tag-error { margin: 0; color: #fca5a5; font-size: 0.72rem; }
+	.arcane-tag-groups { display: grid; gap: 0.85rem; }
+	.arcane-tag-group { display: grid; gap: 0.55rem; padding: 0.65rem; border-radius: 8px; border: 1px solid rgba(251, 146, 60, 0.26); background: rgba(30, 8, 8, 0.32); }
+	.arcane-tag-group h3 { margin: 0; display: flex; align-items: center; gap: 0.35rem; color: #ffedd5; font-size: 0.8rem; }
+	.arcane-tag-group h3 span { width: 0.65rem; height: 0.65rem; border-radius: 999px; }
+	.arcane-tag-group--unassigned { border-style: dashed; }
+
+	.region-spirit-table table {
+		background: rgba(6, 78, 59, 0.14);
+		border: 1px solid rgba(52, 211, 153, 0.38);
+	}
+
+	.region-spirit-table th,
+	.region-spirit-table td {
+		border: 1px solid rgba(52, 211, 153, 0.3);
+	}
+
+	.region-spirit-table th {
+		background: rgba(6, 95, 70, 0.62);
+		color: #ecfdf5;
+	}
+
+	.region-spirit-table td {
+		background: rgba(6, 78, 59, 0.32);
+	}
+
+	.region-groups {
+		display: flex;
+		flex-direction: column;
+		gap: 0.9rem;
+	}
+
+	.region-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.55rem;
+		padding: 0.65rem;
+		background: rgba(2, 44, 34, 0.34);
+		border: 1px solid rgba(52, 211, 153, 0.2);
+		border-radius: 7px;
+	}
+
+	.region-group h3 {
+		margin: 0;
+		color: #d1fae5;
+		font-size: 0.8rem;
+		font-weight: 700;
+	}
+
+	.human-enclave-spirit-table table {
+		background: rgba(30, 64, 175, 0.14);
+		border: 1px solid rgba(96, 165, 250, 0.38);
+	}
+
+	.human-enclave-spirit-table th,
+	.human-enclave-spirit-table td {
+		border: 1px solid rgba(96, 165, 250, 0.3);
+	}
+
+	.human-enclave-spirit-table th {
+		background: rgba(30, 64, 175, 0.58);
+		color: #eff6ff;
+	}
+
+	.human-enclave-spirit-table td {
+		background: rgba(23, 37, 84, 0.44);
 	}
 
 	.cell-empty {
@@ -3594,113 +3739,6 @@
 		text-align: center;
 		font-style: italic;
 		padding: 1rem;
-	}
-
-	.cell-prints {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-		gap: 0.5rem;
-	}
-
-	.cell-print {
-		background: rgba(30, 41, 59, 0.6);
-		border-radius: 8px;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		padding: 0.35rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-
-	.cell-print img,
-	.cell-print__placeholder {
-		width: 100%;
-		aspect-ratio: 1.1 / 1;
-		border-radius: 6px;
-		object-fit: cover;
-		background: rgba(15, 23, 42, 0.6);
-	}
-
-	.cell-print__placeholder {
-		display: grid;
-		place-items: center;
-		color: #94a3b8;
-		font-size: 0.7rem;
-		text-transform: uppercase;
-	}
-
-	.cell-print--clickable {
-		cursor: pointer;
-		transition: all 0.2s ease;
-	}
-
-	.cell-print--clickable:hover {
-		transform: scale(1.03);
-		border-color: rgba(99, 102, 241, 0.5);
-		box-shadow: 0 0 12px rgba(99, 102, 241, 0.3);
-	}
-
-	.cell-print--clickable:focus {
-		outline: 2px solid rgba(99, 102, 241, 0.6);
-		outline-offset: 2px;
-	}
-
-	.cell-data-card {
-		background: rgba(30, 41, 59, 0.6);
-		border-radius: 6px;
-		border: 1px solid rgba(148, 163, 184, 0.2);
-		padding: 0.35rem 0.4rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-
-	.data-card__name {
-		color: #f8fafc;
-		font-size: 0.7rem;
-		font-weight: 600;
-		line-height: 1.2;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.data-card__cost {
-		color: #fbbf24;
-		font-size: 0.6rem;
-		font-weight: 600;
-	}
-
-	.data-card__classes {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.15rem;
-	}
-
-	.data-card__class-chip {
-		font-size: 0.55rem;
-		font-weight: 500;
-		padding: 0.05rem 0.2rem;
-		border-radius: 2px;
-		background: rgba(59, 130, 246, 0.2);
-		color: #93c5fd;
-		border: 1px solid rgba(59, 130, 246, 0.3);
-	}
-
-	.data-card__runes {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.15rem;
-	}
-
-	.data-card__rune-chip {
-		font-size: 0.55rem;
-		font-weight: 500;
-		padding: 0.05rem 0.2rem;
-		border-radius: 2px;
-		background: rgba(168, 85, 247, 0.2);
-		color: #d8b4fe;
-		border: 1px solid rgba(168, 85, 247, 0.3);
 	}
 
 	/* Image upload styles */

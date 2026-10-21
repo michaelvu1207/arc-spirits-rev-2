@@ -1,0 +1,2 @@
+-- Initiative is a separate passive bonus, not a max-barrier trigger reward.
+UPDATE arc_spirits_assets.classes SET effect_schema = '[{"count":1,"effects":[{"type":"benefit","description":"+4 Initiative."},{"type":"benefit","description":"Whenever your Max Barrier increases, restore an equal amount of Barrier. For example, gaining 2 Max Barrier restores 2 Barrier."}]}]'::jsonb WHERE id = '8015821c-08cd-4895-9b03-865ad09976aa';

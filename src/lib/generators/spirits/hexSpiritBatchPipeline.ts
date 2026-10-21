@@ -14,6 +14,8 @@ import {
 	type RuneIconData
 } from './spiritBackIconPlacer';
 import { generateCombinedTTSTexture } from './ttsCombinedTexture';
+import { generateRegionalHexFront } from './regionalHexFrameBrowser';
+import type { RegionalFrameData } from './regionalHexFrame.js';
 
 export type HexSpiritPipelineStatus =
 	| 'queued'
@@ -70,6 +72,8 @@ export interface HexSpiritBatchPipelineOptions {
 	frontConfig: FrontIconPlacementConfig;
 	backConfig: BackIconPlacementConfig;
 	getTier: (spirit: HexSpiritPipelineSpirit) => FrameTier | null;
+	/** When supplied, render a regional frame directly from raw art and spirit data. */
+	getRegionalFrameData?: (spirit: HexSpiritPipelineSpirit) => RegionalFrameData;
 	concurrency?: number;
 	onProgress?: (progress: HexSpiritPipelineProgress) => void;
 }
@@ -289,12 +293,15 @@ async function runOneSpirit(
 			const sourceUrl = spirit.game_print_no_icons_url || spirit.game_print_image_url;
 			if (!sourceUrl) throw new Error('No front source image available.');
 
-			const frontBlob = await generateSpiritWithIcons({
+			let frontBlob = await generateSpiritWithIcons({
 				gamePrintUrl: sourceUrl,
 				iconSlots: buildFrontIconSlots(spirit, options.origins, options.classes),
 				config: options.frontConfig,
 				tier
 			});
+			if (options.getRegionalFrameData) {
+				frontBlob = await generateRegionalHexFront(options.getRegionalFrameData(spirit), frontBlob);
+			}
 			frontPath = await uploadPng(storagePaths.frontPath, frontBlob);
 			await updatePipelineTarget(spirit, { game_print_image_path: frontPath } as Partial<HexSpiritRow>);
 			frontUrl = publicAssetUrl(frontPath, { bucket: 'game_assets' });
