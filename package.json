@@ -2,6 +2,9 @@
 	"name": "arc-spirits-rev-2",
 	"private": true,
 	"version": "0.0.1",
+	"engines": {
+		"node": "24.x"
+	},
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
