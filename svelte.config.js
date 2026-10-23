@@ -9,7 +9,10 @@ const config = {
 
 	kit: {
 		// Vercel deployment adapter
-		adapter: adapter()
+		// Keep builds and deployed functions on a Vercel-supported Node runtime.
+		// The local toolchain may expose a newer Node version that adapter-vercel
+		// cannot infer, so make the deployment target explicit.
+		adapter: adapter({ runtime: 'nodejs24.x' })
 	}
 };
 
