@@ -1,0 +1,8 @@
+-- Restore the pre-consolidation class record after the Cyber City augment correction.
+BEGIN;
+INSERT INTO arc_spirits_assets.classes (id, name, position, icon_emoji, color, description, footer, effect_schema, icon_png, name_translations, description_translations, footer_translations, is_special, class_type, augment_token_path) VALUES ('4768cb25-60ac-4178-b9e3-25aca98f495a', 'Runic Bulwark', 42::jsonb, '🛡️', '#8b5cf6', 'Reduces incoming damage for every Spirit Augment.', '', [{"count":1,"effects":[{"type":"benefit","description":"When you Take Damage, reduce damage by 1 for every Spirit Augment."}]}]::jsonb, 'class_icons/4768cb25-60ac-4178-b9e3-25aca98f495a/class_great_enchanter_icon.svg+xml', {}::jsonb, {}::jsonb, {}::jsonb, true::jsonb, 'special', NULL)
+ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, position=EXCLUDED.position, icon_emoji=EXCLUDED.icon_emoji, color=EXCLUDED.color, description=EXCLUDED.description, footer=EXCLUDED.footer, effect_schema=EXCLUDED.effect_schema, icon_png=EXCLUDED.icon_png, name_translations=EXCLUDED.name_translations, description_translations=EXCLUDED.description_translations, footer_translations=EXCLUDED.footer_translations, is_special=EXCLUDED.is_special, class_type=EXCLUDED.class_type, augment_token_path=EXCLUDED.augment_token_path;
+UPDATE arc_spirits_assets.hex_spirits
+SET traits = jsonb_set(traits, '{class_ids}', (SELECT jsonb_agg(DISTINCT CASE WHEN value = '17e08cde-f3d2-480b-8386-1e3047e2f85a' THEN '4768cb25-60ac-4178-b9e3-25aca98f495a' ELSE value END) FROM jsonb_array_elements_text(COALESCE(traits->'class_ids','[]'::jsonb)) AS value))
+WHERE id = '18154c10-1422-4655-a7cd-c637ac947916';
+COMMIT;
