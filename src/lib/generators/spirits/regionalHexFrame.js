@@ -67,11 +67,11 @@ export function renderRegionalHexSvg(data,{size=1500,frameOnly=false}={}) {
  const lines=nameLines(data.name??'');
  const slots=data.traits??[];
  if(slots.length>5)throw new Error('At most five distinct trait icons fit this frame');
- let svg=`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size}" height="${size}" viewBox="0 0 1000 1000"><defs><clipPath id="art-clip">${poly(inner,'white')}</clipPath><clipPath id="token-clip">${poly(hex(),'white')}</clipPath></defs><g clip-path="url(#token-clip)">`;
+ let svg=`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size}" height="${size}" viewBox="0 0 1000 1000"><defs><clipPath id="art-clip">${poly(inner,'white')}</clipPath><clipPath id="token-clip">${poly(hex(),'white')}</clipPath><filter id="art-edge-soft" x="-8%" y="-8%" width="116%" height="116%"><feGaussianBlur stdDeviation="8"/></filter><mask id="art-edge-mask"><rect width="1000" height="1000" fill="black"/>${poly(inner,'white')}${poly(hex(f.weight+34),'black')}</mask></defs><g clip-path="url(#token-clip)">`;
  svg+=poly(hex(),p.dark);
  svg+=poly(hex(7),p.light);
  svg+=poly(hex(12),p.dark);
- if(!frameOnly)svg+=`<g clip-path="url(#art-clip)"><rect x="50" y="105" width="900" height="800" fill="${xml(data.background??p.paper)}"/><image x="125" y="130" width="750" height="765" preserveAspectRatio="xMidYMin meet" xlink:href="${safeHref(data.artHref)}"/></g>`;
+ if(!frameOnly)svg+=`<g clip-path="url(#art-clip)"><rect x="50" y="105" width="900" height="800" fill="${xml(data.background??p.paper)}"/><image x="125" y="130" width="750" height="765" preserveAspectRatio="xMidYMin meet" xlink:href="${safeHref(data.artHref)}" filter="url(#art-edge-soft)" opacity=".92" mask="url(#art-edge-mask)"/><image x="125" y="130" width="750" height="765" preserveAspectRatio="xMidYMin meet" xlink:href="${safeHref(data.artHref)}"/></g>`;
  else svg+=poly(inner,p.paper);
  // Segmented facet bands follow the hex perimeter; each cost has a distinct silhouette.
  const count=data.cost===9?5:data.cost===7?3:1;
