@@ -63,7 +63,15 @@
 	const filteredSpirits = $derived.by(() => {
 		const term = search.trim().toLowerCase();
 		return allSpirits
-			.filter((spirit) => spirit.cost >= 7 && spirit.cost <= 9)
+			// Combined data covers the high-tier spirits plus the human/hero roster,
+			// whose low cost should not exclude them from this cross-origin view.
+			.filter((spirit) => {
+				const originNames = (spirit.traits?.origin_ids ?? [])
+					.map((id) => originById.get(id)?.name ?? '')
+					.map((name) => name.toLowerCase());
+				const isHuman = /^hero\b/i.test(spirit.name) || originNames.some((name) => name === 'human enclave' || name === 'hero party' || name === 'heroes');
+				return (spirit.cost >= 7 && spirit.cost <= 9) || isHuman;
+			})
 			.filter((spirit) => {
 				if (!term) return true;
 				const originNames = (spirit.traits?.origin_ids ?? [])
